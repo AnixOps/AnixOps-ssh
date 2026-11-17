@@ -104,8 +104,10 @@ version = "1.0.2"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
+ "easyssh-ai",
  "easyssh-core",
  "easyssh-crypto",
+ "easyssh-sessionlog",
  "easyssh-store",
  "easyssh-telemetry",
  "easyssh-vault",
@@ -1632,6 +1634,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "easyssh-ai"
+version = "1.0.2"
+dependencies = [
+ "base64 0.22.1",
+ "easyssh-crypto",
+ "easyssh-store",
+ "easyssh-vault",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "ureq",
+ "zeroize",
+]
+
+[[package]]
 name = "easyssh-core"
 version = "1.0.2"
 dependencies = [
@@ -1672,7 +1690,9 @@ dependencies = [
  "async-trait",
  "easyssh-core",
  "easyssh-crypto",
+ "easyssh-sessionlog",
  "easyssh-ssh",
+ "easyssh-store",
  "easyssh-vault",
  "easysshd",
  "portable-pty",
@@ -1735,6 +1755,21 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "easyssh-sessionlog"
+version = "1.0.2"
+dependencies = [
+ "chacha20poly1305",
+ "chrono",
+ "easyssh-crypto",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
@@ -1828,6 +1863,7 @@ dependencies = [
  "easyssh-core",
  "easyssh-crypto",
  "easyssh-proto",
+ "easyssh-sessionlog",
  "easyssh-ssh",
  "easyssh-store",
  "easyssh-telemetry",

@@ -39,6 +39,8 @@ current 1.x app.
 | **Command palette** | Hosts, snippets, tunnels and actions in one search box. |
 | **Import from other clients** | Bring in hosts from `~/.ssh/config` (with `Include`), PuTTY, SecureCRT, MobaXterm, Xshell, FinalShell, Termius or CSV. Review them first, choose a group and what to do with duplicates; nothing you have is removed. Passwords and keys are never imported. |
 | **Backup and sync** | Export and import hosts, or keep them in a Git repository. Never includes passwords or keys. |
+| **Ask AI** | Off by default. Bring your own key for Anthropic, an OpenAI-compatible endpoint or local Ollama; the key lives in the vault and requests are made by the app's Rust side, so the key never reaches the web view. A side panel per terminal lets you tick what to share (last command and output, selection, last lines), shows secrets it removed and the exact request, and sends nothing until you press Send. Suggested commands can be inserted on the input line, never run. |
+| **Session logs** | Optional per host, with a default in Settings. Terminal output is written encrypted (XChaCha20-Poly1305, a key derived per log from the vault device key) to `logs/<host>/<time>.esl` in the data directory. View a log read-only with search, export it as plain text after confirming, delete it, or let retention (30 days by default) clean up. Needs an unlocked vault. |
 | **Design** | [AnixOps Design](https://github.com/AnixOps/AnixOps-design): light, dark or system theme; Chinese and English. |
 
 <table>

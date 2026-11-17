@@ -53,7 +53,7 @@ first. Details per phase are in
 | 3 | v2.0 | Store | SQLite with v1 migration (done: hosts, groups, settings and known hosts now live in `easyssh.db`), importers from every common client (done: OpenSSH config, PuTTY, SecureCRT, MobaXterm, Xshell, FinalShell, Termius and CSV, with preview, duplicate handling and an Import hosts dialog) |
 | 4 | v2.1 | Vault | Encrypted passwords, keys and key passphrases with a device key in the OS keychain and an optional Argon2id vault passphrase, auto-lock, askpass answers from the vault (done, step 1); Windows Hello, Secure Enclave, FIDO2 and serial ports (next, via the `UnlockProvider` hook) |
 | 5 | v2.2 | Sync | Open-source self-hosted server, signed end-to-end encrypted sync, team vaults |
-| 6 | v2.x | Terminal | Splits and broadcast, shell integration, completion specs, AI with your own key, encrypted logs |
+| 6 | v2.x | Terminal | Splits and broadcast, shell integration, completion specs, AI with your own key (done: Anthropic, OpenAI-compatible and Ollama, review before send, secret scrubbing), encrypted logs (done: per-host recording, viewer, export, retention; sharing through a vault is a hook only) |
 | 7 | — | Mobile | Tauri mobile app with the embedded engine |
 
 ## Not doing

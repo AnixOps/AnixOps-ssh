@@ -12,8 +12,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 chrono.workspace = true
 dirs.workspace = true
+easyssh-ai = { path = "../crates/easyssh-ai" }
 easyssh-core = { path = "../crates/easyssh-core" }
 easyssh-crypto = { path = "../crates/easyssh-crypto" }
+easyssh-sessionlog = { path = "../crates/easyssh-sessionlog" }
 easyssh-store = { path = "../crates/easyssh-store" }
 easyssh-telemetry = { path = "../crates/easyssh-telemetry" }
 easyssh-vault = { path = "../crates/easyssh-vault", features = ["os-keyring"] }

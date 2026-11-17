@@ -4,9 +4,21 @@ import { ShellIntegrationLineSource } from "./lineSource";
 import { PromptMarks, type PromptMark } from "./marks";
 import { INTEGRATION_OSC, parseIntegrationOsc } from "./osc";
 
+/** The last command the shell reported, with where its output sits in the buffer. */
+export interface ReportedCommand {
+  command: string;
+  exitCode: number | null;
+  /** The buffer line of its prompt. */
+  promptLine: number;
+  /** The line of the next prompt, or null when this is the latest one. */
+  nextPromptLine: number | null;
+}
+
 export interface ShellIntegrationHandle {
   /** Scrolls to the previous or next prompt; false when there is none that way. */
   jump(direction: "previous" | "next"): boolean;
+  /** The last command run from a marked prompt; null without shell integration. */
+  lastCommand(): ReportedCommand | null;
   dispose(): void;
 }
 
@@ -78,6 +90,16 @@ export function attachShellIntegration(
   const parsed = terminal.onWriteParsed(() => marks.prune());
 
   return {
+    lastCommand() {
+      const found = marks.lastCommand();
+      if (!found || found.mark.command === null) return null;
+      return {
+        command: found.mark.command,
+        exitCode: found.mark.exitCode,
+        promptLine: found.mark.marker.line,
+        nextPromptLine: found.endLine,
+      };
+    },
     jump(direction) {
       const top = terminal.buffer.active.viewportY;
       const line = direction === "previous" ? marks.previous(top) : marks.next(top);

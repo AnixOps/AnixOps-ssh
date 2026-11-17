@@ -142,12 +142,16 @@ pub async fn vault_unlock(
     daemon: State<'_, DaemonState>,
     passphrase: String,
 ) -> Result<VaultStatusView, String> {
+    let passphrase = Zeroizing::new(passphrase);
     if let Some(value) =
-        via_daemon(&daemon, "vault.unlock", json!({"passphrase": passphrase})).await?
+        via_daemon(&daemon, "vault.unlock", json!({"passphrase": &*passphrase})).await?
     {
+        // This process reads some secrets itself (the AI key, session logs),
+        // so its own vault opens too; the daemon's answer stands either way.
+        let local = passphrase.clone();
+        let _ = blocking(move || app_vault().unlock(&local)).await;
         return Ok(status_view(&value));
     }
-    let passphrase = Zeroizing::new(passphrase);
     blocking(move || {
         let vault = app_vault();
         vault.unlock(&passphrase)?;
@@ -159,6 +163,7 @@ pub async fn vault_unlock(
 #[tauri::command]
 pub async fn vault_lock(daemon: State<'_, DaemonState>) -> Result<VaultStatusView, String> {
     if let Some(value) = via_daemon(&daemon, "vault.lock", json!({})).await? {
+        app_vault().lock();
         return Ok(status_view(&value));
     }
     blocking(|| {

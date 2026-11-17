@@ -18,6 +18,8 @@ tempfile = "3"
 portable-pty = "0.9"
 easysshd = { path = "../easysshd" }
 easyssh-crypto = { path = "../easyssh-crypto" }
+easyssh-sessionlog = { path = "../easyssh-sessionlog" }
+easyssh-store = { path = "../easyssh-store" }
 easyssh-vault = { path = "../easyssh-vault" }
 serde_json.workspace = true
 tokio.workspace = true

@@ -13,6 +13,7 @@ chrono.workspace = true
 dirs.workspace = true
 easyssh-core = { path = "../easyssh-core" }
 easyssh-proto = { path = "../easyssh-proto" }
+easyssh-sessionlog = { path = "../easyssh-sessionlog" }
 easyssh-crypto = { path = "../easyssh-crypto" }
 easyssh-ssh = { path = "../easyssh-ssh" }
 russh = { version = "0.65.2", default-features = false, features = ["ring", "rsa", "flate2"] }
