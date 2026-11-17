@@ -1,4 +1,16 @@
-import type { Host, HostFields, HostInput, HostsSnapshot, KnownHost, KnownHostsImport } from "./backend";
+import type {
+  Host,
+  HostFields,
+  HostInput,
+  HostsImportApplyParams,
+  HostsImportApplyResult,
+  HostsImportPreviewResult,
+  HostsSnapshot,
+  ImportFormat,
+  ImportHost,
+  KnownHost,
+  KnownHostsImport,
+} from "./backend";
 
 /** Mirrors `display_target` and `display_command` in src-tauri/src/hosts.rs. */
 function describe(fields: HostFields): { target: string; command: string } {
@@ -137,4 +149,98 @@ export function previewImportKnownHosts(): KnownHostsImport {
 
 export function previewRemoveKnownHost(id: string): void {
   knownHosts = knownHosts.filter((entry) => entry.id !== id);
+}
+
+const sshConfigHosts: ImportHost[] = [
+  { label: "prod-web-01", hostname: "10.0.1.11", port: 22, username: "deploy", exists: true },
+  { label: "prod-web-02", hostname: "10.0.1.12", port: 22, username: "deploy", exists: true },
+  { label: "build-box", hostname: "build.example.com", port: 2222, username: "ci", exists: false },
+  { label: "bastion-eu", hostname: "bastion.eu.example.com", port: 22, username: "ops", exists: false },
+  { label: "db-replica", hostname: "192.0.2.30", port: 22, username: "postgres", jump: ["bastion-eu"], exists: false },
+  {
+    label: "legacy-switch",
+    hostname: "192.0.2.7",
+    port: 22,
+    username: "admin",
+    openssh_only: ["ProxyCommand", "KexAlgorithms"],
+    exists: false,
+  },
+  { label: "quoted alias", hostname: "quoted.example.com", port: 22, username: "quoted user", exists: false, problem: "username is not acceptable" },
+];
+
+const fileHosts: ImportHost[] = [
+  { label: "web-1", hostname: "web1.example.com", port: 2222, username: "alice", group_path: ["Prod", "Web"], exists: false },
+  { label: "web-2", hostname: "web2.example.com", port: 22, username: "alice", group_path: ["Prod", "Web"], exists: false },
+  { label: "db", hostname: "192.0.2.20", port: 22, username: "dbadmin", group_path: ["Prod"], exists: false },
+  { label: "prod-web-01", hostname: "10.0.1.11", port: 22, username: "deploy", group_path: ["Prod"], exists: true },
+];
+
+/** A canned preview of an import: `~/.ssh/config` or a picked file. */
+export function previewImport(kind: "file" | "ssh_config", format: ImportFormat | null): HostsImportPreviewResult {
+  const detected: ImportFormat = kind === "ssh_config" ? "openssh" : "csv";
+  const hosts = structuredClone(kind === "ssh_config" ? sshConfigHosts : fileHosts);
+  const groups = new Map<string, string[]>();
+  for (const host of hosts)
+    for (let end = 1; end <= (host.group_path?.length ?? 0); end++) {
+      const path = host.group_path!.slice(0, end);
+      groups.set(path.join("/"), path);
+    }
+  return {
+    format: format ?? detected,
+    detected,
+    hosts,
+    groups: [...groups.values()],
+    warnings:
+      kind === "ssh_config"
+        ? ["Include ~/.ssh/config.d/*.conf: 2 files read", "legacy-switch: Match blocks are not evaluated"]
+        : [],
+    skipped: kind === "ssh_config" ? 1 : 0,
+  };
+}
+
+/** Applies an import to the sample data, with the real policies. */
+export function previewApplyImport(request: HostsImportApplyParams): HostsImportApplyResult {
+  const result: HostsImportApplyResult = { created: 0, updated: 0, unchanged: 0, groups_created: 0, rejected: [], warnings: [] };
+  const groupFor = (path: string[] | undefined): string | null => {
+    if (request.group_mode === "none") return null;
+    if (request.group_mode === "existing") return request.group_id ?? null;
+    const name = path?.at(-1);
+    if (!name) return null;
+    let group = store.groups.find((candidate) => candidate.name.toLowerCase() === name.toLowerCase());
+    if (!group) {
+      group = { id: `group-${nextId++}`, name, color: null };
+      store.groups.push(group);
+      result.groups_created += 1;
+    }
+    return group.id;
+  };
+  for (const imported of request.hosts) {
+    const fields: HostFields = {
+      alias: null,
+      hostname: imported.hostname,
+      username: imported.username ?? null,
+      port: imported.port,
+      proxyJump: null,
+      notes: "",
+      shellIntegration: false,
+    };
+    const match = store.hosts.find(
+      (host) =>
+        host.source === "saved" &&
+        host.fields.hostname.toLowerCase() === imported.hostname.toLowerCase() &&
+        host.fields.port === imported.port &&
+        host.fields.username === (imported.username ?? null),
+    );
+    if (match && request.duplicates === "skip") {
+      result.unchanged += 1;
+    } else if (match && request.duplicates === "update") {
+      const groupId = groupFor(imported.group_path);
+      Object.assign(match, makeHost(match.id, imported.label, fields, request.group_mode === "none" ? match.groupId : groupId, { favorite: match.favorite, color: match.color ?? undefined }));
+      result.updated += 1;
+    } else {
+      store.hosts.push(makeHost(String(nextId++), imported.label, fields, groupFor(imported.group_path)));
+      result.created += 1;
+    }
+  }
+  return result;
 }

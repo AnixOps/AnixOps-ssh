@@ -35,6 +35,16 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("hosts.save", "HostsSaveParams", "HostsSaveResult"),
     ("hosts.delete", "HostsDeleteParams", ""),
     (
+        "hosts.import_preview",
+        "HostsImportPreviewParams",
+        "HostsImportPreviewResult",
+    ),
+    (
+        "hosts.import_apply",
+        "HostsImportApplyParams",
+        "HostsImportApplyResult",
+    ),
+    (
         "known_hosts.list",
         "KnownHostsListParams",
         "KnownHostsListResult",
