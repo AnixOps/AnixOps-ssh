@@ -1,5 +1,7 @@
-import { Columns2, FolderOpen, LoaderCircle, Plus, Radio, RadioTower, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
+import { Cable, Columns2, FolderOpen, LoaderCircle, Plus, Radio, RadioTower, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { MenuItem } from "@/components/app/HostList";
 import type { SessionStatus } from "@/components/app/TerminalView";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -8,7 +10,7 @@ import { t } from "@/lib/i18n";
 import { duration, ease, reflow, slide } from "@/lib/motion";
 import type { Axis, PaneState } from "@/lib/panes";
 import { shortcutHint, shortcutLabel } from "@/lib/shortcuts";
-import { hostColor } from "@/lib/backend";
+import { hostColor, type Host } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
 export interface Tab {
@@ -35,6 +37,9 @@ export function TabBar({
   onSelect,
   onClose,
   onNew,
+  serialHosts,
+  onOpenHost,
+  onNewSerial,
   onToggleFiles,
   onSplit,
 }: {
@@ -43,6 +48,10 @@ export function TabBar({
   onSelect: (key: string) => void;
   onClose: (key: string) => void;
   onNew: () => void;
+  /** Saved serial ports, offered in the new-tab menu. */
+  serialHosts: Host[];
+  onOpenHost: (host: Host) => void;
+  onNewSerial: () => void;
   onToggleFiles: () => void;
   onSplit: (axis: Axis) => void;
 }) {
@@ -110,11 +119,7 @@ export function TabBar({
         })}
         </AnimatePresence>
       </div>
-      <Tooltip label={`${t.newTab} (${shortcutLabel("t")})`}>
-        <Button variant="ghost" size="icon-sm" aria-label={t.newTab} onClick={onNew}>
-          <Plus />
-        </Button>
-      </Tooltip>
+      <NewTabMenu serialHosts={serialHosts} onNew={onNew} onOpenHost={onOpenHost} onNewSerial={onNewSerial} />
       {activeTab && (
         <div className="ml-auto flex items-center gap-0.5">
           <Tooltip label={`${t.splitRight} (${shortcutHint("split-right")})`}>
@@ -167,6 +172,83 @@ export function TabBar({
           </Button>
         </Tooltip>
       )}
+    </div>
+  );
+}
+
+/** The plus button: a local terminal, a saved serial port or a new one. */
+function NewTabMenu({
+  serialHosts,
+  onNew,
+  onOpenHost,
+  onNewSerial,
+}: {
+  serialHosts: Host[];
+  onNew: () => void;
+  onOpenHost: (host: Host) => void;
+  onNewSerial: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  const choose = (run: () => void) => {
+    setOpen(false);
+    run();
+  };
+
+  return (
+    <div
+      ref={rootRef}
+      className="relative"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && open) {
+          event.stopPropagation();
+          setOpen(false);
+        }
+      }}
+    >
+      <Tooltip label={`${t.newTabMenu} (${shortcutLabel("t")}: ${t.newTab})`}>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={t.newTabMenu}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <Plus />
+        </Button>
+      </Tooltip>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            role="menu"
+            aria-label={t.newTabMenu}
+            className="absolute top-full left-0 z-dropdown mt-1.5 max-h-80 w-60 origin-top-left overflow-y-auto rounded-sm bg-bg-elevated p-1 shadow-2 ring-1 ring-separator"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0, transition: { duration: duration.micro, ease: ease.standard } }}
+            exit={{ opacity: 0, y: -4, transition: { duration: duration.micro, ease: ease.exit } }}
+          >
+            <MenuItem icon={<SquareTerminal />} label={t.newTab} onClick={() => choose(onNew)} autoFocus />
+            {serialHosts.length > 0 && (
+              <p className="px-2 pt-2 pb-1 text-caption font-normal text-label-3">{t.serialSection}</p>
+            )}
+            {serialHosts.map((host) => (
+              <MenuItem key={host.id} icon={<Cable />} label={host.name} onClick={() => choose(() => onOpenHost(host))} />
+            ))}
+            <MenuItem icon={<Plus />} label={t.newSerialHost} onClick={() => choose(onNewSerial)} />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

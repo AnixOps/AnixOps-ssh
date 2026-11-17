@@ -24,6 +24,7 @@ pub fn app_vault() -> Arc<Vault> {
     VAULT
         .get_or_init(|| {
             let vault = Arc::new(Vault::os());
+            easyssh_unlock::attach_os_providers(&vault);
             // The saved auto-lock time; read with a plain store, as opening
             // the real one would ask for this vault.
             if let Ok(v1) = easyssh_core::ConfigStore::default_path() {
@@ -64,6 +65,15 @@ pub struct VaultStatusView {
     auto_lock_minutes: u32,
     keychain_available: bool,
     keychain_error: Option<String>,
+    unlock_methods: Vec<UnlockMethodView>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlockMethodView {
+    name: String,
+    available: bool,
+    enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -81,6 +91,19 @@ fn status_view(value: &Value) -> VaultStatusView {
         auto_lock_minutes: value["auto_lock_minutes"].as_u64().unwrap_or(0) as u32,
         keychain_available: value["keychain_available"].as_bool().unwrap_or(false),
         keychain_error: value["keychain_error"].as_str().map(str::to_owned),
+        unlock_methods: value["unlock_methods"]
+            .as_array()
+            .map(|methods| {
+                methods
+                    .iter()
+                    .map(|m| UnlockMethodView {
+                        name: m["name"].as_str().unwrap_or_default().to_owned(),
+                        available: m["available"].as_bool().unwrap_or(false),
+                        enabled: m["enabled"].as_bool().unwrap_or(false),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -100,6 +123,15 @@ fn local_status(vault: &Vault) -> VaultStatusView {
         auto_lock_minutes: status.auto_lock_minutes,
         keychain_available: status.keychain_available,
         keychain_error: status.keychain_error,
+        unlock_methods: status
+            .unlock_methods
+            .iter()
+            .map(|m| UnlockMethodView {
+                name: m.name.to_owned(),
+                available: m.available,
+                enabled: m.enabled,
+            })
+            .collect(),
     }
 }
 
@@ -155,6 +187,69 @@ pub async fn vault_unlock(
     blocking(move || {
         let vault = app_vault();
         vault.unlock(&passphrase)?;
+        Ok(local_status(&vault))
+    })
+    .await
+}
+
+/// Opens the vault with Windows Hello or Touch ID (the system prompt shows).
+/// This process's own vault opens lazily on its first secret use.
+#[tauri::command]
+pub async fn vault_unlock_with(
+    daemon: State<'_, DaemonState>,
+    method: String,
+) -> Result<VaultStatusView, String> {
+    if let Some(value) =
+        via_daemon(&daemon, "vault.unlock_with", json!({"method": &method})).await?
+    {
+        return Ok(status_view(&value));
+    }
+    blocking(move || {
+        let vault = app_vault();
+        vault.unlock_with(&method)?;
+        Ok(local_status(&vault))
+    })
+    .await
+}
+
+/// Turns Windows Hello or Touch ID on; needs the vault passphrase once.
+#[tauri::command]
+pub async fn vault_enable_unlock(
+    daemon: State<'_, DaemonState>,
+    method: String,
+    passphrase: String,
+) -> Result<VaultStatusView, String> {
+    let passphrase = Zeroizing::new(passphrase);
+    if let Some(value) = via_daemon(
+        &daemon,
+        "vault.enable_unlock",
+        json!({"method": &method, "passphrase": &*passphrase}),
+    )
+    .await?
+    {
+        return Ok(status_view(&value));
+    }
+    blocking(move || {
+        let vault = app_vault();
+        vault.enable_unlock(&method, &passphrase)?;
+        Ok(local_status(&vault))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn vault_disable_unlock(
+    daemon: State<'_, DaemonState>,
+    method: String,
+) -> Result<VaultStatusView, String> {
+    if let Some(value) =
+        via_daemon(&daemon, "vault.disable_unlock", json!({"method": &method})).await?
+    {
+        return Ok(status_view(&value));
+    }
+    blocking(move || {
+        let vault = app_vault();
+        vault.disable_unlock(&method)?;
         Ok(local_status(&vault))
     })
     .await

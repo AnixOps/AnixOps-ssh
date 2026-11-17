@@ -1274,3 +1274,53 @@ fn a_failed_migration_rolls_back_completely() {
     assert_eq!(count(&store, "groups"), 0);
     assert_eq!(count(&store, "settings"), 0);
 }
+
+#[test]
+fn a_serial_host_roundtrips_and_stays_a_serial_host() {
+    use easyssh_core::{SerialFlowControl, SerialParity, SerialSettings};
+    let store = store();
+    let mut connection = Connection::alias("Router console", "x");
+    connection.target = ConnectionTarget::Serial(SerialSettings {
+        port: "/dev/ttyUSB0".into(),
+        baud: 9600,
+        data_bits: 7,
+        parity: SerialParity::Even,
+        stop_bits: 2,
+        flow_control: SerialFlowControl::Hardware,
+    });
+    let saved = store.upsert_host(&Host::new(connection.clone())).unwrap();
+    let loaded = store.get_host(&connection.id).unwrap().unwrap();
+    assert_eq!(saved, loaded);
+    assert_eq!(loaded.item.connection.target, connection.target);
+    assert!(loaded.item.connection.is_serial());
+
+    // Changing it back to an SSH host clears the serial settings.
+    let mut ssh = loaded.item.clone();
+    ssh.connection.target = ConnectionTarget::Endpoint {
+        hostname: "example.test".into(),
+        username: None,
+        port: 22,
+    };
+    store.upsert_host(&ssh).unwrap();
+    let again = store.get_host(&connection.id).unwrap().unwrap();
+    assert!(!again.item.connection.is_serial());
+    assert_eq!(again.item.connection.target, ssh.connection.target);
+}
+
+#[test]
+fn hosts_saved_before_serial_support_still_load() {
+    // A host row written without the `serial` column value (NULL) is an SSH
+    // host, as every row is after migration 6.
+    let store = store();
+    let saved = store.upsert_host(&host("Web")).unwrap();
+    let serial: Option<String> = store
+        .conn
+        .query_row(
+            "SELECT serial FROM hosts WHERE id = ?1",
+            [&saved.meta.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(serial.is_none());
+    assert!(!store.list_hosts().unwrap()[0].item.connection.is_serial());
+}

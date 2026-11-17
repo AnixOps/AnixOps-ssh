@@ -20,6 +20,7 @@ russh = { version = "0.65.2", default-features = false, features = ["ring", "rsa
 easyssh-store = { path = "../easyssh-store" }
 easyssh-sync = { path = "../easyssh-sync" }
 easyssh-telemetry = { path = "../easyssh-telemetry" }
+easyssh-unlock = { path = "../easyssh-unlock" }
 easyssh-vault = { path = "../easyssh-vault", features = ["os-keyring"] }
 ed25519-dalek = "3"
 fs4.workspace = true
@@ -33,6 +34,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 uuid.workspace = true
 zeroize = "1"
+serialport = { version = "4", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

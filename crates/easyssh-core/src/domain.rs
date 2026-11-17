@@ -142,6 +142,61 @@ pub enum ConnectionTarget {
         username: Option<String>,
         port: u16,
     },
+    /// A serial port (a router console, a microcontroller): not SSH at all.
+    Serial(SerialSettings),
+}
+
+/// Parity of a serial line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SerialParity {
+    #[default]
+    None,
+    Odd,
+    Even,
+}
+
+/// Flow control of a serial line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SerialFlowControl {
+    #[default]
+    None,
+    /// XON/XOFF.
+    Software,
+    /// RTS/CTS.
+    Hardware,
+}
+
+/// How to open a serial port. The defaults are the usual 115200 8N1.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SerialSettings {
+    /// The device path: `/dev/ttyUSB0`, `/dev/cu.usbserial-1410`, `COM3`.
+    pub port: String,
+    pub baud: u32,
+    /// 5 to 8.
+    pub data_bits: u8,
+    pub parity: SerialParity,
+    /// 1 or 2.
+    pub stop_bits: u8,
+    pub flow_control: SerialFlowControl,
+}
+
+impl SerialSettings {
+    pub const DEFAULT_BAUD: u32 = 115_200;
+
+    /// 115200 8N1 without flow control on `port`.
+    pub fn new(port: impl Into<String>) -> Self {
+        Self {
+            port: port.into(),
+            baud: Self::DEFAULT_BAUD,
+            data_bits: 8,
+            parity: SerialParity::None,
+            stop_bits: 1,
+            flow_control: SerialFlowControl::None,
+        }
+    }
 }
 
 impl Default for ConnectionTarget {
@@ -183,6 +238,11 @@ pub struct Connection {
 }
 
 impl Connection {
+    /// Whether this host is a serial port rather than an SSH destination.
+    pub fn is_serial(&self) -> bool {
+        matches!(self.target, ConnectionTarget::Serial(_))
+    }
+
     pub fn alias(name: impl Into<String>, alias: impl Into<String>) -> Self {
         let now = Utc::now();
         Self {

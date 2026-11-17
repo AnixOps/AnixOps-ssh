@@ -90,6 +90,7 @@ pub enum SyncTarget {
         username: Option<String>,
         port: u16,
     },
+    Serial(crate::domain::SerialSettings),
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncGroup {
@@ -210,6 +211,7 @@ impl From<&Connection> for SyncConnection {
                     username: username.clone(),
                     port: *port,
                 },
+                ConnectionTarget::Serial(serial) => SyncTarget::Serial(serial.clone()),
             },
             group_id: c.group_id.clone(),
             tags: c.tags.clone(),
@@ -241,6 +243,7 @@ impl SyncConnection {
                     username: username.clone(),
                     port: *port,
                 },
+                SyncTarget::Serial(serial) => ConnectionTarget::Serial(serial.clone()),
             },
             group_id: self.group_id.clone(),
             tags: self.tags.clone(),

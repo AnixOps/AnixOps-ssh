@@ -37,6 +37,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "host_engine",
         sql: include_str!("../migrations/0005_host_engine.sql"),
     },
+    Migration {
+        version: 6,
+        name: "host_serial",
+        sql: include_str!("../migrations/0006_host_serial.sql"),
+    },
 ];
 
 /// The newest schema version this build can apply.
