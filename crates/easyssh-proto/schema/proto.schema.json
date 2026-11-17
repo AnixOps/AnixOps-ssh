@@ -1061,6 +1061,152 @@
       "additionalProperties": false,
       "description": "Command `session.close` payload. Reply: null."
     },
+    "SessionInfo": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "host_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cols": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "exit_code": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set once the session has ended; null while running or when the status is unknown."
+        },
+        "first_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Offset of the oldest output still buffered."
+        },
+        "next_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Offset the next output will have (total bytes produced)."
+        }
+      },
+      "required": [
+        "session_id",
+        "host_id",
+        "cols",
+        "rows",
+        "running",
+        "exit_code",
+        "first_seq",
+        "next_seq"
+      ],
+      "additionalProperties": false,
+      "description": "A session the daemon holds. Ended sessions stay listed (with their scrollback) until `session.close`."
+    },
+    "SessionListParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `session.list` payload. Reply: SessionListResult."
+    },
+    "SessionListResult": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionInfo"
+          }
+        }
+      },
+      "required": [
+        "sessions"
+      ],
+      "additionalProperties": false
+    },
+    "SessionAttachParams": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "from_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Replay output from this offset; omitted means everything still buffered."
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `session.attach` payload. Subscribes this connection to the session's output and exit events: the reply comes first, then the buffered output from `from_seq` as `session.output` events, then (if the session already ended) `session.exit`, then live events. Attaching again replaces the earlier subscription of the same connection. Reply: SessionAttachResult."
+    },
+    "SessionAttachResult": {
+      "type": "object",
+      "properties": {
+        "first_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Offset of the oldest output still buffered."
+        },
+        "next_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Offset the next output will have."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True when output before the first replayed byte was dropped (`from_seq`, or the start of the stream, fell before `first_seq`)."
+        },
+        "running": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "first_seq",
+        "next_seq",
+        "truncated",
+        "running"
+      ],
+      "additionalProperties": false
+    },
+    "SessionDetachParams": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `session.detach` payload. Stops this connection's events for the session; the session keeps running. Reply: null."
+    },
     "AskpassReplyParams": {
       "type": "object",
       "properties": {
@@ -1086,6 +1232,27 @@
       "additionalProperties": false,
       "description": "Command `askpass.reply` payload. answer null cancels the prompt. Reply: null."
     },
+    "AskpassEndpointParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `askpass.endpoint` payload. Reply: AskpassEndpointResult."
+    },
+    "AskpassEndpointResult": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "description": "`<port> <token>` for the `ANIXOPS_SSH_ASKPASS` variable of an OpenSSH child process."
+        }
+      },
+      "required": [
+        "endpoint"
+      ],
+      "additionalProperties": false,
+      "description": "Secret: it lets a process answer for the daemon's prompts; hand it only to OpenSSH child processes."
+    },
     "SessionOutputEvent": {
       "type": "object",
       "properties": {
@@ -1094,6 +1261,11 @@
         },
         "data": {
           "type": "string"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Offset in bytes of `data` within the session's output stream (UTF-8, as sent). Optional for compatibility; the daemon always sets it. Consecutive events of one session are contiguous unless the buffer dropped output."
         }
       },
       "required": [
@@ -1101,7 +1273,7 @@
         "data"
       ],
       "additionalProperties": false,
-      "description": "Event `session.output` payload."
+      "description": "Event `session.output` payload. Sent to every client attached to the session, first as replay of the buffered scrollback (from the requested offset), then live."
     },
     "SessionExitEvent": {
       "type": "object",

@@ -1038,15 +1038,22 @@ name = "easysshd"
 version = "1.0.1"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
+ "dirs 5.0.1",
+ "easyssh-core",
+ "easyssh-proto",
  "fs4",
  "hmac",
  "libc",
+ "portable-pty",
  "rand",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "uuid",
  "windows-sys 0.59.0",
 ]
 

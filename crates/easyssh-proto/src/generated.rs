@@ -33,6 +33,17 @@ pub struct AppConfig {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub workspace: ::std::option::Option<Workspace>,
 }
+///Command `askpass.endpoint` payload. Reply: AskpassEndpointResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct AskpassEndpointParams {}
+///Secret: it lets a process answer for the daemon's prompts; hand it only to OpenSSH child processes.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct AskpassEndpointResult {
+    ///`<port> <token>` for the `ANIXOPS_SSH_ASKPASS` variable of an OpenSSH child process.
+    pub endpoint: ::std::string::String,
+}
 ///Event `askpass.prompt` payload.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
@@ -368,10 +379,37 @@ impl ::std::str::FromStr for SchemaVersion {
         Ok(Self(value.parse()?))
     }
 }
+///Command `session.attach` payload. Subscribes this connection to the session's output and exit events: the reply comes first, then the buffered output from `from_seq` as `session.output` events, then (if the session already ended) `session.exit`, then live events. Attaching again replaces the earlier subscription of the same connection. Reply: SessionAttachResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SessionAttachParams {
+    ///Replay output from this offset; omitted means everything still buffered.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub from_seq: ::std::option::Option<u64>,
+    pub session_id: ::std::string::String,
+}
+///`SessionAttachResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SessionAttachResult {
+    ///Offset of the oldest output still buffered.
+    pub first_seq: u64,
+    ///Offset the next output will have.
+    pub next_seq: u64,
+    pub running: bool,
+    ///True when output before the first replayed byte was dropped (`from_seq`, or the start of the stream, fell before `first_seq`).
+    pub truncated: bool,
+}
 ///Command `session.close` payload. Reply: null.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct SessionCloseParams {
+    pub session_id: ::std::string::String,
+}
+///Command `session.detach` payload. Stops this connection's events for the session; the session keeps running. Reply: null.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SessionDetachParams {
     pub session_id: ::std::string::String,
 }
 ///Event `session.exit` payload.
@@ -381,6 +419,34 @@ pub struct SessionExitEvent {
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub code: ::std::option::Option<i64>,
     pub session_id: ::std::string::String,
+}
+///A session the daemon holds. Ended sessions stay listed (with their scrollback) until `session.close`.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SessionInfo {
+    pub cols: u16,
+    ///Set once the session has ended; null while running or when the status is unknown.
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub exit_code: ::std::option::Option<i64>,
+    ///Offset of the oldest output still buffered.
+    pub first_seq: u64,
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub host_id: ::std::option::Option<::std::string::String>,
+    ///Offset the next output will have (total bytes produced).
+    pub next_seq: u64,
+    pub rows: u16,
+    pub running: bool,
+    pub session_id: ::std::string::String,
+}
+///Command `session.list` payload. Reply: SessionListResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SessionListParams {}
+///`SessionListResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SessionListResult {
+    pub sessions: ::std::vec::Vec<SessionInfo>,
 }
 ///Command `session.open` payload. host_id null opens a local shell. Reply: SessionOpenResult.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -397,11 +463,14 @@ pub struct SessionOpenParams {
 pub struct SessionOpenResult {
     pub session_id: ::std::string::String,
 }
-///Event `session.output` payload.
+///Event `session.output` payload. Sent to every client attached to the session, first as replay of the buffered scrollback (from the requested offset), then live.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct SessionOutputEvent {
     pub data: ::std::string::String,
+    ///Offset in bytes of `data` within the session's output stream (UTF-8, as sent). Optional for compatibility; the daemon always sets it. Consecutive events of one session are contiguous unless the buffer dropped output.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub seq: ::std::option::Option<u64>,
     pub session_id: ::std::string::String,
 }
 ///Rust: domain::SessionRecord. `hidden` has serde(default).

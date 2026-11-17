@@ -22,7 +22,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// The schema document, embedded at build time.
 pub const SCHEMA_JSON: &str = include_str!("../schema/proto.schema.json");
 
-/// The starting command set: `(kind, params schema, result schema)`.
+/// The command set: `(kind, params schema, result schema)`.
 /// An empty result schema means the reply's `ok` is `null`.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("proto.hello", "ProtoHelloParams", "ProtoHelloResult"),
@@ -33,10 +33,22 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("session.write", "SessionWriteParams", ""),
     ("session.resize", "SessionResizeParams", ""),
     ("session.close", "SessionCloseParams", ""),
+    ("session.list", "SessionListParams", "SessionListResult"),
+    (
+        "session.attach",
+        "SessionAttachParams",
+        "SessionAttachResult",
+    ),
+    ("session.detach", "SessionDetachParams", ""),
     ("askpass.reply", "AskpassReplyParams", ""),
+    (
+        "askpass.endpoint",
+        "AskpassEndpointParams",
+        "AskpassEndpointResult",
+    ),
 ];
 
-/// The starting event set: `(kind, payload schema)`.
+/// The event set: `(kind, payload schema)`.
 pub const EVENTS: &[(&str, &str)] = &[
     ("session.output", "SessionOutputEvent"),
     ("session.exit", "SessionExitEvent"),
