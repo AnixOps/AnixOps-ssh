@@ -21,7 +21,7 @@ pub use config::{ConfigStore, MigrationReport};
 pub use domain::{
     AppConfig, CommandSnippet, Connection, ConnectionTarget, DisplayDensity, EnginePreference,
     ExperimentalFeatures, Group, Locale, SessionRecord, SidebarNavigation, SidebarPreferences,
-    SshEngine, TerminalPreferences, Theme, Workspace,
+    SshEngine, TelemetryPreferences, TerminalPreferences, Theme, Workspace,
 };
 pub use openssh::{AgentDiagnostics, ExternalTerminal, OpenSsh, OpenSshError, SshInvocation};
 pub use remote::{

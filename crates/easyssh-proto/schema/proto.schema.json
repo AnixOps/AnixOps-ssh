@@ -652,6 +652,25 @@
       "additionalProperties": false,
       "description": "Rust: domain::SyncPreferences."
     },
+    "TelemetryPreferences": {
+      "type": "object",
+      "properties": {
+        "crash_reports": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null,
+          "description": "null until the user answered the first-run question."
+        },
+        "usage_stats": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "description": "Rust: domain::TelemetryPreferences. Both fields have serde(default)."
+    },
     "ExperimentalFeatures": {
       "type": "object",
       "properties": {
@@ -759,6 +778,9 @@
         "ssh_engine": {
           "$ref": "#/$defs/SshEngine",
           "description": "Absent means openssh."
+        },
+        "telemetry": {
+          "$ref": "#/$defs/TelemetryPreferences"
         }
       },
       "required": [
@@ -771,7 +793,7 @@
         "locale"
       ],
       "additionalProperties": false,
-      "description": "The v1 configuration file. Fields with serde(default) in Rust (tunnels, terminal, sessions, transfer_history, workspace, display_density, sidebar, sync, experimental) are optional here; v1 always writes them."
+      "description": "The v1 configuration file. Fields with serde(default) in Rust (tunnels, terminal, sessions, transfer_history, workspace, display_density, sidebar, sync, experimental, telemetry) are optional here; v1 always writes them."
     },
     "SchemaVersion": {
       "const": 1,

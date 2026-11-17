@@ -164,6 +164,7 @@ fn entities_validate_individually() {
     ok("SidebarPreferences", &to_value(&config.sidebar));
     ok("SyncPreferences", &to_value(&config.sync));
     ok("ExperimentalFeatures", &to_value(&config.experimental));
+    ok("TelemetryPreferences", &to_value(&config.telemetry));
     ok("SessionRecord", &to_value(&config.sessions[0]));
     ok("Transfer", &to_value(&config.transfer_history[0]));
 }
@@ -239,6 +240,7 @@ fn v1_config_with_defaulted_fields_missing_still_validates() {
         "sidebar",
         "sync",
         "experimental",
+        "telemetry",
     ] {
         object.remove(key);
     }

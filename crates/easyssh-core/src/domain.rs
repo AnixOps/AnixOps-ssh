@@ -36,6 +36,8 @@ pub struct AppConfig {
     /// Which SSH engine runs new sessions. Absent means `openssh`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_engine: Option<SshEngine>,
+    #[serde(default)]
+    pub telemetry: TelemetryPreferences,
 }
 
 /// The global SSH engine setting.
@@ -73,6 +75,19 @@ impl AppConfig {
             ..Self::default()
         }
     }
+}
+
+/// What the user decided about crash reports and usage statistics.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct TelemetryPreferences {
+    /// `None` until the user answered the first-run question; nothing is sent
+    /// or recorded while it is `None` or `false`.
+    #[serde(default)]
+    pub crash_reports: Option<bool>,
+    /// Anonymous usage statistics; off unless the user turns them on.
+    #[serde(default)]
+    pub usage_stats: bool,
 }
 
 /// Opt-in features which may expose a larger remote-data surface. They are

@@ -2,7 +2,7 @@
 // Source: schema/proto.schema.json. Do not edit by hand.
 #![allow(clippy::all, unused_imports, dead_code)]
 
-///The v1 configuration file. Fields with serde(default) in Rust (tunnels, terminal, sessions, transfer_history, workspace, display_density, sidebar, sync, experimental) are optional here; v1 always writes them.
+///The v1 configuration file. Fields with serde(default) in Rust (tunnels, terminal, sessions, transfer_history, workspace, display_density, sidebar, sync, experimental, telemetry) are optional here; v1 always writes them.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct AppConfig {
@@ -26,6 +26,8 @@ pub struct AppConfig {
     pub ssh_engine: ::std::option::Option<SshEngine>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub sync: ::std::option::Option<SyncPreferences>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub telemetry: ::std::option::Option<TelemetryPreferences>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub terminal: ::std::option::Option<TerminalPreferences>,
     pub theme: Theme,
@@ -1150,6 +1152,16 @@ pub struct SyncPreferences {
     pub remote_url: ::std::option::Option<::std::string::String>,
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub repository_path: ::std::option::Option<::std::string::String>,
+}
+///Rust: domain::TelemetryPreferences. Both fields have serde(default).
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryPreferences {
+    ///null until the user answered the first-run question.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub crash_reports: ::std::option::Option<bool>,
+    #[serde(default)]
+    pub usage_stats: bool,
 }
 ///Terminal defaults. Rust: domain::TerminalPreferences.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]

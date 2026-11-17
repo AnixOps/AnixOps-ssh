@@ -14,6 +14,11 @@ pub struct Settings {
     /// `openssh` (default) or `russh`.
     #[serde(default)]
     ssh_engine: SshEngine,
+    /// `None` until the first-run question was answered.
+    #[serde(default)]
+    crash_reports: Option<bool>,
+    #[serde(default)]
+    usage_stats: bool,
 }
 
 #[tauri::command]
@@ -25,6 +30,8 @@ pub fn settings_get() -> Result<Settings, String> {
         terminal_font_size: config.terminal.font_size,
         terminal_scrollback: config.terminal.scrollback_lines,
         ssh_engine: config.ssh_engine.unwrap_or_default(),
+        crash_reports: config.telemetry.crash_reports,
+        usage_stats: config.telemetry.usage_stats,
     })
 }
 
@@ -46,7 +53,11 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
         SshEngine::Openssh if config.ssh_engine.is_none() => None,
         engine => Some(engine),
     };
-    save_config(&config)
+    config.telemetry.crash_reports = settings.crash_reports;
+    config.telemetry.usage_stats = settings.usage_stats;
+    save_config(&config)?;
+    crate::telemetry::apply(&config.telemetry);
+    Ok(())
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]

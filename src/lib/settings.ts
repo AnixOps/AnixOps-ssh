@@ -9,10 +9,20 @@ export interface Settings {
   terminalScrollback: number;
   /** The SSH engine for hosts that follow the global setting. */
   sshEngine: SshEngine;
+  /** null until the first-run question has been answered. */
+  crashReports: boolean | null;
+  usageStats: boolean;
 }
 
 const mirror = readMirror();
-let current: Settings = { ...mirror, terminalFontSize: 13, terminalScrollback: 10000, sshEngine: "openssh" };
+let current: Settings = {
+  ...mirror,
+  terminalFontSize: 13,
+  terminalScrollback: 10000,
+  sshEngine: "openssh",
+  crashReports: null,
+  usageStats: false,
+};
 const listeners = new Set<(settings: Settings) => void>();
 
 /** `data-theme` overrides the system choice; none follows the system. */

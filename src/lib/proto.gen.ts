@@ -283,6 +283,19 @@ export interface SyncPreferences {
   last_snapshot_hash: string | null;
 }
 /**
+ * Rust: domain::TelemetryPreferences. Both fields have serde(default).
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TelemetryPreferences".
+ */
+export interface TelemetryPreferences {
+  /**
+   * null until the user answered the first-run question.
+   */
+  crash_reports?: boolean | null;
+  usage_stats?: boolean;
+}
+/**
  * Rust: domain::ExperimentalFeatures. `remote_file_browser` has serde(default).
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -296,7 +309,7 @@ export interface ExperimentalFeatures {
   git_metadata_sync_ui: boolean;
 }
 /**
- * The v1 configuration file. Fields with serde(default) in Rust (tunnels, terminal, sessions, transfer_history, workspace, display_density, sidebar, sync, experimental) are optional here; v1 always writes them.
+ * The v1 configuration file. Fields with serde(default) in Rust (tunnels, terminal, sessions, transfer_history, workspace, display_density, sidebar, sync, experimental, telemetry) are optional here; v1 always writes them.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "AppConfig".
@@ -325,6 +338,7 @@ export interface AppConfig {
    * Absent means openssh.
    */
   ssh_engine?: "openssh" | "russh";
+  telemetry?: TelemetryPreferences;
 }
 /**
  * Machine-readable code plus a human message.

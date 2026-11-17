@@ -1,16 +1,23 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { BackupSync } from "@/components/app/BackupSync";
-import { CircleAlert, CircleCheck, Minus, Plus, RotateCw } from "lucide-react";
+import { CircleAlert, CircleCheck, Eye, EyeOff, Minus, Plus, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
-import { isTauri, type SshStatus } from "@/lib/backend";
+import {
+  isTauri,
+  telemetryDeletePending,
+  telemetryPending,
+  telemetryStatus,
+  type SshStatus,
+} from "@/lib/backend";
 import { completionPrefs, onCompletionPrefs, updateCompletionPrefs } from "@/lib/completion/prefs";
 import { t } from "@/lib/i18n";
 import type { LocaleSetting, ThemeSetting } from "@/lib/prefsMirror";
 import { onSettings, settings, updateSettings, type Settings } from "@/lib/settings";
+import { pendingText, privacyView, type TelemetryStatus } from "@/lib/telemetry";
 import { cn } from "@/lib/utils";
 
 const SCROLLBACK = [1000, 5000, 10000, 50000, 100000];
@@ -183,6 +190,10 @@ export function SettingsPanel({
           )}
         </Group>
 
+        <Group title={t.privacy}>
+          <PrivacySection current={current} update={update} />
+        </Group>
+
         <Group title={t.backupSync}>
           <BackupSync onChanged={onDataChanged} />
         </Group>
@@ -260,5 +271,88 @@ function Stepper({
     <Button variant="secondary" size="icon-sm" aria-label={label} disabled={disabled} onClick={onClick}>
       {children}
     </Button>
+  );
+}
+
+function PrivacySection({ current, update }: { current: Settings; update: (patch: Partial<Settings>) => void }) {
+  const [status, setStatus] = useState<TelemetryStatus | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const refresh = () => telemetryStatus().then(setStatus).catch(console.error);
+  useEffect(() => {
+    refresh();
+  }, [current.crashReports]);
+
+  const view = privacyView(current, status);
+
+  const toggleView = () => {
+    if (pending !== null) {
+      setPending(null);
+      return;
+    }
+    setNotice(null);
+    telemetryPending()
+      .then((found) => setPending(pendingText(found) || t.pendingNone))
+      .catch(console.error);
+  };
+
+  const remove = () => {
+    telemetryDeletePending()
+      .then(() => {
+        setPending(null);
+        setNotice(t.pendingDeleted);
+        return refresh();
+      })
+      .catch(console.error);
+  };
+
+  if (view.nothingCollected && status) {
+    return <p className="px-3 py-2 text-caption font-normal text-label-2">{t.telemetryUnavailable}</p>;
+  }
+
+  return (
+    <>
+      <Row label={t.crashReports} hint={t.crashReportsHint}>
+        <Switch
+          on={view.crashOn}
+          label={t.crashReports}
+          onClick={() => update({ crashReports: !view.crashOn })}
+        />
+      </Row>
+      <Row label={t.usageStats} hint={view.usageAvailable ? t.usageStatsHint : t.usageUnavailable}>
+        <Switch
+          on={view.usageOn}
+          label={t.usageStats}
+          onClick={() => view.usageAvailable && update({ usageStats: !view.usageOn })}
+        />
+      </Row>
+      <div className="space-y-2 px-3 py-2">
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" size="sm" onClick={toggleView}>
+            {pending === null ? <Eye /> : <EyeOff />}
+            {pending === null ? t.viewPending : t.hidePending}
+          </Button>
+          <Button variant="secondary" size="sm" onClick={remove} disabled={!status || status.pending === 0}>
+            <Trash2 />
+            {t.deletePending}
+          </Button>
+        </div>
+        {status && status.pending > 0 && (
+          <p className="text-caption font-normal text-label-2">
+            {status.pending} {t.pendingCount}
+          </p>
+        )}
+        {notice && <p className="text-caption font-normal text-label-2">{notice}</p>}
+        {pending !== null && (
+          <pre
+            aria-label={t.viewPending}
+            className="selectable max-h-48 overflow-auto rounded-xs bg-fill-1 p-2 font-mono text-caption font-normal whitespace-pre-wrap break-all text-label-2"
+          >
+            {pending}
+          </pre>
+        )}
+      </div>
+    </>
   );
 }

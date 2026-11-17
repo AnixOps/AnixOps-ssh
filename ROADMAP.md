@@ -34,7 +34,9 @@ In order of weight:
 
 Telemetry: crash reports are asked for on first start; anonymous usage
 statistics only when the user turns them on. Terminal content, host names and
-addresses are never collected.
+addresses are never collected. Built: `easyssh-telemetry` (Sentry envelope to
+a self-hosted GlitchTip, scrubber, consent, Privacy settings); see
+[docs/telemetry.md](docs/telemetry.md).
 
 ## Next
 
