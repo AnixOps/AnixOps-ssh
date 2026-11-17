@@ -130,6 +130,44 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "SecretsStatusResult",
     ),
     ("secrets.set", "SecretsSetParams", "SecretsStatusResult"),
+    ("sync.status", "SyncStatusParams", "SyncStatus"),
+    ("sync.signup", "SyncSignupParams", "SyncStatus"),
+    ("sync.signin", "SyncSigninParams", "SyncStatus"),
+    ("sync.signout", "SyncSignoutParams", "SyncStatus"),
+    ("sync.now", "SyncNowParams", "SyncStatus"),
+    (
+        "sync.devices.list",
+        "SyncDevicesListParams",
+        "SyncDevicesListResult",
+    ),
+    ("sync.devices.revoke", "SyncDevicesRevokeParams", ""),
+    ("vaults.list", "VaultsListParams", "VaultsListResult"),
+    (
+        "vault.create_shared",
+        "VaultCreateSharedParams",
+        "VaultInfo",
+    ),
+    (
+        "vault.members.list",
+        "VaultMembersListParams",
+        "VaultMembersListResult",
+    ),
+    (
+        "vault.members.lookup",
+        "VaultMembersLookupParams",
+        "VaultMembersLookupResult",
+    ),
+    ("vault.members.add", "VaultMembersAddParams", "VaultMember"),
+    ("vault.members.remove", "VaultMembersRemoveParams", ""),
+    ("vault.members.role", "VaultMembersRoleParams", ""),
+    (
+        "hosts.move_vault",
+        "HostsMoveVaultParams",
+        "HostsMoveVaultResult",
+    ),
+    ("hosts.vaults", "HostsVaultsParams", "HostsVaultsResult"),
+    ("hosts.history", "HostsHistoryParams", "HostsHistoryResult"),
+    ("hosts.history_restore", "HostsHistoryRestoreParams", ""),
 ];
 
 /// The event set: `(kind, payload schema)`.
@@ -145,6 +183,7 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("transfer.done", "TransferDoneEvent"),
     ("tunnel.status", "TunnelStatusEvent"),
     ("vault.changed", "VaultChangedEvent"),
+    ("sync.state", "SyncStatus"),
 ];
 
 fn validators() -> &'static HashMap<String, Validator> {

@@ -367,6 +367,17 @@ impl Store {
     }
 
     pub(crate) fn upsert_at<T: Entity>(&self, item: &T, now: DateTime<Utc>) -> Result<Record<T>> {
+        self.upsert_in(item, now, None)
+    }
+
+    /// Like [`Store::upsert_at`]; a record that does not exist yet is created
+    /// in `new_vault` (the active vault when `None`).
+    pub(crate) fn upsert_in<T: Entity>(
+        &self,
+        item: &T,
+        now: DateTime<Utc>,
+        new_vault: Option<&str>,
+    ) -> Result<Record<T>> {
         item.validate()?;
         self.in_tx(|| {
             let old = self.get_any::<T>(item.id())?;
@@ -380,9 +391,10 @@ impl Store {
             if let Some(old) = &old {
                 item.keep_from(&old.item);
             }
-            let vault_id = old
-                .as_ref()
-                .map_or_else(|| self.vault_id.clone(), |old| old.meta.vault_id.clone());
+            let vault_id = old.as_ref().map_or_else(
+                || new_vault.map_or_else(|| self.vault_id.clone(), str::to_owned),
+                |old| old.meta.vault_id.clone(),
+            );
             let new_fields = item.fields();
             let (meta, changed) = self.stamp(
                 T::TABLE,
@@ -656,13 +668,16 @@ pub struct Vault {
     pub name: String,
     pub kind: VaultKind,
     pub created_at: DateTime<Utc>,
+    /// The signed-in account's role in a synced team vault (`owner`,
+    /// `editor` or `viewer`); `None` for the personal vault.
+    pub role: Option<String>,
 }
 
 impl Store {
     pub fn list_vaults(&self) -> Result<Vec<Vault>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, name, kind, created_at FROM vaults ORDER BY created_at, id")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, kind, created_at, role FROM vaults ORDER BY created_at, id",
+        )?;
         let mut rows = stmt.query([])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
@@ -674,6 +689,7 @@ impl Store {
                     _ => VaultKind::Personal,
                 },
                 created_at: parse_ts(&row.get::<_, String>(3)?)?,
+                role: row.get(4)?,
             });
         }
         Ok(out)
@@ -686,6 +702,7 @@ impl Store {
             name: name.to_owned(),
             kind,
             created_at: Utc::now(),
+            role: None,
         };
         self.conn.execute(
             "INSERT INTO vaults (id, name, kind, created_at) VALUES (?1, ?2, ?3, ?4)",

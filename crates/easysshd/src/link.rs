@@ -136,6 +136,9 @@ pub trait LinkHandler: Send + Sync + 'static {
     fn tunnel_status(&self, _status: TunnelStatus) {}
     /// The vault locked or unlocked (also by auto-lock).
     fn vault_changed(&self, _unlocked: bool) {}
+    /// The sync state changed (`sync.state`); `status` is the same object
+    /// `sync.status` returns.
+    fn sync_state(&self, _status: Value) {}
 }
 
 type Reply = Result<Value, LinkError>;
@@ -296,6 +299,7 @@ impl Inner {
             Some("vault.changed") => self
                 .handler
                 .vault_changed(payload["unlocked"].as_bool().unwrap_or(false)),
+            Some("sync.state") => self.handler.sync_state(payload.clone()),
             _ => {}
         }
     }

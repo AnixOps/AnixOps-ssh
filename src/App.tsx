@@ -14,6 +14,7 @@ import { IconRail, type NavKey } from "@/components/app/IconRail";
 import { EmptyWorkspace } from "@/components/app/Placeholders";
 import { SettingsPanel } from "@/components/app/SettingsPanel";
 import { SnippetsPanel } from "@/components/app/SnippetsPanel";
+import { TeamVaults } from "@/components/app/TeamVaults";
 import { TabBar, type Tab } from "@/components/app/TabBar";
 import { PaneArea } from "@/components/app/PaneArea";
 import type { SessionStatus } from "@/components/app/TerminalView";
@@ -365,6 +366,8 @@ export function App() {
           <SnippetsPanel activeKey={activePane} />
         ) : nav === "forwards" ? (
           <ForwardsPanel hosts={snapshot.hosts} />
+        ) : nav === "team" ? (
+          <TeamVaults />
         ) : (
           <SettingsPanel status={status} onRecheck={checkSsh} onDataChanged={reload} />
         )}

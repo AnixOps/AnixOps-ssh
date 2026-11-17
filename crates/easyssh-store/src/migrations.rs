@@ -29,8 +29,13 @@ const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 4,
+        name: "sync",
+        sql: include_str!("../migrations/0004_sync.sql"),
+    },
+    Migration {
+        version: 5,
         name: "host_engine",
-        sql: include_str!("../migrations/0004_host_engine.sql"),
+        sql: include_str!("../migrations/0005_host_engine.sql"),
     },
 ];
 

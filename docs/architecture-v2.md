@@ -154,8 +154,9 @@ transactions, indexes and numbered migrations. Sensitive fields are
 encrypted with the device key. On first start, v2 reads the v1 JSON
 configuration, migrates it, and keeps the original file as a backup.
 
-Git sync from v1 becomes an encrypted export and backup target. It is no
-longer a sync channel.
+Git sync from v1 is now called "Backup to Git" in the app. It is an
+export and backup target and no longer a sync channel. (It is not encrypted
+by us; it carries the same data as an export file, never secrets.)
 
 ## 8. Sync
 
@@ -176,6 +177,33 @@ themselves (we may also offer a hosted one).
 - **Push** is a compare-and-set on the version vector. If the server holds a
   concurrent version, it returns it; the client merges and pushes again.
 - Deletes are signed tombstones, not server instructions.
+
+### 8.1 How the app does it
+
+Where the implemented behaviour differs from or adds to the above:
+
+- The daemon owns sync (`easysshd::syncsvc`), not the UI. It talks to the
+  server with `easyssh-sync`'s engine over `easyssh_store::StoreSync`, which
+  maps the store's tables to sync records (hosts, groups, snippets, tunnels,
+  known hosts). `host_secrets` is never mapped.
+- The personal vault has the same local id on every install, but the id on
+  the server is a UUIDv5 of the account id, so accounts do not collide on one
+  server. A shared vault's display name travels as a `vault-meta` record.
+- Every overwritten value is written to `record_history` locally. The restore
+  button writes the old value again as a normal edit, with a new stamp.
+- A host moved into another vault is copied under a new id and the original
+  removed (its tunnels are repointed, its saved secrets copied locally),
+  because a record's vault is part of its identity on the server.
+- Account secrets (account keys, token) are stored in `sync_account`,
+  encrypted with the vault's device `FieldCipher`; the passphrase is not
+  stored. When the vault is locked, the state is `locked` and sync resumes on
+  unlock. The high-water marks used for rollback protection and the pull
+  cursor persist in the store.
+- Member keys are pinned on first sight (trust on first use) and shown as
+  `unconfirmed` until the owner has compared the safety number when adding
+  them; a changed key blocks adding and shows as `changed`. The safety number
+  is `easyssh_crypto::account_fingerprint`.
+- Not done: vault key rotation on member removal, syncing saved secrets. A device is re-enrolled on every sign-in.
 
 ## 9. Terminal
 

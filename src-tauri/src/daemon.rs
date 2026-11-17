@@ -163,6 +163,10 @@ impl LinkHandler for Handler {
             .emit("vault-changed", serde_json::json!({ "unlocked": unlocked }));
     }
 
+    fn sync_state(&self, status: serde_json::Value) {
+        let _ = self.app.emit("sync-state", status);
+    }
+
     fn lost(&self) {
         eprintln!("EasySSH: lost the connection to easysshd; reconnecting");
     }

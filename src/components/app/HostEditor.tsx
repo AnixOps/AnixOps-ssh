@@ -1,5 +1,6 @@
 import { CircleAlert, FileUp, Star, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { HostHistory, HostVault } from "@/components/app/HostSync";
 import { SecretField } from "@/components/app/SecretField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -389,6 +390,8 @@ export function HostEditor({
             />
           </Field>
 
+          {saved && host && <HostVault hostId={host.id} onMoved={onDone} />}
+          {saved && host && <HostHistory hostId={host.id} onRestored={onDone} />}
           <Field label={t.logsHost} hint={t.logsHostHint}>
             <Segmented
               size="sm"
