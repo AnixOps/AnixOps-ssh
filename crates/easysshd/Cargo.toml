@@ -13,6 +13,7 @@ dirs.workspace = true
 easyssh-core = { path = "../easyssh-core" }
 easyssh-proto = { path = "../easyssh-proto" }
 easyssh-store = { path = "../easyssh-store" }
+easyssh-telemetry = { path = "../easyssh-telemetry" }
 fs4.workspace = true
 hmac.workspace = true
 portable-pty = "0.9"

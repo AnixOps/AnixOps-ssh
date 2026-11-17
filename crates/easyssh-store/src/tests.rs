@@ -941,7 +941,7 @@ fn migrating_a_default_config_imports_only_settings() {
     assert!(!report.already_migrated);
     assert_eq!(report.hosts, EntityCounts::default());
     assert_eq!(report.groups, EntityCounts::default());
-    assert_eq!(report.settings.imported, 9);
+    assert_eq!(report.settings.imported, 10);
     assert!(report.skipped.is_empty() && report.warnings.is_empty());
     assert_eq!(
         store.get_setting("theme").unwrap(),
@@ -964,7 +964,7 @@ fn migrating_a_full_config_keeps_everything() {
     assert_eq!(report.groups.imported, 3);
     assert_eq!(report.snippets.imported, 2);
     assert_eq!(report.tunnels.imported, 3);
-    assert_eq!(report.settings.imported, 9);
+    assert_eq!(report.settings.imported, 10);
     let kinds: Vec<&str> = report.skipped.iter().map(|s| s.kind).collect();
     assert_eq!(kinds, ["host", "sessions"]);
     assert_eq!(report.skipped[0].id.as_deref(), Some("bad-host"));

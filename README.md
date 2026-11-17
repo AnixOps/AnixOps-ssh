@@ -119,6 +119,27 @@ prompt jumps above. What the scripts do and the sequence format are in
 - Export files and Git sync carry hosts, groups, snippets and tunnels only.
   Git authentication is left to the system `git`.
 
+## Privacy
+
+Nothing leaves your machine unless you say so. On first start the app asks
+once whether it may send **crash reports**; **anonymous usage statistics** are
+off until you turn them on in Settings › Privacy. Both can be changed or
+turned off at any time, and a build without a configured server (the default
+when you build it yourself) collects and sends nothing.
+
+- Crash reports: app version, OS, CPU architecture, the panic or error
+  message and the function names of the call stack, with host names, IP
+  addresses, e-mail addresses, `user@host`, home-directory paths and long
+  tokens removed. They are written to a local folder first, uploaded on the
+  next start, and "View pending reports" shows the exact bytes before that.
+  The server is a self-hosted GlitchTip.
+- Usage statistics, once a day: `app_version`, `os`, `arch`, `engine`,
+  `hosts` (0, 1-5, 6-20 or 21+) and `sessions` (same buckets). No identifier.
+- Never collected: terminal content, host names, addresses, user names, file
+  paths, command lines, keys or passwords.
+
+Details and how to self-host the server: [docs/telemetry.md](docs/telemetry.md).
+
 ## Development
 
 ```bash

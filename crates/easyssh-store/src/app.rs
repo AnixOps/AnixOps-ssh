@@ -12,7 +12,7 @@ use crate::entities::Host;
 use crate::error::{Result, StoreError};
 use crate::store::{Entity, Store};
 use crate::v1::{store_id, MigrationReport, MIGRATION_SETTING};
-use easyssh_core::domain::SyncPreferences;
+use easyssh_core::domain::{SyncPreferences, TelemetryPreferences};
 use easyssh_core::{
     AppConfig, CommandSnippet, Connection, DisplayDensity, ExperimentalFeatures, Group, Locale,
     SidebarPreferences, TerminalPreferences, Theme, Tunnel, Workspace,
@@ -197,6 +197,7 @@ impl Store {
         config.sync = setting::<SyncPreferences>(self, "sync").unwrap_or_default();
         config.experimental =
             setting::<ExperimentalFeatures>(self, "experimental").unwrap_or_default();
+        config.telemetry = setting::<TelemetryPreferences>(self, "telemetry").unwrap_or_default();
         config.recent_connection_ids = self.recent_connection_ids();
         Ok(config)
     }

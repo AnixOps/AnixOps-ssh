@@ -7,10 +7,13 @@ export interface Settings {
   locale: LocaleSetting;
   terminalFontSize: number;
   terminalScrollback: number;
+  /** null until the first-run question has been answered. */
+  crashReports: boolean | null;
+  usageStats: boolean;
 }
 
 const mirror = readMirror();
-let current: Settings = { ...mirror, terminalFontSize: 13, terminalScrollback: 10000 };
+let current: Settings = { ...mirror, terminalFontSize: 13, terminalScrollback: 10000, crashReports: null, usageStats: false };
 const listeners = new Set<(settings: Settings) => void>();
 
 /** `data-theme` overrides the system choice; none follows the system. */

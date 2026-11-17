@@ -356,6 +356,7 @@ impl Store {
             ("sidebar", sidebar),
             ("sync", serde_json::to_value(&config.sync)?),
             ("experimental", serde_json::to_value(&config.experimental)?),
+            ("telemetry", serde_json::to_value(&config.telemetry)?),
             ("recent_connection_ids", serde_json::to_value(recent)?),
         ];
         for (key, value) in entries {

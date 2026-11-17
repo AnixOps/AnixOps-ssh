@@ -11,6 +11,11 @@ pub struct Settings {
     locale: Locale,
     terminal_font_size: f32,
     terminal_scrollback: usize,
+    /// `None` until the first-run question was answered.
+    #[serde(default)]
+    crash_reports: Option<bool>,
+    #[serde(default)]
+    usage_stats: bool,
 }
 
 #[tauri::command]
@@ -21,6 +26,8 @@ pub fn settings_get() -> Result<Settings, String> {
         locale: config.locale,
         terminal_font_size: config.terminal.font_size,
         terminal_scrollback: config.terminal.scrollback_lines,
+        crash_reports: config.telemetry.crash_reports,
+        usage_stats: config.telemetry.usage_stats,
     })
 }
 
@@ -49,7 +56,17 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     store
         .set_setting_as("locale", &settings.locale)
         .map_err(stored)?;
-    store.set_setting_as("terminal", &terminal).map_err(stored)
+    store
+        .set_setting_as("terminal", &terminal)
+        .map_err(stored)?;
+    let mut telemetry = load_config()?.telemetry;
+    telemetry.crash_reports = settings.crash_reports;
+    telemetry.usage_stats = settings.usage_stats;
+    store
+        .set_setting_as("telemetry", &telemetry)
+        .map_err(stored)?;
+    crate::telemetry::apply(&telemetry);
+    Ok(())
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]

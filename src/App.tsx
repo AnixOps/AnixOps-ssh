@@ -48,6 +48,7 @@ import {
   type PaneState,
 } from "@/lib/panes";
 import { loadSettings } from "@/lib/settings";
+import { FirstRunPrompt } from "@/components/app/FirstRunPrompt";
 import { appShortcut, type AppShortcut } from "@/lib/shortcuts";
 import { terminalFor } from "@/lib/terminals";
 
@@ -336,6 +337,7 @@ export function App() {
     <MotionConfig reducedMotion="user">
     <TooltipProvider delayDuration={400}>
       <div className="flex h-full">
+        <FirstRunPrompt />
         <IconRail active={nav} onChange={setNav} />
         {/* Switching sections cross-fades the second column. */}
         <motion.div

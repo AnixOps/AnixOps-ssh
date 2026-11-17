@@ -318,3 +318,28 @@ fn a_connection_with_every_field_set_roundtrips() {
     expected["created_at"] = got["created_at"].clone();
     assert_eq!(got, expected);
 }
+
+#[test]
+fn telemetry_choice_is_migrated_and_saved_in_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(v1(dir.path()), V1_FULL).unwrap();
+    let store = open_app_store(&v1(dir.path())).unwrap().store;
+    // The v1 answer carries over, so a migrated user is not asked again.
+    let loaded = store.load_app_config().unwrap().telemetry;
+    assert_eq!(loaded.crash_reports, Some(true));
+    assert!(!loaded.usage_stats);
+
+    let mut changed = loaded;
+    changed.crash_reports = Some(false);
+    changed.usage_stats = true;
+    store.set_setting_as("telemetry", &changed).unwrap();
+    assert_eq!(store.load_app_config().unwrap().telemetry, changed);
+
+    // A fresh install has not answered yet.
+    let fresh = tempfile::tempdir().unwrap();
+    let fresh = open_app_store(&v1(fresh.path())).unwrap().store;
+    assert_eq!(
+        fresh.load_app_config().unwrap().telemetry.crash_reports,
+        None
+    );
+}
