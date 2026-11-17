@@ -17,7 +17,7 @@ impl LinkHandler for NoPrompts {
 }
 
 /// Runs a daemon over `root` until `body` is done, then stops it.
-async fn with_daemon<F, Fut>(root: &Path, body: F)
+async fn with_daemon<F, Fut>(root: &Path, runtime_name: &str, body: F)
 where
     F: FnOnce(Link) -> Fut,
     Fut: std::future::Future<Output = ()>,
@@ -29,7 +29,9 @@ where
         idle_timeout: Duration::from_secs(600),
     };
     let daemon = Daemon::new(config).await.expect("daemon");
-    let runtime = root.join("run");
+    // A new runtime directory per daemon: a Windows named pipe of a daemon that
+    // just stopped may not be reusable at once.
+    let runtime = root.join(runtime_name);
     let server = Server::start_service(&runtime, daemon.clone()).expect("start server");
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let serving = tokio::spawn(async move {
@@ -56,7 +58,7 @@ async fn hosts_saved_through_the_daemon_survive_a_restart() {
     let staging = Connection::alias("Staging", "staging");
 
     let (p, s) = (production.clone(), staging.clone());
-    with_daemon(dir.path(), |link| async move {
+    with_daemon(dir.path(), "run1", |link| async move {
         for connection in [&p, &s] {
             link.request(
                 "hosts.save",
@@ -72,7 +74,7 @@ async fn hosts_saved_through_the_daemon_survive_a_restart() {
     .await;
 
     let expected = production.id.clone();
-    with_daemon(dir.path(), |link| async move {
+    with_daemon(dir.path(), "run2", |link| async move {
         let list = link.request("hosts.list", json!({})).await.expect("list");
         let hosts = list["connections"].as_array().unwrap();
         assert_eq!(
