@@ -99,6 +99,14 @@ the `auth/*` endpoints. Binary fields are base64. Types live in
 | `GET /vaults/{v}/records?since=&limit=` | member | pull by monotonic sequence |
 | `GET /vaults/{v}/records/{r}/history` | member | last 50 replaced envelopes, newest first |
 
+Every response carries `x-easyssh-max-body: <bytes>`, the largest request
+body accepted. A request that announces a larger `Content-Length` gets
+`413` with error code `too_large`; if it announces at most 4 times the limit
+the server first reads and discards the body (frame by frame, nothing is
+kept), so the client finishes sending and reliably sees the 413 instead of a
+connection reset. Bodies announcing more than that are refused at once and
+their sender may see a reset. Older clients ignore the header.
+
 Limits: 2 MiB request body (configurable), 1 MiB ciphertext per record,
 ids 1-128 characters, 50 history versions per record. Auth endpoints are
 rate limited per client address and per username (HTTP 429 with `Retry-After`).
