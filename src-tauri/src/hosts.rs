@@ -4,7 +4,8 @@
 //! With the daemon connected, hosts live there (one source of truth for every
 //! window and process): these commands read and write through `hosts.*`, and
 //! the daemon announces changes with `hosts.changed`. Without a daemon
-//! connection they read and write the host file directly, as before.
+//! connection they read and write the SQLite database directly (the same one
+//! the daemon owns, opened with the same migration), as before.
 
 use crate::daemon::DaemonState;
 use easyssh_core::security::{validate_alias, validate_connection};
@@ -12,10 +13,12 @@ use easyssh_core::{
     scan_default_ssh_config, AppConfig, ConfigStore, Connection, ConnectionTarget,
     ExternalTerminal, Group, OpenSsh, SshInvocation,
 };
+use easyssh_store::{open_app_store, Store};
 use easysshd::link::{Link, LinkError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::State;
 
 /// Hosts discovered in `~/.ssh/config` have no saved record, so their id is
@@ -168,7 +171,7 @@ fn group_for(config: &mut AppConfig, name: Option<&str>) -> Option<String> {
     {
         return Some(group.id.clone());
     }
-    let id = format!("group-{}", chrono::Utc::now().timestamp_millis());
+    let id = uuid::Uuid::new_v4().to_string();
     config.groups.push(Group {
         id: id.clone(),
         name,
@@ -213,13 +216,37 @@ fn apply(
     Ok(())
 }
 
-pub(crate) fn save_config(config: &AppConfig) -> Result<(), String> {
-    let store = ConfigStore::default_path().map_err(|error| error.to_string())?;
-    store.save(config).map_err(|error| error.to_string())
+/// Opens the app database (`easyssh.db` next to the v1 JSON file), migrating
+/// the v1 file on the first start. Same code the daemon runs, so the two agree.
+/// Cheap enough to call per command; SQLite runs in WAL mode with a busy
+/// timeout, so it may be open in the daemon at the same time.
+pub(crate) fn open_store() -> Result<Store, String> {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    let v1 = ConfigStore::default_path().map_err(|error| error.to_string())?;
+    let opened =
+        open_app_store(v1.path()).map_err(|error| format!("cannot open the database: {error}"))?;
+    if let Some(error) = &opened.migration_error {
+        if !WARNED.swap(true, Ordering::Relaxed) {
+            eprintln!("EasySSH: the v1 configuration was not migrated: {error}");
+        }
+    }
+    Ok(opened.store)
 }
 
-/// The daemon cannot be reached right now: use the host file instead.
-fn daemon_down(error: &LinkError) -> bool {
+pub(crate) fn load_config() -> Result<AppConfig, String> {
+    open_store()?
+        .load_app_config()
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn save_config(config: &AppConfig) -> Result<(), String> {
+    open_store()?
+        .save_app_config(config)
+        .map_err(|error| error.to_string())
+}
+
+/// The daemon cannot be reached right now: use the database directly.
+pub(crate) fn daemon_down(error: &LinkError) -> bool {
     matches!(error.code.as_str(), "unavailable" | "disconnected")
 }
 
@@ -247,12 +274,13 @@ async fn working_config(daemon: &DaemonState) -> Result<(AppConfig, Option<Link>
 /// Stores one changed connection (and a group created for it).
 async fn commit(
     link: Option<Link>,
-    config: &AppConfig,
     connection: &Connection,
     new_group: Option<&Group>,
 ) -> Result<(), String> {
     let Some(link) = link else {
-        return save_config(config);
+        return open_store()?
+            .save_host(connection, new_group)
+            .map_err(|error| error.to_string());
     };
     let mut payload = json!({ "connection": connection });
     if let Some(group) = new_group {
@@ -302,7 +330,7 @@ fn upsert(config: &mut AppConfig, input: &HostInput) -> Result<Upsert, String> {
 pub async fn host_save(daemon: State<'_, DaemonState>, input: HostInput) -> Result<String, String> {
     let (mut config, link) = working_config(&daemon).await?;
     let saved = upsert(&mut config, &input)?;
-    commit(link, &config, &saved.connection, saved.new_group.as_ref()).await?;
+    commit(link, &saved.connection, saved.new_group.as_ref()).await?;
     Ok(saved.connection.id)
 }
 
@@ -315,10 +343,10 @@ pub async fn host_delete(daemon: State<'_, DaemonState>, id: String) -> Result<(
             Err(error) => return Err(error.message),
         }
     }
-    let mut config = load_config()?;
-    config.connections.retain(|connection| connection.id != id);
-    config.recent_connection_ids.retain(|recent| *recent != id);
-    save_config(&config)
+    open_store()?
+        .remove_host(&id)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -335,7 +363,7 @@ pub async fn host_set_favorite(
         .ok_or("only saved hosts can be favorites")?;
     connection.favorite = favorite;
     let connection = connection.clone();
-    commit(link, &config, &connection, None).await
+    commit(link, &connection, None).await
 }
 
 fn display_target(target: &ConnectionTarget) -> String {
@@ -378,11 +406,6 @@ fn display_command(target: &ConnectionTarget) -> String {
             command
         }
     }
-}
-
-pub(crate) fn load_config() -> Result<AppConfig, String> {
-    let store = ConfigStore::default_path().map_err(|error| error.to_string())?;
-    store.load().map_err(|error| error.to_string())
 }
 
 fn snapshot(config: &AppConfig, ssh_config_aliases: &[String]) -> Vec<HostView> {

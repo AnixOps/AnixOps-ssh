@@ -1,7 +1,7 @@
 //! App settings and a check of the local OpenSSH setup.
 
-use crate::hosts::{load_config, save_config};
-use easyssh_core::{scan_default_ssh_config, Locale, OpenSsh, Theme};
+use crate::hosts::{load_config, open_store};
+use easyssh_core::{scan_default_ssh_config, Locale, OpenSsh, TerminalPreferences, Theme};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -32,12 +32,24 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     if !(1_000..=200_000).contains(&settings.terminal_scrollback) {
         return Err("scrollback must be between 1,000 and 200,000 lines".to_owned());
     }
-    let mut config = load_config()?;
-    config.theme = settings.theme;
-    config.locale = settings.locale;
-    config.terminal.font_size = settings.terminal_font_size;
-    config.terminal.scrollback_lines = settings.terminal_scrollback;
-    save_config(&config)
+    // Only these settings are written, so a host saved by the daemon in the
+    // meantime is not touched.
+    let store = open_store()?;
+    let mut terminal: TerminalPreferences = store
+        .get_setting_as("terminal")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    terminal.font_size = settings.terminal_font_size;
+    terminal.scrollback_lines = settings.terminal_scrollback;
+    let stored = |error: easyssh_store::StoreError| error.to_string();
+    store
+        .set_setting_as("theme", &settings.theme)
+        .map_err(stored)?;
+    store
+        .set_setting_as("locale", &settings.locale)
+        .map_err(stored)?;
+    store.set_setting_as("terminal", &terminal).map_err(stored)
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]

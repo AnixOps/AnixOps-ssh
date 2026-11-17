@@ -283,6 +283,66 @@ pub struct HostsSaveParams {
 pub struct HostsSaveResult {
     pub id: ::std::string::String,
 }
+///A stored known_hosts entry. The key itself is not sent, only its fingerprint.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct KnownHostEntry {
+    ///RFC 3339 timestamp.
+    pub added_at: ::std::string::String,
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub comment: ::std::option::Option<::std::string::String>,
+    ///`SHA256:...`, as `ssh-keygen -l` prints it.
+    pub fingerprint: ::std::string::String,
+    pub hashed: bool,
+    ///The host pattern as stored: a name, `[host]:port`, a comma list, or a `|1|salt|hash` digest when `hashed`.
+    pub host: ::std::string::String,
+    pub id: ::std::string::String,
+    pub key_type: ::std::string::String,
+    ///`@cert-authority` or `@revoked`.
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub marker: ::std::option::Option<::std::string::String>,
+    pub port: u16,
+}
+///Command `known_hosts.import` payload. Reply: KnownHostsImportResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct KnownHostsImportParams {
+    ///Path of an OpenSSH known_hosts file, read by the daemon. The client picks it (normally `~/.ssh/known_hosts`).
+    pub path: ::std::string::String,
+}
+///`KnownHostsImportResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct KnownHostsImportResult {
+    ///Lines already stored.
+    pub duplicates: u64,
+    pub imported: u64,
+    ///Lines that could not be read.
+    pub skipped: ::std::vec::Vec<KnownHostsImportResultSkippedItem>,
+}
+///`KnownHostsImportResultSkippedItem`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct KnownHostsImportResultSkippedItem {
+    pub line: ::std::num::NonZeroU64,
+    pub reason: ::std::string::String,
+}
+///Command `known_hosts.list` payload. Reply: KnownHostsListResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct KnownHostsListParams {}
+///`KnownHostsListResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct KnownHostsListResult {
+    pub entries: ::std::vec::Vec<KnownHostEntry>,
+}
+///Command `known_hosts.remove` payload. Reply: null. Removing an unknown id is not an error.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct KnownHostsRemoveParams {
+    pub id: ::std::string::String,
+}
 ///`Locale`
 #[derive(
     ::serde::Deserialize,
