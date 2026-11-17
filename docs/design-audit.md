@@ -45,9 +45,19 @@ Before and after files are `docs/design-audit/{before,after}/<name>-{light,dark}
 | First-run card and empty states | `first-run`, `no-ssh` | same | `z-40` literal, fade/slide of 400 ms, buttons at three levels. Now token z-index, one primary, a shortcut list for discovery. |
 | Error states | `no-ssh`, `exited` | same | Red text without icon or next step. Now `Notice` with icon and an action sentence. |
 
-Serial ports and Windows Hello / Touch ID unlock (PR #41) were not on `main` when
-this audit was written. They land through the shared components, and the
-audit is updated when that PR is merged.
+### Added by PR #41 (serial sessions, Windows Hello / Touch ID unlock)
+
+Merged at fd186ed and audited on the same terms. Findings in main's version:
+the new-tab menu and the add-host menu were hand-written popovers (own focus,
+Esc and motion handling: `HostList.tsx` `AddMenu` and the exported `MenuItem`,
+`TabBar.tsx` `NewTabMenu`); the serial form used five raw `<select>` elements
+with a local class (`HostEditor.tsx` `selectClass`) plus a raw `<select>` for
+the engine; port chips were 20 px high; the quick-unlock rows used a local
+`VaultRow` with caption hints; terminal failure text was caption size.
+Fixed: both menus are `ui/menu.tsx` (arrow keys, Esc returns focus, shortcut
+shown for the local terminal), serial and engine fields use `Select`, chips
+are 32 px, the unlock rows are `SettingsRow` with callout hints, and the
+passphrase prompt before enabling quick unlock uses the vault form layout.
 
 ## Button mapping (actions.md, "short mapping document")
 

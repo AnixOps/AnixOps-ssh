@@ -13,15 +13,27 @@ export function previewSession(
   hostId: string | null,
   onEvent: (event: SessionEvent) => void,
 ): SessionHandle {
-  const host = previewSnapshot().hosts.find((entry) => entry.id === hostId)?.name ?? "local";
+  const entry = previewSnapshot().hosts.find((candidate) => candidate.id === hostId);
+  const host = entry?.name ?? "local";
+  const serial = entry?.fields.serial;
   const user = hostId ? "deploy" : "you";
-  const prompt = `${color("1;32", `${user}@${host}`)}:${color("1;34", "~")}$ `;
+  const prompt = serial
+    ? `${host}> `
+    : `${color("1;32", `${user}@${host}`)}:${color("1;34", "~")}$ `;
   let line = "";
   let closed = false;
   const emit = (data: string) => {
     if (!closed) onEvent({ kind: "data", data });
   };
-  const banner = hostId
+  const banner = serial
+    ? [
+        `${serial.port} at ${serial.baud} baud`,
+        "",
+        "Switch#1 uptime is 41 weeks, 2 days, 7 hours, 18 minutes",
+        color("33", "Press RETURN to get started."),
+        "",
+      ]
+    : hostId
     ? [
         "Welcome to Ubuntu 24.04.1 LTS (GNU/Linux 6.8.0-45-generic x86_64)",
         "",

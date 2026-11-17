@@ -1,4 +1,4 @@
-import { ChevronRight, Copy, Download, Pencil, Plus, Search, Server, Star, Trash2 } from "lucide-react";
+import { Cable, ChevronRight, Copy, Download, Pencil, Plus, Search, Server, Star, Trash2 } from "lucide-react";
 import { useMemo, useState, type KeyboardEvent, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
@@ -43,6 +43,7 @@ export function HostList({
   onToggleFavorite,
   onDelete,
   onImport,
+  onNewSerial,
   searchRef,
 }: {
   hosts: Host[];
@@ -54,6 +55,7 @@ export function HostList({
   onToggleFavorite: (host: Host) => void;
   onDelete: (host: Host) => void;
   onImport: () => void;
+  onNewSerial: () => void;
   searchRef: Ref<HTMLInputElement>;
 }) {
   const [query, setQuery] = useState("");
@@ -158,6 +160,7 @@ export function HostList({
           size="icon"
           items={[
             { key: "new", label: t.newHost, icon: <Plus />, shortcut: shortcutHint("new-host"), onSelect: () => onEdit(null) },
+            { key: "new-serial", label: t.newSerialHost, icon: <Cable />, onSelect: onNewSerial },
             { key: "import", label: t.importHosts, icon: <Download />, shortcut: shortcutHint("import"), onSelect: onImport },
           ]}
         />
@@ -337,7 +340,11 @@ export function HostTile({ host, selected = false, large = false }: { host: Host
         selected ? "bg-bg-elevated text-(--accent) shadow-1" : "bg-fill-2 text-label-2",
       )}
     >
-      <Server className={large ? "size-6" : "size-4"} strokeWidth={1.5} />
+      {host.fields.serial ? (
+        <Cable className={large ? "size-6" : "size-4"} strokeWidth={1.5} />
+      ) : (
+        <Server className={large ? "size-6" : "size-4"} strokeWidth={1.5} />
+      )}
       {host.color && (
         <span
           aria-hidden

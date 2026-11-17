@@ -12,6 +12,7 @@ import {
   previewKnownHosts,
   previewRemoveKnownHost,
   previewSaveHost,
+  previewSerialPorts,
   previewSetFavorite,
   previewSnapshot,
 } from "./preview";
@@ -21,6 +22,7 @@ import {
   previewSecretsSet,
   previewSecretsStatus,
   previewVault,
+  type UnlockMethod,
   type VaultStatus,
 } from "./previewVault";
 import type {
@@ -59,6 +61,29 @@ export interface HostFields {
   engine?: EnginePreference | null;
   /** Opt-in: send the shell integration script after login. */
   shellIntegration: boolean;
+  /** Set for a serial port; the SSH fields are then unused. */
+  serial?: SerialFields | null;
+}
+
+export type SerialParity = "none" | "odd" | "even";
+export type SerialFlowControl = "none" | "software" | "hardware";
+
+/** How to open a serial port. Mirrors `SerialFields` in src-tauri/src/hosts.rs. */
+export interface SerialFields {
+  /** The device path: /dev/ttyUSB0, /dev/cu.usbserial-1410, COM3. */
+  port: string;
+  baud: number;
+  dataBits: number;
+  parity: SerialParity;
+  stopBits: number;
+  flowControl: SerialFlowControl;
+}
+
+/** A serial port the operating system lists. */
+export interface SerialPortInfo {
+  path: string;
+  /** What the OS knows about it, such as the USB product. */
+  description: string | null;
 }
 
 /** Which SSH engine runs a host: the built-in one (russh) or the system OpenSSH. */
@@ -478,7 +503,7 @@ export async function unlockForAskpass(id: number, passphrase: string): Promise<
   if (isTauri) await invoke("askpass_unlock", { id, passphrase });
 }
 
-export type { VaultStatus };
+export type { UnlockMethod, VaultStatus };
 
 /** Which secrets a host has saved. The values never come back to the UI. */
 export interface SecretsStatus {
@@ -501,6 +526,28 @@ export async function vaultStatus(): Promise<VaultStatus> {
 
 export async function vaultUnlock(passphrase: string): Promise<VaultStatus> {
   return isTauri ? invoke<VaultStatus>("vault_unlock", { passphrase }) : previewVault.unlock(passphrase);
+}
+
+/** Opens the vault with Windows Hello or Touch ID; the system prompt appears. */
+export async function vaultUnlockWith(method: string): Promise<VaultStatus> {
+  return isTauri ? invoke<VaultStatus>("vault_unlock_with", { method }) : previewVault.unlockWith(method);
+}
+
+/** Turns Windows Hello or Touch ID on; the vault passphrase confirms it. */
+export async function vaultEnableUnlock(method: string, passphrase: string): Promise<VaultStatus> {
+  return isTauri
+    ? invoke<VaultStatus>("vault_enable_unlock", { method, passphrase })
+    : previewVault.enableUnlock(method, passphrase);
+}
+
+export async function vaultDisableUnlock(method: string): Promise<VaultStatus> {
+  return isTauri ? invoke<VaultStatus>("vault_disable_unlock", { method }) : previewVault.disableUnlock(method);
+}
+
+/** The serial ports of this machine. */
+export async function serialPorts(): Promise<SerialPortInfo[]> {
+  if (!isTauri) return previewSerialPorts();
+  return invoke<SerialPortInfo[]>("serial_ports");
 }
 
 export async function vaultLock(): Promise<VaultStatus> {

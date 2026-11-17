@@ -60,6 +60,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("session.resize", "SessionResizeParams", ""),
     ("session.close", "SessionCloseParams", ""),
     ("session.list", "SessionListParams", "SessionListResult"),
+    ("serial.ports", "SerialPortsParams", "SerialPortsResult"),
     (
         "session.attach",
         "SessionAttachParams",
@@ -104,6 +105,17 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("vault.status", "VaultStatusParams", "VaultStatus"),
     ("vault.unlock", "VaultUnlockParams", "VaultStatus"),
     ("vault.lock", "VaultLockParams", "VaultStatus"),
+    ("vault.unlock_with", "VaultUnlockWithParams", "VaultStatus"),
+    (
+        "vault.enable_unlock",
+        "VaultEnableUnlockParams",
+        "VaultStatus",
+    ),
+    (
+        "vault.disable_unlock",
+        "VaultDisableUnlockParams",
+        "VaultStatus",
+    ),
     (
         "vault.set_passphrase",
         "VaultSetPassphraseParams",

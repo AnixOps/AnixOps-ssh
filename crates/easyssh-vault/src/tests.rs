@@ -374,3 +374,216 @@ fn single_values_are_sealed_to_their_slot() {
     );
     assert!(vault.open_value(b"ai/openai", &blob).is_err());
 }
+
+// ---- biometric and OS unlock methods (with fake gates) -------------------
+
+mod unlock_methods {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    /// A gate the test controls.
+    struct FakeGate {
+        available: AtomicBool,
+        approve: AtomicBool,
+        asked: AtomicUsize,
+    }
+
+    impl FakeGate {
+        fn new(approve: bool) -> Arc<Self> {
+            Arc::new(Self {
+                available: AtomicBool::new(true),
+                approve: AtomicBool::new(approve),
+                asked: AtomicUsize::new(0),
+            })
+        }
+        fn asked(&self) -> usize {
+            self.asked.load(Ordering::SeqCst)
+        }
+    }
+
+    impl PresenceGate for FakeGate {
+        fn available(&self) -> bool {
+            self.available.load(Ordering::SeqCst)
+        }
+        fn verify(&self, _reason: &str) -> Result<bool, VaultError> {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            Ok(self.approve.load(Ordering::SeqCst))
+        }
+    }
+
+    fn provider(
+        name: &'static str,
+        gate: &Arc<FakeGate>,
+        keystore: &Arc<MemoryKeyStore>,
+    ) -> Arc<GatedKeyProvider> {
+        Arc::new(GatedKeyProvider::new(
+            name,
+            if name == "first" {
+                "k-first"
+            } else {
+                "k-second"
+            },
+            gate.clone(),
+            keystore.clone(),
+        ))
+    }
+
+    /// A vault with a passphrase, locked, plus a fresh vault over the same
+    /// key chain to unlock.
+    fn locked_vault(keystore: &Arc<MemoryKeyStore>) -> Arc<Vault> {
+        let setup = vault_over(keystore.clone());
+        setup.ensure_unlocked().unwrap();
+        setup.set_passphrase("pw").unwrap();
+        vault_over(keystore.clone())
+    }
+
+    #[test]
+    fn enabling_needs_the_passphrase_and_then_unlocks_without_it() {
+        let keystore = Arc::new(MemoryKeyStore::new());
+        let vault = locked_vault(&keystore);
+        let gate = FakeGate::new(true);
+        vault.add_unlock_provider(provider("first", &gate, &keystore));
+        assert_eq!(
+            vault.unlock_methods(),
+            vec![UnlockMethod {
+                name: "first",
+                available: true,
+                enabled: false
+            }]
+        );
+        // Not enabled yet: the passphrase is the only way.
+        assert!(matches!(vault.ensure_unlocked(), Err(VaultError::Locked)));
+        assert_eq!(gate.asked(), 0);
+
+        assert!(matches!(
+            vault.enable_unlock("first", "wrong"),
+            Err(VaultError::WrongPassphrase)
+        ));
+        vault.enable_unlock("first", "pw").unwrap();
+        assert!(vault.status().unlock_methods[0].enabled);
+        assert!(vault.is_unlocked());
+
+        vault.lock();
+        vault.ensure_unlocked().unwrap();
+        assert!(vault.is_unlocked());
+        assert_eq!(gate.asked(), 2); // once to enable, once to unlock
+    }
+
+    #[test]
+    fn a_declined_prompt_falls_back_to_the_passphrase_and_is_not_repeated() {
+        let keystore = Arc::new(MemoryKeyStore::new());
+        let vault = locked_vault(&keystore);
+        let gate = FakeGate::new(true);
+        vault.add_unlock_provider(provider("first", &gate, &keystore));
+        vault.enable_unlock("first", "pw").unwrap();
+        vault.lock();
+
+        gate.approve.store(false, Ordering::SeqCst);
+        let before = gate.asked();
+        assert!(matches!(vault.ensure_unlocked(), Err(VaultError::Locked)));
+        // Background uses within the cooldown do not raise the prompt again.
+        assert!(matches!(vault.ensure_unlocked(), Err(VaultError::Locked)));
+        assert_eq!(gate.asked(), before + 1);
+
+        // The person presses the button: asked again, now approved.
+        gate.approve.store(true, Ordering::SeqCst);
+        vault.unlock_with("first").unwrap();
+        assert!(vault.is_unlocked());
+
+        // And the passphrase always works.
+        vault.lock();
+        gate.approve.store(false, Ordering::SeqCst);
+        assert!(matches!(
+            vault.unlock_with("first"),
+            Err(VaultError::UnlockDeclined)
+        ));
+        vault.unlock("pw").unwrap();
+        assert!(vault.is_unlocked());
+    }
+
+    #[test]
+    fn providers_are_tried_in_order_and_unavailable_ones_are_skipped() {
+        let keystore = Arc::new(MemoryKeyStore::new());
+        let vault = locked_vault(&keystore);
+        let first = FakeGate::new(true);
+        let second = FakeGate::new(true);
+        vault.add_unlock_provider(provider("first", &first, &keystore));
+        vault.add_unlock_provider(provider("second", &second, &keystore));
+        vault.enable_unlock("first", "pw").unwrap();
+        vault.enable_unlock("second", "pw").unwrap();
+        vault.lock();
+
+        first.available.store(false, Ordering::SeqCst);
+        let (a, b) = (first.asked(), second.asked());
+        vault.ensure_unlocked().unwrap();
+        assert_eq!((first.asked(), second.asked()), (a, b + 1));
+        assert!(
+            !vault.status().unlock_methods[0].available,
+            "an unavailable method is reported as such"
+        );
+        assert!(matches!(
+            vault.enable_unlock("first", "pw"),
+            Err(VaultError::Input(_))
+        ));
+
+        // The first one declines: the second still gets its turn.
+        vault.lock();
+        first.available.store(true, Ordering::SeqCst);
+        first.approve.store(false, Ordering::SeqCst);
+        vault.unlock_with("second").unwrap();
+        vault.lock();
+        vault.add_unlock_provider(provider("first", &first, &keystore));
+        vault.ensure_unlocked().unwrap();
+    }
+
+    #[test]
+    fn a_refused_presence_check_does_not_turn_the_method_on() {
+        let keystore = Arc::new(MemoryKeyStore::new());
+        let vault = locked_vault(&keystore);
+        let gate = FakeGate::new(false);
+        vault.add_unlock_provider(provider("first", &gate, &keystore));
+        assert!(matches!(
+            vault.enable_unlock("first", "pw"),
+            Err(VaultError::UnlockDeclined)
+        ));
+        assert!(!vault.status().unlock_methods[0].enabled);
+        assert!(matches!(
+            vault.enable_unlock("nope", "pw"),
+            Err(VaultError::Input(_))
+        ));
+    }
+
+    #[test]
+    fn disabling_and_removing_the_passphrase_delete_the_copy() {
+        let keystore = Arc::new(MemoryKeyStore::new());
+        let vault = locked_vault(&keystore);
+        let gate = FakeGate::new(true);
+        vault.add_unlock_provider(provider("first", &gate, &keystore));
+        vault.enable_unlock("first", "pw").unwrap();
+        vault.disable_unlock("first").unwrap();
+        assert!(!vault.status().unlock_methods[0].enabled);
+        vault.lock();
+        assert!(matches!(vault.ensure_unlocked(), Err(VaultError::Locked)));
+
+        vault.enable_unlock("first", "pw").unwrap();
+        vault.remove_passphrase("pw").unwrap();
+        assert!(!vault.status().unlock_methods[0].enabled);
+        assert!(keystore
+            .get(easyssh_crypto::keystore::SERVICE, "k-first")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn a_vault_without_a_passphrase_has_nothing_to_enable() {
+        let keystore = Arc::new(MemoryKeyStore::new());
+        let vault = vault_over(keystore.clone());
+        let gate = FakeGate::new(true);
+        vault.add_unlock_provider(provider("first", &gate, &keystore));
+        assert!(matches!(
+            vault.enable_unlock("first", "pw"),
+            Err(VaultError::Passphrase(_))
+        ));
+        assert_eq!(gate.asked(), 0);
+    }
+}

@@ -26,6 +26,7 @@ import {
   type SessionHandle,
   type SshEngine,
 } from "@/lib/backend";
+import { isSerialPermissionError } from "@/lib/serialUi";
 import { requestVaultUnlock } from "@/lib/vaultUi";
 import { CompletionController, type ViewState } from "@/lib/completion/controller";
 import { completionPrefs, commandHistory, onCompletionPrefs } from "@/lib/completion/prefs";
@@ -582,8 +583,8 @@ export function TerminalView({
               <p className="text-callout font-medium text-label-1">
                 {status.error ? t.sessionFailed : t.sessionEnded}
               </p>
-              <p className="selectable truncate text-callout text-label-2">
-                {status.error ?? (status.code === null ? "" : `${t.exitCode} ${status.code}`)}
+              <p className="selectable line-clamp-4 break-words text-callout text-label-2">
+                {status.error ? (isSerialPermissionError(status.error) ? t.serialPermissionDenied : status.error) : status.code === null ? "" : `${t.exitCode} ${status.code}`}
               </p>
             </div>
             <Button variant="primary" size="sm" onClick={() => startRef.current()}>

@@ -11,7 +11,8 @@ use crate::daemon::DaemonState;
 use easyssh_core::security::{validate_alias, validate_connection};
 use easyssh_core::{
     scan_default_ssh_config, AppConfig, ConfigStore, Connection, ConnectionTarget,
-    EnginePreference, ExternalTerminal, Group, OpenSsh, SshInvocation,
+    EnginePreference, ExternalTerminal, Group, OpenSsh, SerialFlowControl, SerialParity,
+    SerialSettings, SshInvocation,
 };
 use easyssh_store::{open_app_store_with, Store};
 use easysshd::link::{Link, LinkError};
@@ -50,6 +51,44 @@ pub struct HostView {
     pub fields: HostFields,
 }
 
+/// The settings of a serial host as the editor shows them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SerialFields {
+    pub port: String,
+    pub baud: u32,
+    pub data_bits: u8,
+    pub parity: SerialParity,
+    pub stop_bits: u8,
+    pub flow_control: SerialFlowControl,
+}
+
+impl From<&SerialSettings> for SerialFields {
+    fn from(settings: &SerialSettings) -> Self {
+        Self {
+            port: settings.port.clone(),
+            baud: settings.baud,
+            data_bits: settings.data_bits,
+            parity: settings.parity,
+            stop_bits: settings.stop_bits,
+            flow_control: settings.flow_control,
+        }
+    }
+}
+
+impl SerialFields {
+    fn settings(&self) -> SerialSettings {
+        SerialSettings {
+            port: self.port.trim().to_owned(),
+            baud: self.baud,
+            data_bits: self.data_bits,
+            parity: self.parity,
+            stop_bits: self.stop_bits,
+            flow_control: self.flow_control,
+        }
+    }
+}
+
 /// Connection settings as the host editor shows and returns them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -67,6 +106,9 @@ pub struct HostFields {
     /// Opt-in shell integration for terminals on this host.
     #[serde(default)]
     pub shell_integration: bool,
+    /// Set for a serial port; the SSH fields are then unused.
+    #[serde(default)]
+    pub serial: Option<SerialFields>,
 }
 
 #[derive(Debug, Serialize)]
@@ -144,6 +186,7 @@ fn fields_of(connection: &Connection) -> HostFields {
             fields.username = username.clone();
             fields.port = *port;
         }
+        ConnectionTarget::Serial(settings) => fields.serial = Some(settings.into()),
     }
     fields
 }
@@ -197,9 +240,10 @@ fn apply(
 ) -> Result<(), String> {
     let fields = &input.fields;
     connection.name = input.name.trim().to_owned();
-    connection.target = match trimmed(fields.alias.as_deref()) {
-        Some(alias) => ConnectionTarget::Alias { alias },
-        None => ConnectionTarget::Endpoint {
+    connection.target = match (&fields.serial, trimmed(fields.alias.as_deref())) {
+        (Some(serial), _) => ConnectionTarget::Serial(serial.settings()),
+        (None, Some(alias)) => ConnectionTarget::Alias { alias },
+        (None, None) => ConnectionTarget::Endpoint {
             hostname: fields.hostname.trim().to_owned(),
             username: trimmed(fields.username.as_deref()),
             port: fields.port,
@@ -390,7 +434,23 @@ fn display_target(target: &ConnectionTarget) -> String {
                 format!("{user}{hostname}:{port}")
             }
         }
+        ConnectionTarget::Serial(serial) => {
+            format!("{} · {}", serial.port, serial_framing(serial))
+        }
     }
+}
+
+/// `115200 8N1`, the usual shorthand for a serial line.
+fn serial_framing(serial: &SerialSettings) -> String {
+    let parity = match serial.parity {
+        SerialParity::None => 'N',
+        SerialParity::Odd => 'O',
+        SerialParity::Even => 'E',
+    };
+    format!(
+        "{} {}{}{}",
+        serial.baud, serial.data_bits, parity, serial.stop_bits
+    )
 }
 
 fn display_command(target: &ConnectionTarget) -> String {
@@ -411,6 +471,7 @@ fn display_command(target: &ConnectionTarget) -> String {
             command.push_str(hostname);
             command
         }
+        ConnectionTarget::Serial(serial) => format!("screen {} {}", serial.port, serial.baud),
     }
 }
 
@@ -420,7 +481,7 @@ fn snapshot(config: &AppConfig, ssh_config_aliases: &[String]) -> Vec<HostView> 
         .iter()
         .filter_map(|connection| match &connection.target {
             ConnectionTarget::Alias { alias } => Some(alias.as_str()),
-            ConnectionTarget::Endpoint { .. } => None,
+            ConnectionTarget::Endpoint { .. } | ConnectionTarget::Serial(_) => None,
         })
         .collect();
     let mut hosts: Vec<HostView> = config.connections.iter().map(HostView::saved).collect();
@@ -586,5 +647,60 @@ mod tests {
             ..HostFields::default()
         };
         assert!(apply(&mut connection, &input("bad", fields), None).is_err());
+    }
+
+    fn serial_fields(port: &str, baud: u32) -> HostFields {
+        HostFields {
+            serial: Some(SerialFields {
+                port: port.to_owned(),
+                baud,
+                data_bits: 8,
+                parity: SerialParity::None,
+                stop_bits: 1,
+                flow_control: SerialFlowControl::None,
+            }),
+            ..HostFields::default()
+        }
+    }
+
+    #[test]
+    fn a_serial_host_goes_through_the_editor_and_back() {
+        let mut connection = Connection::alias("x", "x");
+        let input = input("Console", serial_fields(" /dev/ttyUSB0 ", 9600));
+        apply(&mut connection, &input, None).unwrap();
+        assert_eq!(
+            connection.target,
+            ConnectionTarget::Serial(SerialSettings {
+                baud: 9600,
+                ..SerialSettings::new("/dev/ttyUSB0")
+            })
+        );
+        let fields = fields_of(&connection);
+        assert_eq!(fields.serial.unwrap().port, "/dev/ttyUSB0");
+        assert_eq!(
+            display_target(&connection.target),
+            "/dev/ttyUSB0 · 9600 8N1"
+        );
+        assert_eq!(
+            display_command(&connection.target),
+            "screen /dev/ttyUSB0 9600"
+        );
+    }
+
+    #[test]
+    fn a_serial_host_with_unusable_settings_is_rejected() {
+        let mut connection = Connection::alias("x", "x");
+        assert!(apply(
+            &mut connection,
+            &input("Bad", serial_fields("COM3", 5)),
+            None
+        )
+        .is_err());
+        assert!(apply(
+            &mut connection,
+            &input("Bad", serial_fields("  ", 9600)),
+            None
+        )
+        .is_err());
     }
 }

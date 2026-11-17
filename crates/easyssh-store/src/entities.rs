@@ -9,7 +9,8 @@ use crate::meta::{fmt_ts, parse_ts, Meta};
 use crate::store::{int, json, opt_int, opt_text, text, Entity, Field, Fields, Record, Store};
 use chrono::Utc;
 use easyssh_core::{
-    CommandSnippet, Connection, ConnectionTarget, Group, TerminalPreferences, Tunnel, TunnelKind,
+    CommandSnippet, Connection, ConnectionTarget, Group, SerialSettings, TerminalPreferences,
+    Tunnel, TunnelKind,
 };
 use rusqlite::types::Value;
 use rusqlite::Row;
@@ -123,16 +124,23 @@ impl Entity for Host {
     }
 
     fn from_row(store: &Store, row: &Row<'_>, meta: &Meta) -> Result<Self> {
-        let target = match row.get::<_, String>("target_kind")?.as_str() {
-            "alias" => ConnectionTarget::Alias {
-                alias: row.get::<_, Option<String>>("alias")?.unwrap_or_default(),
-            },
-            _ => ConnectionTarget::Endpoint {
-                hostname: row
-                    .get::<_, Option<String>>("hostname")?
-                    .unwrap_or_default(),
-                username: row.get("username")?,
-                port: row.get::<_, Option<u16>>("port")?.unwrap_or(22),
+        let serial = row
+            .get::<_, Option<String>>("serial")?
+            .map(|json| serde_json::from_str::<SerialSettings>(&json))
+            .transpose()?;
+        let target = match serial {
+            Some(settings) => ConnectionTarget::Serial(settings),
+            None => match row.get::<_, String>("target_kind")?.as_str() {
+                "alias" => ConnectionTarget::Alias {
+                    alias: row.get::<_, Option<String>>("alias")?.unwrap_or_default(),
+                },
+                _ => ConnectionTarget::Endpoint {
+                    hostname: row
+                        .get::<_, Option<String>>("hostname")?
+                        .unwrap_or_default(),
+                    username: row.get("username")?,
+                    port: row.get::<_, Option<u16>>("port")?.unwrap_or(22),
+                },
             },
         };
         let notes_secret = row.get::<_, i64>("notes_secret")? != 0;
@@ -241,6 +249,7 @@ impl Entity for Host {
                 None => Value::Null,
             })
         };
+        let mut serial = Value::Null;
         let (kind, alias, hostname, username, port) = match &c.target {
             ConnectionTarget::Alias { alias } => (
                 "alias",
@@ -260,6 +269,18 @@ impl Entity for Host {
                 opt_text(username.as_deref()),
                 int(*port),
             ),
+            // Stored as an endpoint whose hostname is the port path; the
+            // `serial` column says what it really is.
+            ConnectionTarget::Serial(settings) => {
+                serial = json(settings)?;
+                (
+                    "endpoint",
+                    Value::Null,
+                    opt_text(Some(&settings.port)),
+                    Value::Null,
+                    Value::Null,
+                )
+            }
         };
         let secret_notes = self.notes_secret && !c.notes.is_empty();
         Ok(vec![
@@ -270,6 +291,7 @@ impl Entity for Host {
             ("hostname", hostname),
             ("username", username),
             ("port", port),
+            ("serial", serial),
             ("group_id", opt_text(c.group_id.as_deref())),
             ("favorite", int(c.favorite)),
             ("color", opt_text(c.color.as_deref())),

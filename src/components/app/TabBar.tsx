@@ -1,6 +1,7 @@
-import { Columns2, FolderOpen, LoaderCircle, Plus, Radio, RadioTower, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
+import { Cable, Columns2, FolderOpen, LoaderCircle, Plus, Radio, RadioTower, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
 import type { KeyboardEvent } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { Menu, type MenuEntry } from "@/components/ui/menu";
 import type { SessionStatus } from "@/components/app/TerminalView";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -9,7 +10,7 @@ import { t } from "@/lib/i18n";
 import { appear } from "@/lib/motion";
 import type { Axis, PaneState } from "@/lib/panes";
 import { shortcutHint } from "@/lib/shortcutTable";
-import { hostColor } from "@/lib/backend";
+import { hostColor, type Host } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
 export interface Tab {
@@ -36,6 +37,9 @@ export function TabBar({
   onSelect,
   onClose,
   onNew,
+  serialHosts,
+  onOpenHost,
+  onNewSerial,
   onToggleFiles,
   onSplit,
 }: {
@@ -44,6 +48,10 @@ export function TabBar({
   onSelect: (key: string) => void;
   onClose: (key: string) => void;
   onNew: () => void;
+  /** Saved serial ports, offered in the new-tab menu. */
+  serialHosts: Host[];
+  onOpenHost: (host: Host) => void;
+  onNewSerial: () => void;
   onToggleFiles: () => void;
   onSplit: (axis: Axis) => void;
 }) {
@@ -117,11 +125,7 @@ export function TabBar({
         })}
         </AnimatePresence>
       </div>
-      <Tooltip label={`${t.newTab} (${shortcutHint("new-local")})`}>
-        <Button variant="quiet" size="icon" aria-label={t.newTab} onClick={onNew}>
-          <Plus />
-        </Button>
-      </Tooltip>
+      <NewTabMenu serialHosts={serialHosts} onNew={onNew} onOpenHost={onOpenHost} onNewSerial={onNewSerial} />
       {activeTab && (
         <div className="ml-auto flex items-center gap-0.5">
           <Tooltip label={`${t.splitRight} (${shortcutHint("split-right")})`}>
@@ -175,6 +179,28 @@ export function TabBar({
       )}
     </div>
   );
+}
+
+/** The plus button: a local terminal, a saved serial port or a new one. */
+function NewTabMenu({
+  serialHosts,
+  onNew,
+  onOpenHost,
+  onNewSerial,
+}: {
+  serialHosts: Host[];
+  onNew: () => void;
+  onOpenHost: (host: Host) => void;
+  onNewSerial: () => void;
+}) {
+  const items: MenuEntry[] = [
+    { key: "local", label: t.newTab, icon: <SquareTerminal />, shortcut: shortcutHint("new-local"), onSelect: onNew },
+    ...(serialHosts.length > 0 ? (["separator"] as MenuEntry[]) : []),
+    ...serialHosts.map((host): MenuEntry => ({ key: host.id, label: host.name, icon: <Cable />, onSelect: () => onOpenHost(host) })),
+    "separator",
+    { key: "new-serial", label: t.newSerialHost, icon: <Plus />, onSelect: onNewSerial },
+  ];
+  return <Menu label={t.newTabMenu} icon={<Plus />} size="icon" align="start" items={items} />;
 }
 
 /** Which SSH engine runs the tab, with the reason on hover. */

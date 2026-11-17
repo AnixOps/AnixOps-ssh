@@ -17,6 +17,7 @@ pub mod log;
 mod platform;
 pub mod recorder;
 pub mod runtime;
+pub mod serial;
 mod server;
 pub mod service;
 pub mod session;

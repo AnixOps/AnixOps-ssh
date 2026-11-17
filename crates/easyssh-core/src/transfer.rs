@@ -1,6 +1,6 @@
 use crate::domain::{Connection, ConnectionTarget};
 use crate::openssh::{OpenSsh, OpenSshError};
-use crate::security::validate_path;
+use crate::security::{validate_path, ValidationError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -82,6 +82,9 @@ impl SftpListingInvocation {
         path: &str,
     ) -> Result<Self, OpenSshError> {
         validate_sftp_path(path)?;
+        if connection.is_serial() {
+            return Err(ValidationError::NotSsh.into());
+        }
         let mut args = vec!["-b".into(), "-".into()];
         if let ConnectionTarget::Endpoint { port, .. } = &connection.target {
             args.extend(["-P".into(), port.to_string()]);
@@ -171,6 +174,7 @@ fn remote_spec(connection: &Connection, path: &str) -> Result<String, OpenSshErr
             Some(username) => format!("{username}@{hostname}"),
             None => hostname.clone(),
         },
+        ConnectionTarget::Serial(_) => return Err(ValidationError::NotSsh.into()),
     };
     let host = if host.contains('@') {
         let (user, hostname) = host.split_once('@').expect("validated user/host");
@@ -197,6 +201,8 @@ fn sftp_target(connection: &Connection) -> String {
             .filter(|value| !value.is_empty())
             .map(|username| format!("{username}@{hostname}"))
             .unwrap_or_else(|| hostname.clone()),
+        // Callers refuse serial hosts before building a target.
+        ConnectionTarget::Serial(serial) => serial.port.clone(),
     }
 }
 

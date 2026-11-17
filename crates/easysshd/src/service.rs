@@ -11,7 +11,9 @@ use crate::syncsvc::{SyncFailure, SyncOptions, SyncService};
 use crate::terminal::{SpawnOptions, TermSession, DEFAULT_SCROLLBACK};
 use base64::Engine as _;
 use easyssh_core::security::{validate_alias, validate_connection};
-use easyssh_core::{ConfigStore, Connection, Group, OpenSsh, SshInvocation};
+use easyssh_core::{
+    ConfigStore, Connection, ConnectionTarget, Group, OpenSsh, SerialSettings, SshInvocation,
+};
 use easyssh_proto as proto;
 use easyssh_sessionlog::{LogSettings, LogStore, KEY_INFO};
 use easyssh_ssh::Error as SshError;
@@ -97,7 +99,9 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 type Clients = Arc<Mutex<HashMap<u64, Outbox>>>;
 
 fn os_vault() -> Vault {
-    Vault::os()
+    let vault = Vault::os();
+    easyssh_unlock::attach_os_providers(&vault);
+    vault
 }
 
 /// Locks the vault when it has been idle for the auto-lock time and tells
@@ -361,6 +365,11 @@ impl Daemon {
             "auto_lock_minutes": status.auto_lock_minutes,
             "keychain_available": status.keychain_available,
             "keychain_error": status.keychain_error,
+            "unlock_methods": status
+                .unlock_methods
+                .iter()
+                .map(|m| json!({"name": m.name, "available": m.available, "enabled": m.enabled}))
+                .collect::<Vec<_>>(),
         })
     }
 
@@ -681,6 +690,19 @@ impl Daemon {
                 }
                 ok(Value::Null)
             }
+            "serial.ports" => {
+                let _: proto::SerialPortsParams = parse(payload)?;
+                let ports = tokio::task::spawn_blocking(crate::serial::list_ports)
+                    .await
+                    .map_err(|e| fail("internal", e.to_string()))?
+                    .map_err(|e| fail("io_error", e))?;
+                ok(json!({
+                    "ports": ports
+                        .into_iter()
+                        .map(|port| json!({"path": port.path, "description": port.description}))
+                        .collect::<Vec<_>>()
+                }))
+            }
             "session.list" => {
                 let mut sessions: Vec<Value> =
                     lock(&self.sessions).values().map(|s| s.info()).collect();
@@ -765,6 +787,37 @@ impl Daemon {
                     .map_err(vault_failure)?;
                 self.broadcast("vault.changed", json!({"unlocked": true}));
                 self.sync.restore();
+                ok(self.vault_status())
+            }
+            "vault.unlock_with" => {
+                let p: proto::VaultUnlockWithParams = parse(payload)?;
+                let vault = self.vault.clone();
+                tokio::task::spawn_blocking(move || vault.unlock_with(&p.method))
+                    .await
+                    .map_err(|e| fail("internal", e.to_string()))?
+                    .map_err(vault_failure)?;
+                self.broadcast("vault.changed", json!({"unlocked": true}));
+                self.sync.restore();
+                ok(self.vault_status())
+            }
+            "vault.enable_unlock" => {
+                let p: proto::VaultEnableUnlockParams = parse(payload)?;
+                let vault = self.vault.clone();
+                let passphrase = zeroize::Zeroizing::new(p.passphrase);
+                tokio::task::spawn_blocking(move || vault.enable_unlock(&p.method, &passphrase))
+                    .await
+                    .map_err(|e| fail("internal", e.to_string()))?
+                    .map_err(vault_failure)?;
+                self.broadcast("vault.changed", json!({"unlocked": true}));
+                ok(self.vault_status())
+            }
+            "vault.disable_unlock" => {
+                let p: proto::VaultDisableUnlockParams = parse(payload)?;
+                let vault = self.vault.clone();
+                tokio::task::spawn_blocking(move || vault.disable_unlock(&p.method))
+                    .await
+                    .map_err(|e| fail("internal", e.to_string()))?
+                    .map_err(vault_failure)?;
                 ok(self.vault_status())
             }
             "vault.lock" => {
@@ -1247,6 +1300,14 @@ impl Daemon {
             }
             None => None,
         };
+        if let Some(host_id) = p.host_id.as_deref().filter(|id| !is_ssh_config_id(id)) {
+            let connection = self.resolve_host(host_id)?;
+            if let ConnectionTarget::Serial(settings) = &connection.target {
+                let session = self.spawn_serial(&p, &connection, settings.clone()).await?;
+                self.publish(conn, outbox, req_id, session, None).await;
+                return Ok(Outcome::Replied);
+            }
+        }
         let mut chosen = None;
         if let Some(host_id) = &p.host_id {
             let (_, resolution) = self.resolution(host_id).await?;
@@ -1269,6 +1330,49 @@ impl Daemon {
         let session = self.spawn_pty(&p, agent_sock).await?;
         self.publish(conn, outbox, req_id, session, engine).await;
         Ok(Outcome::Replied)
+    }
+
+    /// A session on a serial port. The device is opened first, so a missing
+    /// port or a permission problem fails the `session.open` itself, with
+    /// advice (see `serial::open_error`).
+    async fn spawn_serial(
+        &self,
+        p: &proto::SessionOpenParams,
+        connection: &Connection,
+        settings: SerialSettings,
+    ) -> Result<Arc<TermSession>, Failure> {
+        let recorder = self
+            .start_recorder(p.host_id.as_deref(), Some(connection))
+            .await?;
+        let host_id = p.host_id.clone();
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let (cols, rows) = (p.cols, p.rows);
+        let scrollback = self.cfg.scrollback_bytes;
+        let shell_integration = connection.shell_integration;
+        let on_exit = self.exit_hook();
+        self.log.info(&format!(
+            "opening serial port {} at {} baud",
+            settings.port, settings.baud
+        ));
+        tokio::task::spawn_blocking(move || {
+            let port = crate::serial::open(&settings).map_err(|e| fail(e.code, e.message))?;
+            TermSession::spawn_serial(
+                id,
+                host_id,
+                port,
+                SpawnOptions {
+                    cols,
+                    rows,
+                    scrollback,
+                    shell_integration,
+                    recorder,
+                },
+                on_exit,
+            )
+            .map_err(|e| fail("serial_open_failed", e))
+        })
+        .await
+        .map_err(|e| fail("internal", e.to_string()))?
     }
 
     fn exit_hook(&self) -> crate::terminal::ExitHook {

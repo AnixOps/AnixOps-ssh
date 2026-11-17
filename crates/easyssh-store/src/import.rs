@@ -128,7 +128,7 @@ fn key_of(target: &ConnectionTarget) -> Option<Key> {
             username,
             port,
         } => Some((hostname.to_ascii_lowercase(), *port, username.clone())),
-        ConnectionTarget::Alias { .. } => None,
+        ConnectionTarget::Alias { .. } | ConnectionTarget::Serial(_) => None,
     }
 }
 

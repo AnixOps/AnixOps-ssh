@@ -36,6 +36,7 @@ import {
 } from "@/lib/backend";
 import { setPanes, toggleGlobalBroadcast, toggleTabBroadcast, useBroadcast } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
+import { serialHosts } from "@/lib/serialUi";
 import { loadLayout, planRestore, saveLayout, setWindowLabel } from "@/lib/layoutStore";
 import {
   closeInState,
@@ -100,6 +101,8 @@ export function App() {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   // undefined: closed; null: a new host.
   const [editing, setEditing] = useState<Host | null | undefined>(undefined);
+  /** A new host being created starts as a serial port. */
+  const [newSerial, setNewSerial] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -164,6 +167,12 @@ export function App() {
   );
 
   const openLocal = useCallback(() => addTab(null, t.localTerminal, null), [addTab]);
+
+  const startSerialHost = useCallback(() => {
+    setNav("hosts");
+    setNewSerial(true);
+    setEditing(null);
+  }, []);
 
   // Sessions that outlived a window reload come back with the layout they had,
   // once. Sessions the saved layout does not know come back as tabs of their own.
@@ -377,10 +386,14 @@ export function App() {
             groups={snapshot.groups}
             selectedId={activeTab?.hostId ?? null}
             onOpen={openHost}
-            onEdit={setEditing}
+            onEdit={(host) => {
+              setNewSerial(false);
+              setEditing(host);
+            }}
             onToggleFavorite={toggleFavorite}
             onDelete={removeHost}
             onImport={() => setImporting(true)}
+            onNewSerial={startSerialHost}
             searchRef={searchRef}
           />
         ) : nav === "snippets" ? (
@@ -401,6 +414,9 @@ export function App() {
               onSelect={setActiveKey}
               onClose={closeTab}
               onNew={openLocal}
+              serialHosts={serialHosts(snapshot.hosts)}
+              onOpenHost={openHost}
+              onNewSerial={startSerialHost}
               onToggleFiles={toggleFiles}
               onSplit={splitActive}
             />
@@ -448,6 +464,7 @@ export function App() {
         <HostEditor
           host={editing}
           groups={snapshot.groups}
+          serial={newSerial}
           onCancel={() => setEditing(undefined)}
           onDone={() => {
             setEditing(undefined);
@@ -470,7 +487,10 @@ export function App() {
           onClose={() => setPaletteOpen(false)}
           onOpenHost={openHost}
           onOpenLocal={openLocal}
-          onNewHost={() => setEditing(null)}
+          onNewHost={() => {
+            setNewSerial(false);
+            setEditing(null);
+          }}
           onImport={() => setImporting(true)}
           onToggleFiles={toggleFiles}
           onPaneAction={paneAction}

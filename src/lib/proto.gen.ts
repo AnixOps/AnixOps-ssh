@@ -21,6 +21,21 @@ export type ConnectionTarget =
       hostname: string;
       username: string | null;
       port: number;
+    }
+  | {
+      kind: "serial";
+      /**
+       * Device path: /dev/ttyUSB0, /dev/cu.usbserial-1410, COM3.
+       */
+      port: string;
+      baud: number;
+      data_bits: number;
+      parity: "none" | "odd" | "even";
+      stop_bits: number;
+      /**
+       * software = XON/XOFF, hardware = RTS/CTS.
+       */
+      flow_control: "none" | "software" | "hardware";
     };
 /**
  * Rust: tunnel::TunnelKind (-L, -R, -D).
@@ -805,6 +820,36 @@ export interface SessionListResult {
   sessions: SessionInfo[];
 }
 /**
+ * A serial port the OS lists.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SerialPortInfo".
+ */
+export interface SerialPortInfo {
+  /**
+   * Pass it as `port` of a serial host.
+   */
+  path: string;
+  /**
+   * What the OS knows: the USB product and vendor, or the kind of port.
+   */
+  description: string | null;
+}
+/**
+ * Command `serial.ports` payload: list the serial ports of this machine. Reply: SerialPortsResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SerialPortsParams".
+ */
+export interface SerialPortsParams {}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SerialPortsResult".
+ */
+export interface SerialPortsResult {
+  ports: SerialPortInfo[];
+}
+/**
  * Command `session.attach` payload. Subscribes this connection to the session's output and exit events: the reply comes first, then the buffered output from `from_seq` as `session.output` events, then (if the session already ended) `session.exit`, then live events. Attaching again replaces the earlier subscription of the same connection. Reply: SessionAttachResult.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -978,6 +1023,30 @@ export interface VaultStatus {
   auto_lock_minutes: number;
   keychain_available: boolean;
   keychain_error: string | null;
+  /**
+   * Windows Hello, Touch ID: the methods this device can offer to open a passphrase vault. Absent from older daemons.
+   */
+  unlock_methods?: UnlockMethod[];
+}
+/**
+ * A biometric or OS unlock method of the vault.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "UnlockMethod".
+ */
+export interface UnlockMethod {
+  /**
+   * `windows_hello` or `touch_id`.
+   */
+  name: string;
+  /**
+   * The OS offers it on this device right now; the UI shows only available methods.
+   */
+  available: boolean;
+  /**
+   * The user turned it on.
+   */
+  enabled: boolean;
 }
 /**
  * Command `vault.status` payload. Reply: VaultStatus.
@@ -994,6 +1063,34 @@ export interface VaultStatusParams {}
  */
 export interface VaultUnlockParams {
   passphrase: string;
+}
+/**
+ * Command `vault.unlock_with` payload: open the vault with an enabled unlock method (the system prompt appears). Reply: VaultStatus. Fails with `unlock_cancelled` when the user declines; the passphrase still works.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultUnlockWithParams".
+ */
+export interface VaultUnlockWithParams {
+  method: string;
+}
+/**
+ * Command `vault.enable_unlock` payload: turn an unlock method on. The passphrase is needed once; the system asks the user to confirm. Reply: VaultStatus.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultEnableUnlockParams".
+ */
+export interface VaultEnableUnlockParams {
+  method: string;
+  passphrase: string;
+}
+/**
+ * Command `vault.disable_unlock` payload: turn an unlock method off and delete its stored key copy. Reply: VaultStatus.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultDisableUnlockParams".
+ */
+export interface VaultDisableUnlockParams {
+  method: string;
 }
 /**
  * Command `vault.lock` payload ("lock now"). Reply: VaultStatus.
