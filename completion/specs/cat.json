@@ -1,0 +1,57 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "cat",
+  "description": "Print files to standard output",
+  "options": [
+    {
+      "name": [
+        "-n",
+        "--number"
+      ],
+      "description": "Number all output lines"
+    },
+    {
+      "name": [
+        "-b",
+        "--number-nonblank"
+      ],
+      "description": "Number non-empty lines only"
+    },
+    {
+      "name": [
+        "-s",
+        "--squeeze-blank"
+      ],
+      "description": "Collapse repeated empty lines"
+    },
+    {
+      "name": [
+        "-A",
+        "--show-all"
+      ],
+      "description": "Show tabs, line ends and control characters"
+    },
+    {
+      "name": [
+        "-E",
+        "--show-ends"
+      ],
+      "description": "Show $ at the end of each line"
+    },
+    {
+      "name": [
+        "-T",
+        "--show-tabs"
+      ],
+      "description": "Show tabs as ^I"
+    }
+  ],
+  "args": [
+    {
+      "name": "file",
+      "optional": true,
+      "variadic": true,
+      "template": "filepaths"
+    }
+  ]
+}

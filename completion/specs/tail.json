@@ -1,0 +1,81 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "tail",
+  "description": "Print the last part of files",
+  "options": [
+    {
+      "name": [
+        "-f",
+        "--follow"
+      ],
+      "description": "Output appended data as the file grows"
+    },
+    {
+      "name": "-F",
+      "description": "Follow by name and retry if the file is replaced"
+    },
+    {
+      "name": [
+        "-n",
+        "--lines"
+      ],
+      "description": "Output the last N lines",
+      "args": [
+        {
+          "name": "lines"
+        }
+      ]
+    },
+    {
+      "name": [
+        "-c",
+        "--bytes"
+      ],
+      "description": "Output the last N bytes",
+      "args": [
+        {
+          "name": "bytes"
+        }
+      ]
+    },
+    {
+      "name": [
+        "-q",
+        "--quiet",
+        "--silent"
+      ],
+      "description": "Never print file name headers"
+    },
+    {
+      "name": [
+        "-v",
+        "--verbose"
+      ],
+      "description": "Always print file name headers"
+    },
+    {
+      "name": "--retry",
+      "description": "Keep trying to open a file that is unavailable"
+    },
+    {
+      "name": [
+        "-s",
+        "--sleep-interval"
+      ],
+      "description": "Seconds to sleep between checks when following",
+      "args": [
+        {
+          "name": "seconds"
+        }
+      ]
+    }
+  ],
+  "args": [
+    {
+      "name": "file",
+      "optional": true,
+      "variadic": true,
+      "template": "filepaths"
+    }
+  ]
+}
