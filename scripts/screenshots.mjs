@@ -10,6 +10,13 @@ await mkdir(outDir, { recursive: true });
 const scenes = [
   { name: "home", query: "" },
   { name: "terminal", query: "", open: ["prod-db", "staging-api", "prod-web-01"], type: ["ls"] },
+  {
+    name: "split",
+    query: "",
+    open: ["prod-web-01"],
+    panes: ["Control+Shift+D", "Control+Shift+Alt+D", "Control+Shift+B"],
+    type: ["ls", "df -h"],
+  },
   { name: "exited", query: "", open: ["prod-db"], type: ["exit"] },
   { name: "find", query: "", open: ["prod-web-01"], find: "Ubuntu" },
   { name: "local", query: "", local: true, type: ["ls"] },
@@ -53,6 +60,10 @@ for (const colorScheme of ["light", "dark"]) {
     if (scene.local) await page.getByRole("button", { name: "打开本地终端" }).click();
     if (scene.open || scene.local) await page.locator(".xterm-screen").last().waitFor();
     await page.waitForTimeout(300);
+    for (const chord of scene.panes ?? []) {
+      await page.keyboard.press(chord);
+      await page.waitForTimeout(400);
+    }
     for (const command of scene.type ?? []) {
       await page.keyboard.type(command);
       await page.keyboard.press("Enter");

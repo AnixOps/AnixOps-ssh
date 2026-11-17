@@ -5,6 +5,8 @@ const ESC = "\x1b";
 const CRLF = "\r\n";
 const color = (code: string, text: string) => `${ESC}[${code}m${text}${ESC}[0m`;
 
+let previewCount = 0;
+
 /** A fake session with local echo, so the terminal can be previewed and
  *  screenshotted without a backend. `exit` ends it to show that state. */
 export function previewSession(
@@ -59,6 +61,7 @@ export function previewSession(
   };
 
   return {
+    id: `preview-${++previewCount}`,
     write(data) {
       for (const char of data) {
         if (char === "\r") {

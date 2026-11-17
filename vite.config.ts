@@ -12,15 +12,12 @@ export default defineConfig({
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
+  test: { include: ["src/**/*.test.ts"] },
   clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
     watch: { ignored: ["**/src-tauri/**"] },
-  },
-  test: {
-    include: ["src/**/*.test.ts"],
-    environment: "node",
   },
   build: {
     target: ["es2021", "chrome105", "safari15"],

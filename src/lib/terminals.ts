@@ -2,6 +2,10 @@
 export interface TerminalTarget {
   /** Pastes text (bracketed when the shell asks for it); `run` presses Enter after. */
   send(text: string, run: boolean): void;
+  /** Raw input to the session, as if typed here (no echo, no focus change). */
+  write(data: string): void;
+  /** Pastes text without running it or taking focus. */
+  paste(text: string): void;
   connected(): boolean;
   /** Ends the tab's session (closing the tab); unmounting alone only detaches. */
   close(): void;
