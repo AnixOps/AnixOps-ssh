@@ -13,6 +13,7 @@
 #![cfg(unix)]
 
 pub mod russh_support;
+pub mod sk;
 
 use easyssh_core::{Connection, OpenSsh, SshInvocation};
 use std::ffi::OsString;

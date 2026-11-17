@@ -1937,9 +1937,11 @@
             "password",
             "passphrase",
             "keyboard_interactive",
-            "confirm"
+            "confirm",
+            "security_key_pin",
+            "security_key_touch"
           ],
-          "description": "What the prompt asks for; absent for OpenSSH's askpass prompts."
+          "description": "What the prompt asks for; absent for OpenSSH's askpass prompts. `security_key_pin` asks for the PIN of a FIDO2 security key; `security_key_touch` only tells the user to touch the key and takes no answer (it closes with `askpass.resolved`)."
         },
         "echo": {
           "type": "boolean",

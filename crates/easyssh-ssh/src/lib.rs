@@ -18,6 +18,13 @@ mod forward;
 mod interaction;
 pub mod known_hosts;
 mod params;
+mod security_key;
+#[cfg(all(feature = "hardware-key", not(windows)))]
+mod security_key_hid;
+#[cfg(any(test, feature = "software-key"))]
+pub mod security_key_software;
+#[cfg(test)]
+mod security_key_tests;
 mod session;
 mod sftp;
 pub mod socks5;
@@ -31,5 +38,10 @@ pub use forward::{Forward, ForwardKind};
 pub use interaction::{Decision, DenyAll, HostKeyDetails, Interaction, KbdPrompt};
 pub use known_hosts::{KnownHostStatus, KnownHosts, KnownHostsFile, MemoryKnownHosts};
 pub use params::{AgentSource, ConnectParams, MemoryIdentity};
+pub use security_key::{
+    default_security_key, hardware_backend_available, sign_with_security_key, HidSecurityKey,
+    SecurityKey, SkAlgorithm, SkAssertion, SkError, SkKeyInfo, SkSignRequest, FLAG_USER_PRESENCE,
+    FLAG_USER_VERIFICATION,
+};
 pub use session::Session;
 pub use sftp::{DirEntry, EntryKind, FileStat, Sftp, SftpFile};

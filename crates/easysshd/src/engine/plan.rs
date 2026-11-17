@@ -128,8 +128,13 @@ fn cert_beside(key: &Path) -> bool {
 
 impl HostFacts {
     /// What this host needs that the russh engine lacks. Reads the identity
-    /// files (to spot FIDO2 keys), so it touches the disk.
+    /// files (to spot FIDO2 keys), so it touches the disk. FIDO2 `sk-*` keys
+    /// count only on platforms where the engine has no authenticator backend.
     pub fn unsupported(&self) -> Vec<Unsupported> {
+        self.unsupported_with(easyssh_ssh::hardware_backend_available())
+    }
+
+    fn unsupported_with(&self, security_keys: bool) -> Vec<Unsupported> {
         let mut found = Vec::new();
         if self.proxy_command {
             found.push(Unsupported::ProxyCommand);
@@ -150,10 +155,11 @@ impl HostFacts {
             if cert_beside(&key) {
                 found.push(Unsupported::Certificate);
             }
-            if std::fs::read_to_string(&key)
-                .ok()
-                .and_then(|text| easyssh_ssh::security_key_type(&text))
-                .is_some()
+            if !security_keys
+                && std::fs::read_to_string(&key)
+                    .ok()
+                    .and_then(|text| easyssh_ssh::security_key_type(&text))
+                    .is_some()
             {
                 found.push(Unsupported::SecurityKey);
             }
@@ -540,7 +546,7 @@ proxycommand none
     }
 
     #[test]
-    fn a_fido2_identity_counts() {
+    fn a_fido2_identity_counts_only_without_an_authenticator_backend() {
         let dir = tempfile::tempdir().unwrap();
         let key = dir.path().join("id_sk");
         // Not a real key: only the type name inside the base64 body matters.
@@ -554,10 +560,12 @@ proxycommand none
         )
         .unwrap();
         let text = format!("hostname h\nidentityfile {}\n", key.display());
+        let facts = parse_ssh_g(&text).unwrap();
         assert_eq!(
-            parse_ssh_g(&text).unwrap().unsupported(),
+            facts.unsupported_with(false),
             vec![Unsupported::SecurityKey]
         );
+        assert!(facts.unsupported_with(true).is_empty());
     }
 
     #[test]

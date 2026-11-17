@@ -23,6 +23,8 @@ const scenes = [
   { name: "files", query: "", open: ["prod-web-01"], type: ["ls"], files: true },
   { name: "search", query: "", search: "prod" },
   { name: "askpass", query: "askpass=1" },
+  { name: "askpass-touch", query: "askpass=touch" },
+  { name: "askpass-pin", query: "askpass=pin" },
   { name: "host-editor", query: "", click: "编辑主机" },
   { name: "forwards", query: "", nav: "端口转发" },
   { name: "tunnel-editor", query: "", nav: "端口转发", click: "新建隧道" },

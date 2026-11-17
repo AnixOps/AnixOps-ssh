@@ -227,6 +227,7 @@ impl Engine {
             hostkeys: self.hostkeys.clone(),
             label: plan.target.label.clone(),
             saved_password,
+            touch: Mutex::default(),
         };
         Session::connect_via(&hops, target, &interaction)
             .await
@@ -355,6 +356,34 @@ mod tests {
         let shown = format!("{identity:?}");
         assert!(!shown.contains("secret-body"), "{shown}");
         assert!(!shown.contains("hunter2"), "{shown}");
+    }
+
+    #[tokio::test]
+    async fn a_security_key_file_can_be_saved_and_comes_back_as_an_sk_key() {
+        use easyssh_ssh::security_key_software::SoftwareSecurityKey;
+        use easyssh_ssh::{SkAlgorithm, SkKeyInfo, FLAG_USER_PRESENCE};
+        let device = SoftwareSecurityKey::new();
+        let file = device.create(SkAlgorithm::Ed25519, "ssh:", FLAG_USER_PRESENCE);
+        // The vault takes the file like any other key (it holds a handle, no
+        // secret, but it is a credential and is stored encrypted the same way).
+        assert!(easyssh_vault::secrets_update(None, Some(file.private_text.clone()), None).is_ok());
+        let saved = Saved {
+            key: Some(file.private_text.clone().leak()),
+            passphrase: None,
+            locked: false,
+        };
+        let identity = saved_identity(&saved, "h", "web").unwrap().unwrap();
+        let key = easyssh_ssh::decode_identity(
+            &file.private_text,
+            std::path::Path::new(&identity.label),
+            None,
+            &easyssh_ssh::DenyAll,
+        )
+        .await
+        .unwrap();
+        assert!(SkKeyInfo::of(&key).is_some());
+        // No key material in what reaches logs.
+        assert!(!format!("{identity:?}").contains("BEGIN OPENSSH"));
     }
 
     #[test]

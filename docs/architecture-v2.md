@@ -120,8 +120,32 @@ replaces the hand-written Tauri commands and `src/lib/backend.ts` mirror.
   the table was used is imported once and renamed `known_hosts.migrated`. A
   changed key is never accepted automatically; only the explicit replace
   decision rewrites an entry.
-- FIDO2 `sk-ecdsa` / `sk-ed25519` support is added on top of russh, through
-  libfido2, and offered upstream.
+- FIDO2 `sk-ecdsa-sha2-nistp256@openssh.com` and `sk-ssh-ed25519@openssh.com`
+  keys run on russh. As built (`easyssh-ssh`, `security_key*.rs`): the key file
+  holds a public key, the application (`ssh:`), flags and a key handle, no
+  secret. russh (0.65) already lets a `Signer` answer the userauth challenge
+  and `ssh-key` (0.7) encodes and verifies the sk signature (raw signature,
+  flags, counter), so no upstream change was needed. The device sits behind the
+  `SecurityKey` trait (`sign(application, key handle, flags, message, pin)`);
+  the real implementation, `HidSecurityKey`, speaks CTAP2 over USB HID with the
+  pure-Rust `ctap-hid-fido2` crate (hidraw on Linux, IOKit on macOS; no
+  libfido2), asking for an assertion on `SHA256(message)` for the stored
+  credential id. A software authenticator (`security_key_software`, feature
+  `software-key`, tests and e2e only) makes real signatures that `ssh-key` and
+  sshd verify. The chain asks the server first (russh signs only after the
+  server accepted the key), so the user is not asked to touch the key for a
+  host that does not know it. Touch and PIN are structured `Interaction`
+  events (`security_key_touch`, `security_key_touch_done`, `security_key_pin`),
+  carried to the UI as `askpass.prompt` with kind `security_key_touch` (a
+  notice, closed by `askpass.resolved`) and `security_key_pin` (a secret
+  answer); the PIN is held in zeroizing memory and never logged or stored.
+  Engine choice: a host with an `sk-*` identity file stays on russh where
+  `hardware_backend_available()` is true (Linux, macOS) and falls back to
+  OpenSSH where it is false (Windows: only elevated processes may open FIDO
+  HID devices, and the non-elevated route is `webauthn.dll`, which is not
+  wired in yet). Keys held by an SSH agent are still skipped by the built-in
+  engine. Not supported: CTAP1-only (U2F) keys, built-in biometric user
+  verification without a PIN, and keys on NFC or BLE.
 - Serial ports join SSH and local shells as a session type. Mosh and Telnet
   are not planned. As built: the `serialport` crate (no libudev), hosts of
   kind `serial` (migration 0006), the same output path as SSH sessions.
@@ -318,7 +342,7 @@ end-to-end suite first.
 | 1. Daemon | 3 | `easyssh-proto`, `easysshd`, authenticated IPC; today's PTY sessions moved behind the daemon (still system OpenSSH); UI reattaches after reload. |
 | 2. Engine | 6 | russh engine behind a setting, OpenSSH fallback rules, one connection for terminal, files and tunnels. Done when russh passes the whole e2e suite; OpenSSH then becomes an advanced option. Done: the suite runs the daemon scenarios on both engines, saved keys and passphrases and the known hosts table work on russh, russh is the default and OpenSSH is an advanced option. |
 | 3. Store | 3 | Release 2.0. SQLite with v1 migration, known hosts store, importers (ssh_config, PuTTY, SecureCRT, MobaXterm, Xshell, FinalShell, Termius exports, CSV). |
-| 4. Vault | 6 | Device key and keychain, passwords and private keys in the vault, Windows Hello, Touch ID and serial ports (done), FIDO2 (open). |
+| 4. Vault | 6 | Device key and keychain, passwords and private keys in the vault, Windows Hello, Touch ID and serial ports (done), FIDO2 `sk-*` SSH keys on the built-in engine (done on Linux and macOS), FIDO2 vault unlock (open). |
 | 5. Sync | 8 | `easyssh-server`, sign-in without sending the passphrase, signed envelopes, field-level merge, history, team vaults and roles. |
 | 6. Terminal | 6 | Splits and broadcast, shell integration, completion specs, AI with the user's key, encrypted session logs and sharing. |
 | 7. Mobile | 10+ | Tauri mobile app with the embedded engine. |

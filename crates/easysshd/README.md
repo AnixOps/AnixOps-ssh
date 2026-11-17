@@ -48,14 +48,17 @@ or `unknown_command` for an unknown kind) and the connection stays open.
   every attached client. Answers are held in memory only until handed to the
   helper, and are never stored or logged. When a prompt is answered,
   cancelled or times out, every client gets `askpass.resolved {id}` and closes
-  its dialog.
+  its dialog. FIDO2 keys use the same event: `kind: "security_key_pin"` asks for
+  the key's PIN (answer with `askpass.reply`), `kind: "security_key_touch"` only
+  says "touch your security key" and is closed by `askpass.resolved` when the
+  key has signed.
 - SSH engine: with `ssh_engine = russh` in the config (or `engine: russh` on
   a host) the daemon runs the session on the built-in engine
   (`easyssh-ssh`) instead of a PTY running `ssh`. Terminal, files
   (`sftp.*`, `transfer.*`) and tunnels (`tunnel.*`) of one host share one SSH
   connection, kept for 30 seconds after the last user left (`engine.connections`
   shows what is open). The system OpenSSH still runs a host that needs
-  `ProxyCommand`, `Match`, `LocalCommand`, certificates, security keys, a
+  `ProxyCommand`, `Match`, `LocalCommand`, certificates, security keys (on Windows only), a
   stored remote command or inline forwards, or when the built-in engine
   reports `unsupported` while connecting; `session.open` answers with the
   `engine` and the `engine_reason`. Passwords, passphrases and
