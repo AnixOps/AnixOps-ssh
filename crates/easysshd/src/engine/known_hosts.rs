@@ -89,8 +89,11 @@ impl KnownHosts for StoreKnownHosts {
     fn add(&self, host: &str, port: u16, key: &PublicKey) -> Result<()> {
         let (kind, blob) = parts_of(key)?;
         let entry = KnownHost::new(&host.to_ascii_lowercase(), port, &kind, blob);
+        // Through the import, which knows the table's uniqueness rule: a
+        // key that was recorded and removed before (a server that went back
+        // to its old key) is restored, not inserted a second time.
         lock(&self.store)
-            .upsert_known_host(&entry)
+            .import_known_hosts(&line_of(&entry))
             .map_err(failed)?;
         Ok(())
     }
@@ -387,6 +390,26 @@ mod tests {
         );
         // The old entry is a tombstone (so sync carries the removal).
         assert_eq!(lock(&store).list_deleted_known_hosts().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_server_that_goes_back_to_an_old_key_is_restored_not_duplicated() {
+        let (_db, store) = store();
+        let known = StoreKnownHosts::new(store.clone());
+        known.add("a.example", 22, &key(1)).unwrap();
+        known.replace("a.example", 22, &key(2)).unwrap();
+        // The first key comes back: replacing again must not trip over the
+        // removed row that still holds it.
+        known.replace("a.example", 22, &key(1)).unwrap();
+        assert_eq!(
+            known.check("a.example", 22, &key(1)).unwrap(),
+            KnownHostStatus::Trusted
+        );
+        assert!(matches!(
+            known.check("a.example", 22, &key(2)).unwrap(),
+            KnownHostStatus::Changed { .. }
+        ));
+        assert_eq!(in_store(&store).len(), 1);
     }
 
     #[test]
