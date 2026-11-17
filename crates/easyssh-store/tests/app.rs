@@ -74,7 +74,7 @@ fn two_processes_starting_together_migrate_once() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(v1(dir.path()), V1_FULL).unwrap();
     let path = v1(dir.path());
-    let threads: Vec<_> = (0..4)
+    let threads: Vec<_> = (0..8)
         .map(|_| {
             let path = path.clone();
             std::thread::spawn(move || {
