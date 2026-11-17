@@ -222,7 +222,22 @@ Where the implemented behaviour differs from or adds to the above:
   the device only when the user asks a question, and the request is shown
   before it is sent.
 - **Session logs** are encrypted on disk. With a server they can be uploaded
-  and shared through a vault.
+  and shared through a vault (`easyssh-sessionlog::share` wraps a log key for
+  that; no UI yet). Behaviour that differs from the plan:
+  - The format is `.esl` v1, a chunked XChaCha20-Poly1305 stream with tags
+    (message, flush, final) built by hand, because the `chacha20poly1305`
+    crate has no STREAM helper; it is not libsodium secretstream. Its layout
+    is documented in `crates/easyssh-sessionlog/src/format.rs`. The key is
+    HKDF-SHA256 of the vault device key and a per-log salt. A log without a
+    final chunk reads as incomplete.
+  - The per-host switch and the default are stored in the settings table
+    (key `session_logs`), not in a hosts column, so no migration is needed.
+  - A recorded session needs an unlocked vault. Sessions that run in the app
+    process because the daemon is down are not recorded.
+- **Ask AI** requests are made from Rust with the key read from the vault
+  (`ai_key.<provider>` settings slot, sealed). The UI only learns whether a
+  key exists. `ai_prepare` scrubs and stores the prompt; `ai_send` sends
+  exactly that stored prompt. Sync must not carry `ai_key.*` slots.
 - **Sessions survive restarts of the UI** because they live in the daemon.
 
 ## 10. Telemetry

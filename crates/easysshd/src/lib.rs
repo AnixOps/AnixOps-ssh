@@ -14,6 +14,7 @@ pub mod launch;
 pub mod link;
 pub mod log;
 mod platform;
+pub mod recorder;
 pub mod runtime;
 mod server;
 pub mod service;

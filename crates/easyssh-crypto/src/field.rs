@@ -31,6 +31,8 @@ pub trait FieldCipher: Send + Sync + Debug {
 /// [`FieldCipher`] backed by the device key.
 pub struct DeviceFieldCipher {
     key: Zeroizing<[u8; 32]>,
+    /// Kept (zeroized on drop) for [`DeviceFieldCipher::derive_key`] only.
+    device: DeviceKey,
 }
 
 impl DeviceFieldCipher {
@@ -39,7 +41,20 @@ impl DeviceFieldCipher {
         let mut key = Zeroizing::new([0u8; 32]);
         hk.expand(FIELD_INFO, &mut *key)
             .map_err(|_| CryptoError::Kdf)?;
-        Ok(Self { key })
+        Ok(Self {
+            key,
+            device: DeviceKey::from_bytes(*device_key.expose()),
+        })
+    }
+
+    /// A 32-byte subkey for one purpose: `HKDF-SHA256(salt, device_key, info)`.
+    /// `info` names the purpose (for example `easyssh/v1/session-log`) and
+    /// `salt` is random per use, so two uses never share a key.
+    pub fn derive_key(&self, info: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+        let hk = Hkdf::<Sha256>::new(Some(salt), self.device.expose());
+        let mut out = Zeroizing::new([0u8; 32]);
+        hk.expand(info, &mut *out).map_err(|_| CryptoError::Kdf)?;
+        Ok(out)
     }
 
     fn full_aad(aad: &[u8]) -> Vec<u8> {
@@ -136,6 +151,16 @@ impl DeviceKeyCipher {
             .unwrap_or_else(|e| e.into_inner())
             .is_some()
     }
+
+    /// A purpose-bound subkey of the device key, see
+    /// [`DeviceFieldCipher::derive_key`]. Fails with [`CryptoError::Locked`]
+    /// while locked.
+    pub fn derive_key(&self, info: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+        match &*self.inner.read().unwrap_or_else(|e| e.into_inner()) {
+            Some(cipher) => cipher.derive_key(info, salt),
+            None => Err(CryptoError::Locked),
+        }
+    }
 }
 
 impl Debug for DeviceKeyCipher {
@@ -182,6 +207,19 @@ mod tests {
         assert_eq!(c.decrypt(&blob, b"a"), Err(CryptoError::Locked));
         c.unlock(&key).unwrap();
         assert_eq!(c.decrypt(&blob, b"a").unwrap(), b"x");
+    }
+
+    #[test]
+    fn derived_keys_depend_on_info_salt_and_device_key() {
+        let c = DeviceKeyCipher::unlocked(&DeviceKey::from_bytes([5; 32])).unwrap();
+        let a = c.derive_key(b"x", b"salt-1").unwrap();
+        assert_eq!(*a, *c.derive_key(b"x", b"salt-1").unwrap());
+        assert_ne!(*a, *c.derive_key(b"y", b"salt-1").unwrap());
+        assert_ne!(*a, *c.derive_key(b"x", b"salt-2").unwrap());
+        let other = DeviceKeyCipher::unlocked(&DeviceKey::from_bytes([6; 32])).unwrap();
+        assert_ne!(*a, *other.derive_key(b"x", b"salt-1").unwrap());
+        c.lock();
+        assert_eq!(c.derive_key(b"x", b"s"), Err(CryptoError::Locked));
     }
 
     #[test]

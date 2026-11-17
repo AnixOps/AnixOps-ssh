@@ -7,6 +7,7 @@
 //! client that attaches late replays exactly what it missed.
 
 use crate::integration::{self, Action, Integration};
+use crate::recorder::Recorder;
 use crate::server::Outbox;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde_json::{json, Value};
@@ -201,6 +202,8 @@ pub struct SpawnOptions {
     pub scrollback: usize,
     /// Deliver the opt-in shell integration (see `integration`).
     pub shell_integration: bool,
+    /// Writes the output to an encrypted session log when set.
+    pub recorder: Option<Arc<Recorder>>,
 }
 
 /// One PTY session.
@@ -208,6 +211,7 @@ pub struct TermSession {
     on_exit: ExitHook,
     id: String,
     host_id: Option<String>,
+    recorder: Option<Arc<Recorder>>,
     state: Mutex<State>,
     io: Mutex<Io>,
 }
@@ -226,6 +230,7 @@ impl TermSession {
             rows,
             scrollback,
             shell_integration,
+            recorder,
         } = options;
         let pair = native_pty_system()
             .openpty(pty_size(cols, rows))
@@ -243,6 +248,7 @@ impl TermSession {
             on_exit,
             id,
             host_id,
+            recorder,
             state: Mutex::new(State {
                 scrollback: Scrollback::new(scrollback),
                 subscribers: Vec::new(),
@@ -321,6 +327,9 @@ impl TermSession {
             return;
         }
         let seq = state.scrollback.push(text);
+        if let Some(recorder) = &self.recorder {
+            recorder.write(text);
+        }
         let payload = json!({"session_id": self.id, "data": text, "seq": seq});
         state
             .subscribers
@@ -374,6 +383,9 @@ impl TermSession {
             return;
         }
         state.exit = Some(code);
+        if let Some(recorder) = &self.recorder {
+            recorder.finish();
+        }
         (self.on_exit)(&self.id, code);
         let payload = json!({"session_id": self.id, "code": code});
         for s in state.subscribers.drain(..) {

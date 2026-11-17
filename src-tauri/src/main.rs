@@ -3,6 +3,7 @@
 
 use tauri::Manager;
 
+mod ai;
 mod askpass;
 mod backup;
 mod daemon;
@@ -10,6 +11,7 @@ mod files;
 mod hosts;
 mod import;
 mod known_hosts;
+mod session_logs;
 mod sessions;
 mod settings;
 mod snippets;
@@ -35,6 +37,7 @@ fn main() {
         .manage(files::Files::default())
         .manage(askpass::Askpass::default())
         .manage(tunnels::Tunnels::default())
+        .manage(ai::Ai::default())
         .invoke_handler(tauri::generate_handler![
             hosts::load_hosts,
             hosts::open_external,
@@ -94,7 +97,20 @@ fn main() {
             vault::vault_set_auto_lock,
             vault::vault_forget_all,
             vault::secrets_status,
-            vault::secrets_set
+            vault::secrets_set,
+            ai::ai_config_get,
+            ai::ai_config_save,
+            ai::ai_key_set,
+            ai::ai_prepare,
+            ai::ai_send,
+            ai::ai_cancel,
+            session_logs::session_logs_settings_get,
+            session_logs::session_logs_settings_save,
+            session_logs::session_log_host_set,
+            session_logs::session_logs_list,
+            session_logs::session_log_open,
+            session_logs::session_log_export,
+            session_logs::session_log_delete
         ])
         .setup(|app| {
             daemon::start(app.handle());

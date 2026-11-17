@@ -18,6 +18,7 @@ use easyssh_crypto::{
 use easyssh_store::{SecretFlags, SecretsUpdate, Store, StoreError, StoredSecrets};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+use zeroize::Zeroizing;
 
 /// Auto-lock after this many idle minutes unless the user chose otherwise.
 pub const DEFAULT_AUTO_LOCK_MINUTES: u32 = 15;
@@ -342,6 +343,28 @@ impl Vault {
         self.cipher.unlock(&key)?;
         self.inner().last_used = Instant::now();
         Ok(())
+    }
+
+    // ---- derived keys and single secret values ---------------------------
+
+    /// A purpose-bound subkey of the device key (HKDF-SHA256 with `salt`).
+    /// Opens the vault when it can do so without asking.
+    pub fn derive_key(&self, info: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, VaultError> {
+        self.ensure_unlocked()?;
+        Ok(self.cipher.derive_key(info, salt)?)
+    }
+
+    /// Encrypts one secret value (for example an API key). `aad` names where
+    /// it is kept, so the blob cannot be moved to another slot.
+    pub fn seal_value(&self, aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+        self.ensure_unlocked()?;
+        Ok(self.cipher.encrypt(plaintext, aad)?)
+    }
+
+    /// Inverse of [`Vault::seal_value`].
+    pub fn open_value(&self, aad: &[u8], blob: &[u8]) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+        self.ensure_unlocked()?;
+        Ok(Zeroizing::new(self.cipher.decrypt(blob, aad)?))
     }
 
     // ---- secrets of hosts ------------------------------------------------

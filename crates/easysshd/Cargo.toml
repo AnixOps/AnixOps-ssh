@@ -12,6 +12,7 @@ chrono.workspace = true
 dirs.workspace = true
 easyssh-core = { path = "../easyssh-core" }
 easyssh-proto = { path = "../easyssh-proto" }
+easyssh-sessionlog = { path = "../easyssh-sessionlog" }
 easyssh-crypto = { path = "../easyssh-crypto" }
 easyssh-store = { path = "../easyssh-store" }
 easyssh-sync = { path = "../easyssh-sync" }

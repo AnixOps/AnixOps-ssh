@@ -20,7 +20,9 @@ import {
   type SecretsInput,
   type SecretsStatus,
 } from "@/lib/backend";
+import { logHostSet, logSettingsGet } from "@/lib/aiBackend";
 import { t } from "@/lib/i18n";
+import { choiceValue, hostChoice, type HostChoice } from "@/lib/sessionLogs";
 import { requestVaultUnlock } from "@/lib/vaultUi";
 import { cn } from "@/lib/utils";
 
@@ -67,10 +69,23 @@ export function HostEditor({
     passphrase: emptyDraft,
   });
   const [keyNote, setKeyNote] = useState<string | null>(null);
+  const [logChoice, setLogChoice] = useState<HostChoice>("default");
+  const [logLoaded, setLogLoaded] = useState<HostChoice | null>(null);
 
   useEffect(() => firstRef.current?.focus(), []);
   useEffect(() => {
     if (host && saved) secretsStatus(host.id).then(setSavedSecrets).catch(console.error);
+  }, [host, saved]);
+
+  useEffect(() => {
+    if (!host || !saved) return;
+    logSettingsGet()
+      .then((settings) => {
+        const current = hostChoice(settings, host.id);
+        setLogChoice(current);
+        setLogLoaded(current);
+      })
+      .catch(console.error);
   }, [host, saved]);
 
   const draft = (name: SecretName, change: Partial<Draft>) =>
@@ -124,6 +139,15 @@ export function HostEditor({
           // The host itself is saved; only its secrets are not.
           if (isVaultLocked(reason)) requestVaultUnlock();
           setError(`${t.secretsSaveFailed}: ${String(reason)}`);
+          setBusy(false);
+          return;
+        }
+      }
+      if (logChoice !== (logLoaded ?? "default")) {
+        try {
+          await logHostSet(id, choiceValue(logChoice));
+        } catch (reason) {
+          setError(String(reason));
           setBusy(false);
           return;
         }
@@ -354,6 +378,19 @@ export function HostEditor({
 
           {saved && host && <HostVault hostId={host.id} onMoved={onDone} />}
           {saved && host && <HostHistory hostId={host.id} onRestored={onDone} />}
+          <Field label={t.logsHost} hint={t.logsHostHint}>
+            <Segmented
+              size="sm"
+              label={t.logsHost}
+              value={logChoice}
+              onChange={setLogChoice}
+              options={[
+                { value: "default", label: t.logsHostFollow },
+                { value: "on", label: t.logsHostOn },
+                { value: "off", label: t.logsHostOff },
+              ]}
+            />
+          </Field>
 
           {error && (
             <p role="alert" className="flex items-start gap-2 rounded-sm bg-danger-soft px-3 py-2 text-callout text-danger">

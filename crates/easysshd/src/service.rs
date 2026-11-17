@@ -11,11 +11,12 @@ use base64::Engine;
 use easyssh_core::security::{validate_alias, validate_connection};
 use easyssh_core::{ConfigStore, Connection, Group, OpenSsh, SshInvocation};
 use easyssh_proto as proto;
+use easyssh_sessionlog::{LogSettings, LogStore, KEY_INFO};
 use easyssh_store::import::{
     import_apply, import_preview, read_import_file, ApplyRequest, ImportPreview, PreviewRequest,
     MAX_IMPORT_BYTES,
 };
-use easyssh_store::{open_app_store_with, SecretFlags, Store, StoreError};
+use easyssh_store::{db_path_for, open_app_store_with, SecretFlags, Store, StoreError};
 use easyssh_vault::{Binding, KeyFile, StoreAccess, Vault, VaultError, VaultSecrets};
 use portable_pty::CommandBuilder;
 use serde::de::DeserializeOwned;
@@ -125,6 +126,8 @@ pub struct Daemon {
     key_dir_root: PathBuf,
     askpass_helper: Option<PathBuf>,
     sessions: Mutex<HashMap<String, Arc<TermSession>>>,
+    /// Encrypted session logs, in the data directory beside the database.
+    logs: LogStore,
     clients: Clients,
     askpass: Arc<Hub>,
     sync: Arc<SyncService>,
@@ -221,6 +224,26 @@ impl Daemon {
             }
             (None, None) => {}
         }
+        let logs = LogStore::in_data_dir(
+            db_path_for(cfg.config_store.path())
+                .parent()
+                .unwrap_or_else(|| Path::new(".")),
+        );
+        // Retention: old logs go when the daemon starts.
+        let retention = opened
+            .store
+            .get_setting_as::<LogSettings>(LogSettings::KEY)
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .retention_days;
+        let cleaned = logs.cleanup(retention, std::time::SystemTime::now());
+        if cleaned.deleted > 0 {
+            log.info(&format!(
+                "deleted {} session logs older than {retention} days",
+                cleaned.deleted
+            ));
+        }
         let store = Arc::new(Mutex::new(opened.store));
         let access: Arc<dyn StoreAccess> = store.clone();
         askpass.set_answers(Arc::new(VaultSecrets::new(vault.clone(), access)));
@@ -246,6 +269,7 @@ impl Daemon {
                 .unwrap_or_else(crate::runtime::default_runtime_dir),
             askpass_helper: extras.askpass_helper.clone(),
             sessions: Mutex::new(HashMap::new()),
+            logs,
             clients,
             askpass,
             sync,
@@ -989,6 +1013,9 @@ impl Daemon {
             }
             None => None,
         };
+        let recorder = self
+            .start_recorder(p.host_id.as_deref(), connection.as_ref())
+            .await?;
         let shell = self.cfg.local_shell.clone();
         let host_id = p.host_id.clone();
         let id = uuid::Uuid::new_v4().simple().to_string();
@@ -1034,6 +1061,7 @@ impl Daemon {
                     rows,
                     scrollback,
                     shell_integration,
+                    recorder,
                 },
                 on_exit,
             )
@@ -1060,6 +1088,48 @@ impl Daemon {
             .await;
         session.attach(conn, outbox, None, None);
         Ok(Outcome::Replied)
+    }
+
+    /// The encrypted session log of a new session, when the host's setting
+    /// (or the default) asks for one. A session that should be recorded but
+    /// cannot be (the vault is locked, the disk is full) does not open:
+    /// silently running unrecorded would break the promise of the setting.
+    async fn start_recorder(
+        &self,
+        host_id: Option<&str>,
+        connection: Option<&Connection>,
+    ) -> Result<Option<Arc<crate::recorder::Recorder>>, Failure> {
+        let settings = lock(&self.store)
+            .get_setting_as::<LogSettings>(LogSettings::KEY)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if !settings.should_record(host_id) {
+            return Ok(None);
+        }
+        let label = connection.map_or_else(|| "local".to_owned(), |c| c.name.clone());
+        let (vault, logs, log) = (self.vault.clone(), self.logs.clone(), self.log.clone());
+        tokio::task::spawn_blocking(move || {
+            vault.ensure_unlocked().map_err(vault_failure)?;
+            let derive = |salt: &[u8]| {
+                vault
+                    .derive_key(KEY_INFO, salt)
+                    .map_err(|error| error.to_string())
+            };
+            let error_log = log.clone();
+            crate::recorder::Recorder::start(
+                &logs,
+                &label,
+                &derive,
+                Arc::new(move |why: &str| {
+                    error_log.error(&format!("session log stopped: {why}"));
+                }),
+            )
+            .map(Some)
+            .map_err(|why| fail("log_failed", format!("cannot write the session log: {why}")))
+        })
+        .await
+        .map_err(|e| fail("internal", e.to_string()))?
     }
 
     /// A saved host, or the connection derived from a `~/.ssh/config` alias,

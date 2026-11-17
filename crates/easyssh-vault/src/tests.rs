@@ -343,3 +343,34 @@ fn forget_all_removes_everything_even_while_locked() {
     assert_eq!(f.secrets.vault().forget_all(&store).unwrap(), 1);
     assert!(!f.secrets.vault().flags(&store, &f.host.id).unwrap().any());
 }
+
+#[test]
+fn derived_keys_need_the_vault_and_are_stable_per_salt() {
+    let vault = vault();
+    vault.set_passphrase("pp").unwrap();
+    vault.lock();
+    assert!(matches!(
+        vault.derive_key(b"info", b"salt"),
+        Err(VaultError::Locked)
+    ));
+    vault.unlock("pp").unwrap();
+    let a = vault.derive_key(b"info", b"salt").unwrap();
+    assert_eq!(*a, *vault.derive_key(b"info", b"salt").unwrap());
+    assert_ne!(*a, *vault.derive_key(b"info", b"other").unwrap());
+    // The same device key after a lock and unlock gives the same key.
+    vault.lock();
+    vault.unlock("pp").unwrap();
+    assert_eq!(*a, *vault.derive_key(b"info", b"salt").unwrap());
+}
+
+#[test]
+fn single_values_are_sealed_to_their_slot() {
+    let vault = vault();
+    let blob = vault.seal_value(b"ai/anthropic", b"sk-test-123").unwrap();
+    assert!(!blob.windows(5).any(|w| w == b"sk-te"));
+    assert_eq!(
+        &vault.open_value(b"ai/anthropic", &blob).unwrap()[..],
+        b"sk-test-123"
+    );
+    assert!(vault.open_value(b"ai/openai", &blob).is_err());
+}

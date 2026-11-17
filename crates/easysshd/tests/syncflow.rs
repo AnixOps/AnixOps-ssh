@@ -692,7 +692,7 @@ async fn the_account_survives_a_restart_and_the_database_holds_no_plaintext() {
     // its own at start.
     // Another runtime directory: on Windows the first daemon's pipe can linger
     // for a moment after it stopped.
-    let a = start_with(&root, "run2", keys, fast()).await;
+    let a = start_with(&root, "run2", keys, background()).await;
     let status = a.call("sync.status", json!({})).await.unwrap();
     assert_eq!(status["signed_in"], true);
     assert_eq!(status["username"], "ann");

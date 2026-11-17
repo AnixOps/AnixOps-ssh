@@ -465,6 +465,32 @@ async fn an_invalid_remote_host_is_skipped_not_fatal() {
     assert!(b.store().sync_cursor(&personal).unwrap() > 0);
 }
 
+/// Settings are device-local: the AI keys (`ai_key.*`, sealed by the vault) and
+/// the session log preference never leave the device, and no log file is a
+/// synced record. Only the five entity tables are mapped.
+#[tokio::test]
+async fn settings_and_ai_keys_are_not_synced() {
+    let server = MemoryServer::new();
+    let mut a = dev("dev-a", 20, &server);
+    let mut b = dev("dev-b", 21, &server);
+    {
+        let store = a.store();
+        store
+            .set_setting("ai_key.anthropic", &serde_json::json!("SEALED-API-KEY"))
+            .unwrap();
+        store
+            .set_setting("session_logs", &serde_json::json!({"enabled": true}))
+            .unwrap();
+        store.save_host(&new_host("Web"), None).unwrap();
+    }
+    let report = a.sync().await;
+    assert_eq!(report.pushed, 1, "only the host is a record");
+    b.sync().await;
+    let store = b.store();
+    assert!(store.get_setting("ai_key.anthropic").unwrap().is_none());
+    assert!(store.get_setting("session_logs").unwrap().is_none());
+}
+
 #[test]
 fn account_secrets_are_sealed_and_cleared_with_sync_state() {
     let store = Store::open_in_memory("dev-a", Arc::new(PlaintextForTests)).unwrap();

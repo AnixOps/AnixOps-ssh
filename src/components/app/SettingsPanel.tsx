@@ -1,4 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app";
+import { AiSettings } from "@/components/app/AiSettings";
+import { SessionLogs } from "@/components/app/SessionLogs";
 import { BackupSync } from "@/components/app/BackupSync";
 import { KnownHosts } from "@/components/app/KnownHosts";
 import { SyncSettings } from "@/components/app/SyncSettings";
@@ -180,6 +182,14 @@ export function SettingsPanel({
 
         <Group title={t.security}>
           <VaultSettings />
+        </Group>
+
+        <Group title={t.aiTitle}>
+          <AiSettings />
+        </Group>
+
+        <Group title={t.logsTitle}>
+          <SessionLogs />
         </Group>
 
         <Group title={t.privacy}>
