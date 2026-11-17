@@ -22,11 +22,15 @@ Semantic versioning:
 1. Open a pull request that bumps the version in `Cargo.toml` (workspace),
    `package.json`, `src-tauri/tauri.conf.json`, and the two lockfiles.
 2. When CI is green, run the smoke test below on one real machine against a
-   real server. For a patch release, the checks touching the fix are enough.
-3. Merge, then tag `main`: `git tag -a vX.Y.Z -m "AnixOps SSH X.Y.Z"` and
-   push the tag. `release.yml` checks the versions, builds the installers on
-   all three platforms, signs macOS when the Apple secrets exist
-   ([docs/signing.md](docs/signing.md)) and publishes the release.
+   real server, using the installers the pull request's CI uploaded
+   (`AnixOps-SSH-<OS>` artifacts). Merging is the release, so test first.
+   For a patch release, the checks touching the fix are enough.
+3. Merge. `tag.yml` sees the new version on `main`, checks that the three
+   files agree, tags the merge commit `vX.Y.Z` and runs `release.yml`, which
+   builds the installers on all three platforms, signs macOS when the Apple
+   secrets exist ([docs/signing.md](docs/signing.md)) and publishes the
+   release. Nobody tags by hand. If a version's tag already exists, nothing
+   happens; Actions → Tag release → Run workflow retries a missed run.
 4. Watch the issues for a few days. A regression gets a patch release, not a
    revert of the tag.
 
