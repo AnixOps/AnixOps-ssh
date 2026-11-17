@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "anixops-ssh"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -997,7 +997,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "easyssh-core"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1011,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-e2e"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "easyssh-core",
  "easysshd",
@@ -1023,7 +1023,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-proto"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "chrono",
  "easyssh-core",
@@ -1039,7 +1039,7 @@ dependencies = [
 
 [[package]]
 name = "easysshd"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",
