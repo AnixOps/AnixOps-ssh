@@ -164,6 +164,13 @@ impl Drop for FakeDevice {
     /// which hangs up the slave the daemon has open.
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        // The reader thread may be blocked reading the master (macOS blocks
+        // while a slave is open). One byte written to the slave wakes it so
+        // it sees `stop` and closes its copy of the master; only then does
+        // dropping the master hang up the daemon's end.
+        if let Ok(mut slave) = std::fs::OpenOptions::new().write(true).open(&self.path) {
+            let _ = slave.write_all(b"\n");
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
