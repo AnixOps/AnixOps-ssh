@@ -9,8 +9,22 @@ tests and the manual smoke test in `RELEASING.md`.
 The `tests/russh_*.rs` files run the same scenarios against the new engine
 (`crates/easyssh-ssh`, built on russh) with the same containers. They need no
 `ssh` client except `ssh-keygen`, `ssh-agent` and `ssh-add` for the key and
-agent tests. The phase 2 exit criterion is that the russh column below passes
-the whole suite.
+agent tests. The phase 2 exit criterion was that the russh column below passes
+the whole suite; it does, and the built-in engine is now the default.
+
+## Both engines through the daemon
+
+The tests that go through `easysshd` (`daemon`, `vault`, `session_log`,
+`shell_integration`) run once per engine. `tests/support/mod.rs` has
+`both_engines!(scenario)`, which turns `async fn scenario(engine: EngineKind)`
+into the tests `scenario::openssh` and `scenario::russh`. Each sets the global
+`ssh_engine` explicitly in the app database (`set_engine`), so no scenario
+depends on which engine is the default, and answers the daemon's prompts with
+`support::Client`, which accepts unknown host keys the way the test ssh config
+does for OpenSSH (`accept-new`). A scenario that is about one engine only
+(an OpenSSH key file, one shared connection on russh) is a plain test and says
+so. The `local_*` tests stand in for `ssh` with a local shell, which only
+OpenSSH runs, so their hosts are pinned to OpenSSH.
 
 ## Run locally
 
@@ -77,9 +91,12 @@ and check that OpenSSH really asked it for the password.
 | `tests/sftp.rs` | `SftpSession` connect, home, list, mkdir, rename, remove; upload and download with `spawn_transfer` and with `ScpInvocation`; failures |
 | `tests/tunnels.rs` | `spawn_tunnel` local (-L), dynamic (-D, hand-made SOCKS5 CONNECT) and remote (-R, checked from inside the container); `ExitOnForwardFailure` |
 | `tests/password.rs` | askpass password for exec, `SftpSession`, transfer and tunnel; wrong password fails without hanging |
-| `tests/shell_integration.rs` | the daemon delivers the shell integration scripts to bash, zsh and fish (containers `e2e-target`, `e2e-zsh`, `e2e-fish`; also against local shells without Docker), runs `false` and `cd /tmp` and checks the `OSC 6973` sequences carry exit status 1 and `/tmp`; the script stays off screen and out of history; a host without the setting sees no sequences |
+| `tests/shell_integration.rs` (container tests on both engines) | the daemon delivers the shell integration scripts to bash, zsh and fish (containers `e2e-target`, `e2e-zsh`, `e2e-fish`; also against local shells without Docker), runs `false` and `cd /tmp` and checks the `OSC 6973` sequences carry exit status 1 and `/tmp`; the script stays off screen and out of history; a host without the setting sees no sequences |
 | `tests/jump.rs` | exec and SFTP through a `ProxyJump` alias and through `Connection::proxy_jump` |
-| `tests/russh_daemon.rs` | the daemon with `ssh_engine = russh`: terminal, SFTP and a -L tunnel share one connection (`engine.connections`), jump host, password prompt asked once, unknown host key asked once then remembered, changed host key refused until replaced, `ProxyCommand` falls back to OpenSSH |
+| `tests/russh_daemon.rs` | the daemon with `ssh_engine = russh`: terminal, SFTP and a -L tunnel share one connection (`engine.connections`), jump host, password prompt asked once, unknown host key asked once then remembered (in the `known_hosts` table, not in a file), changed host key refused until replaced, `ProxyCommand` falls back to OpenSSH |
+| `tests/daemon.rs` (both engines) | a session survives the client going away and replays its scrollback on reattach; a terminal through a jump host |
+| `tests/vault.rs` (both engines) | a saved password logs in without a dialog; a saved key logs in with the config's own key removed, as one 0600 file on OpenSSH and from memory (no file) on russh. russh only: an encrypted key with its saved passphrase logs in without any dialog and leaves no copy of the key on disk, and without a saved passphrase the user is asked once |
+| `tests/session_log.rs` (both engines) | the encrypted session log of a container session holds what the terminal showed (the `local_*` tests run without Docker) |
 
 ## Baseline against v1 and russh
 

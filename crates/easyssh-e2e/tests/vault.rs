@@ -1,29 +1,26 @@
-//! Saved secrets against real servers: the password user logs in with a
-//! password from the vault and no dialog, and the key user logs in with a key
-//! from the vault that exists only as a 0600 file while the session runs.
+//! Saved secrets against real servers, on both engines: the password user
+//! logs in with a password from the vault and no dialog, and the key user
+//! logs in with a key from the vault. On OpenSSH the key exists only as a
+//! 0600 file while the session runs; on the built-in engine it never touches
+//! the disk at all, also when it is encrypted and its passphrase is saved.
 //! The vault uses an in-memory key store; the real keychain is never touched.
 #![cfg(unix)]
 
+#[macro_use]
+mod support;
+
 use easyssh_core::{ConfigStore, Connection, ConnectionTarget};
 use easyssh_crypto::{KdfParams, MemoryKeyStore};
-use easyssh_e2e::{E2e, PW_PASSWORD, PW_USER, TARGET_PORT};
+use easyssh_e2e::{run_command, E2e, PW_PASSWORD, PW_USER, TARGET_PORT};
 use easyssh_vault::Vault;
-use easysshd::link::{AskpassPrompt, Link, LinkHandler, SessionMsg, SessionSink};
+use easysshd::link::{Link, SessionMsg, SessionSink};
 use easysshd::{Daemon, DaemonConfig, DaemonExtras, Server};
 use serde_json::json;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-#[derive(Default)]
-struct Prompts(Mutex<Vec<AskpassPrompt>>);
-
-impl LinkHandler for Prompts {
-    fn askpass_prompt(&self, prompt: AskpassPrompt) {
-        self.0.lock().unwrap().push(prompt);
-    }
-}
+use support::{set_engine, Client, EngineKind};
 
 type Seen = Arc<Mutex<Vec<SessionMsg>>>;
 
@@ -103,22 +100,23 @@ fn endpoint_host(name: &str, user: &str) -> Connection {
 
 struct Harness {
     link: Link,
-    prompts: Arc<Prompts>,
+    client: Arc<Client>,
     runtime: PathBuf,
     stop: tokio::sync::oneshot::Sender<()>,
     serving: tokio::task::JoinHandle<()>,
     daemon: Arc<Daemon>,
 }
 
-async fn start(e2e: &E2e) -> Harness {
+async fn start(e2e: &E2e, engine: EngineKind) -> Harness {
     let runtime = e2e.dir.path().join("run");
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(&runtime)
         .unwrap();
+    let config_path = e2e.dir.path().join("connections.json");
     let config = DaemonConfig {
-        config_store: ConfigStore::at(e2e.dir.path().join("connections.json")),
+        config_store: ConfigStore::at(config_path.clone()),
         local_shell: None,
         scrollback_bytes: 1 << 20,
         idle_timeout: Duration::from_secs(600),
@@ -134,6 +132,7 @@ async fn start(e2e: &E2e) -> Harness {
         ..DaemonExtras::default()
     };
     let daemon = Daemon::new_with(config, extras).await.expect("daemon");
+    set_engine(&config_path, engine);
     let server = Server::start_service(&runtime, daemon.clone()).expect("server");
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let serving = tokio::spawn(async move {
@@ -144,13 +143,10 @@ async fn start(e2e: &E2e) -> Harness {
             .await
             .expect("serve")
     });
-    let prompts = Arc::new(Prompts::default());
-    let link = Link::connect(&runtime, prompts.clone())
-        .await
-        .expect("connect");
+    let (client, link) = Client::connect(&runtime).await;
     Harness {
         link,
-        prompts,
+        client,
         runtime,
         stop,
         serving,
@@ -170,6 +166,7 @@ impl Harness {
     }
 
     async fn stop(self) {
+        self.client.detach();
         drop(self.link);
         let _ = self.stop.send(());
         self.serving.await.expect("server task");
@@ -177,11 +174,9 @@ impl Harness {
     }
 }
 
-#[tokio::test]
-#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
-async fn stored_password_logs_in_without_a_dialog() {
+async fn stored_password_logs_in_without_a_dialog(engine: EngineKind) {
     let e2e = E2e::new();
-    let h = start(&e2e).await;
+    let h = start(&e2e, engine).await;
     let host = endpoint_host("E2E password host", PW_USER);
     h.save(&host).await;
     h.link
@@ -206,7 +201,7 @@ async fn stored_password_logs_in_without_a_dialog() {
     })
     .await;
     assert!(
-        h.prompts.0.lock().unwrap().is_empty(),
+        h.client.asks.lock().unwrap().is_empty(),
         "a stored password must not raise a dialog"
     );
     assert!(
@@ -218,14 +213,19 @@ async fn stored_password_logs_in_without_a_dialog() {
     h.stop().await;
 }
 
-#[tokio::test]
-#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
-async fn stored_key_logs_in_through_a_short_lived_file() {
+both_engines!(stored_password_logs_in_without_a_dialog);
+
+/// A key saved in the vault logs the key user in. The config's own
+/// `IdentityFile` is removed first, so the saved key is the only way in.
+/// OpenSSH gets it as one owner-only file for as long as `ssh` runs; the
+/// built-in engine keeps it in memory and never writes a file.
+async fn stored_key_logs_in(engine: EngineKind) {
     let e2e = E2e::new();
-    let h = start(&e2e).await;
+    let h = start(&e2e, engine).await;
     let host = endpoint_host("E2E key host", "keyuser");
     h.save(&host).await;
     let key = std::fs::read_to_string(&e2e.key).expect("test key");
+    std::fs::remove_file(&e2e.key).expect("remove the config's key file");
     h.link
         .request(
             "secrets.set",
@@ -248,14 +248,26 @@ async fn stored_key_logs_in_through_a_short_lived_file() {
     })
     .await;
 
-    // While the session lives the key is one owner-only file.
-    let files = key_files(&h.runtime);
-    assert_eq!(files.len(), 1, "{files:?}");
-    assert_eq!(
-        std::fs::metadata(&files[0]).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
-    assert!(h.prompts.0.lock().unwrap().is_empty());
+    match engine {
+        EngineKind::Openssh => {
+            // While the session lives the key is one owner-only file.
+            let files = key_files(&h.runtime);
+            assert_eq!(files.len(), 1, "{files:?}");
+            assert_eq!(
+                std::fs::metadata(&files[0]).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        EngineKind::Russh => {
+            // The key went to the engine from memory: no file at any time.
+            assert!(
+                key_files(&h.runtime).is_empty(),
+                "{:?}",
+                key_files(&h.runtime)
+            );
+        }
+    }
+    assert!(h.client.asks.lock().unwrap().is_empty());
 
     h.link.write_session(&id, "exit\r").unwrap();
     eventually("the key file to be deleted", || {
@@ -264,4 +276,144 @@ async fn stored_key_logs_in_through_a_short_lived_file() {
     .await;
     h.link.close_session(&id);
     h.stop().await;
+}
+
+both_engines!(stored_key_logs_in);
+
+/// Copies the test key and protects the copy with a passphrase.
+fn encrypted_key(e2e: &E2e, passphrase: &str) -> String {
+    let copy = e2e.dir.path().join("id_e2e_vault_encrypted");
+    std::fs::copy(&e2e.key, &copy).unwrap();
+    let mut command = std::process::Command::new("ssh-keygen");
+    command
+        .args(["-q", "-p", "-N", passphrase, "-f"])
+        .arg(&copy);
+    let output = run_command(command, Duration::from_secs(30));
+    assert!(output.status.success(), "ssh-keygen -p failed");
+    let text = std::fs::read_to_string(&copy).unwrap();
+    std::fs::remove_file(&copy).unwrap();
+    assert!(text.contains("OPENSSH PRIVATE KEY"));
+    text
+}
+
+/// An encrypted key and its passphrase, both saved in the vault, log the key
+/// user in on the built-in engine: no dialog (neither for the passphrase nor
+/// for the host), no key file on disk, and the key text never appears in the
+/// terminal. The config's own `IdentityFile` is gone, so only the vault key
+/// can have worked.
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn stored_encrypted_key_and_passphrase_log_in_on_the_built_in_engine() {
+    let e2e = E2e::new();
+    let h = start(&e2e, EngineKind::Russh).await;
+    let host = endpoint_host("E2E encrypted key host", "keyuser");
+    h.save(&host).await;
+    let key = encrypted_key(&e2e, "e2e vault passphrase");
+    std::fs::remove_file(&e2e.key).expect("remove the config's key file");
+    h.link
+        .request(
+            "secrets.set",
+            json!({
+                "host_id": host.id,
+                "private_key": key,
+                "passphrase": "e2e vault passphrase",
+            }),
+        )
+        .await
+        .expect("secrets.set");
+
+    let (seen, sink) = collector();
+    let id = h
+        .link
+        .open_session(Some(&host.id), 100, 30, sink)
+        .await
+        .expect("session.open");
+    h.link
+        .write_session(&id, "echo e2e-vault-$(id -un)\r")
+        .unwrap();
+    eventually("the key user's shell", || {
+        text(&seen).contains("e2e-vault-keyuser")
+    })
+    .await;
+    assert!(
+        h.client.asks.lock().unwrap().is_empty(),
+        "a saved passphrase must not raise a dialog: {:?}",
+        h.client.asks.lock().unwrap()
+    );
+    assert!(key_files(&h.runtime).is_empty());
+    assert!(!text(&seen).contains("e2e vault passphrase"));
+    assert!(!text(&seen).contains("PRIVATE KEY"));
+    // Nothing under the test directory holds the key either.
+    let body = key.lines().nth(1).unwrap().to_owned();
+    assert!(
+        files_containing(e2e.dir.path(), &body).is_empty(),
+        "{:?}",
+        files_containing(e2e.dir.path(), &body)
+    );
+    h.link.write_session(&id, "exit\r").unwrap();
+    h.link.close_session(&id);
+    h.stop().await;
+}
+
+/// Without a saved passphrase the encrypted vault key asks the user, once,
+/// and the answer unlocks it.
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn stored_encrypted_key_without_a_passphrase_asks_for_it() {
+    let e2e = E2e::new();
+    let h = start(&e2e, EngineKind::Russh).await;
+    h.client.set_password(Some("e2e vault passphrase"));
+    let host = endpoint_host("E2E encrypted key host", "keyuser");
+    h.save(&host).await;
+    let key = encrypted_key(&e2e, "e2e vault passphrase");
+    std::fs::remove_file(&e2e.key).expect("remove the config's key file");
+    h.link
+        .request(
+            "secrets.set",
+            json!({"host_id": host.id, "private_key": key}),
+        )
+        .await
+        .expect("secrets.set");
+
+    let (seen, sink) = collector();
+    let id = h
+        .link
+        .open_session(Some(&host.id), 100, 30, sink)
+        .await
+        .expect("session.open");
+    h.link
+        .write_session(&id, "echo e2e-vault-$(id -un)\r")
+        .unwrap();
+    eventually("the key user's shell", || {
+        text(&seen).contains("e2e-vault-keyuser")
+    })
+    .await;
+    let asks = h.client.asks.lock().unwrap().clone();
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    assert_eq!(asks[0].kind.as_deref(), Some("passphrase"));
+    h.link.write_session(&id, "exit\r").unwrap();
+    h.link.close_session(&id);
+    h.stop().await;
+}
+
+/// Every file under `dir` that contains `needle`.
+fn files_containing(dir: &Path, needle: &str) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                if bytes.windows(needle.len()).any(|w| w == needle.as_bytes()) {
+                    found.push(path);
+                }
+            }
+        }
+    }
+    found
 }

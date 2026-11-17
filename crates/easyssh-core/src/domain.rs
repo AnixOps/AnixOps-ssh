@@ -33,7 +33,8 @@ pub struct AppConfig {
     pub sync: SyncPreferences,
     #[serde(default)]
     pub experimental: ExperimentalFeatures,
-    /// Which SSH engine runs new sessions. Absent means `openssh`.
+    /// Which SSH engine runs new sessions. Absent means `russh`: the built-in
+    /// engine is the default, and OpenSSH is an explicit choice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_engine: Option<SshEngine>,
     #[serde(default)]
@@ -44,11 +45,13 @@ pub struct AppConfig {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SshEngine {
-    /// The system `ssh` binary (today's behaviour).
-    #[default]
+    /// The system `ssh` binary. An advanced, per-installation choice kept
+    /// for compatibility; it gets fixes only.
     Openssh,
     /// The built-in russh engine inside the daemon, with OpenSSH as the
-    /// fallback for hosts that need features it does not support.
+    /// fallback for hosts that need features it does not support. The
+    /// default, also for installs that never chose an engine.
+    #[default]
     Russh,
 }
 
@@ -334,6 +337,32 @@ pub enum Locale {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_built_in_engine_is_the_default_unless_openssh_was_chosen() {
+        assert_eq!(SshEngine::default(), SshEngine::Russh);
+        // A configuration that never mentions an engine follows the default.
+        let config: AppConfig = serde_json::from_str(
+            r#"{"schema_version":7,"connections":[],"groups":[],"recent_connection_ids":[],
+                "snippets":[],"tunnels":[],"workspace":"home","theme":"system","locale":"system"}"#,
+        )
+        .unwrap();
+        assert_eq!(config.ssh_engine, None);
+        assert_eq!(config.ssh_engine.unwrap_or_default(), SshEngine::Russh);
+        // An explicit choice of OpenSSH is kept, and is not written when unset.
+        let chosen = AppConfig {
+            ssh_engine: Some(SshEngine::Openssh),
+            ..AppConfig::new()
+        };
+        let text = serde_json::to_string(&chosen).unwrap();
+        assert!(text.contains(r#""ssh_engine":"openssh""#), "{text}");
+        let back: AppConfig = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.ssh_engine.unwrap_or_default(), SshEngine::Openssh);
+        assert!(!serde_json::to_string(&AppConfig::new())
+            .unwrap()
+            .contains("ssh_engine"));
+    }
+
     #[test]
     fn experimental_features_default_to_off() {
         let features = ExperimentalFeatures::default();

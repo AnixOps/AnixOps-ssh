@@ -284,6 +284,15 @@ impl Daemon {
         let secrets = Arc::new(VaultSecrets::new(vault.clone(), access));
         askpass.set_answers(secrets.clone());
         engine.set_secrets(secrets);
+        match engine.set_store(store.clone()) {
+            Ok(0) => {}
+            Ok(count) => log.info(&format!(
+                "moved {count} host keys of the built-in engine into the database"
+            )),
+            Err(error) => log.error(&format!(
+                "the old known_hosts file was not imported: {error}"
+            )),
+        }
         spawn_auto_lock(&vault, &clients, &log);
         let sync_clients = clients.clone();
         let sync = SyncService::start(

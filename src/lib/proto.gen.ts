@@ -365,7 +365,7 @@ export interface AppConfig {
   experimental?: ExperimentalFeatures;
   telemetry?: TelemetryPreferences;
   /**
-   * Absent means openssh.
+   * Absent means russh (the built-in engine); openssh only when the user chose it.
    */
   ssh_engine?: "openssh" | "russh";
 }

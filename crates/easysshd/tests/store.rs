@@ -220,7 +220,7 @@ async fn another_process_can_use_the_database_while_the_daemon_runs() {
 async fn known_hosts_import_list_remove() {
     let dir = TempDir::new().unwrap();
     // A stand-in for ~/.ssh/known_hosts; the real one is never read.
-    let file = dir.path().join("known_hosts");
+    let file = dir.path().join("user_known_hosts");
     std::fs::write(
         &file,
         format!(

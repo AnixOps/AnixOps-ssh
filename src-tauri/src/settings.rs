@@ -13,7 +13,7 @@ pub struct Settings {
     locale: Locale,
     terminal_font_size: f32,
     terminal_scrollback: usize,
-    /// `openssh` (default) or `russh`.
+    /// `russh` (default, also when never chosen) or `openssh` (advanced).
     #[serde(default)]
     ssh_engine: SshEngine,
     /// `None` until the first-run question was answered.
@@ -71,8 +71,10 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     store
         .set_setting_as("telemetry", &telemetry)
         .map_err(stored)?;
-    // Absent means openssh, so an unchanged default stays out of the store.
-    if settings.ssh_engine != SshEngine::Openssh || load_config()?.ssh_engine.is_some() {
+    // Absent means russh, so an unchanged default stays out of the store:
+    // installs that never chose follow the default, an explicit `openssh`
+    // stays.
+    if settings.ssh_engine != SshEngine::Russh || load_config()?.ssh_engine.is_some() {
         store
             .set_setting_as("ssh_engine", &settings.ssh_engine)
             .map_err(stored)?;

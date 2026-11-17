@@ -22,12 +22,14 @@ mod session;
 mod sftp;
 pub mod socks5;
 
-pub use auth::{load_identity, plan as plan_auth, security_key_type, Stage, StageConfig};
+pub use auth::{
+    decode_identity, load_identity, plan as plan_auth, security_key_type, Stage, StageConfig,
+};
 pub use channels::{ExecOutput, ExitStatus, ShellHandle, ShellOptions};
 pub use error::{AuthMethod, Error, Result};
 pub use forward::{Forward, ForwardKind};
 pub use interaction::{Decision, DenyAll, HostKeyDetails, Interaction, KbdPrompt};
 pub use known_hosts::{KnownHostStatus, KnownHosts, KnownHostsFile, MemoryKnownHosts};
-pub use params::{AgentSource, ConnectParams};
+pub use params::{AgentSource, ConnectParams, MemoryIdentity};
 pub use session::Session;
 pub use sftp::{DirEntry, EntryKind, FileStat, Sftp, SftpFile};

@@ -15,6 +15,7 @@ tokio = { workspace = true, features = ["fs"] }
 tempfile = "3"
 
 [dev-dependencies]
+base64.workspace = true
 portable-pty = "0.9"
 easysshd = { path = "../easysshd" }
 easyssh-crypto = { path = "../easyssh-crypto" }

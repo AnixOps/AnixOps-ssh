@@ -12,6 +12,8 @@ pub enum AuthMethod {
     Agent,
     /// A private key file (the path as configured).
     IdentityFile(std::path::PathBuf),
+    /// A private key the caller handed over in memory (the label names it).
+    StoredKey(String),
     KeyboardInteractive,
     Password,
 }
@@ -22,6 +24,7 @@ impl fmt::Display for AuthMethod {
             AuthMethod::None => f.write_str("none"),
             AuthMethod::Agent => f.write_str("agent"),
             AuthMethod::IdentityFile(path) => write!(f, "identity file {}", path.display()),
+            AuthMethod::StoredKey(label) => write!(f, "saved key {label}"),
             AuthMethod::KeyboardInteractive => f.write_str("keyboard-interactive"),
             AuthMethod::Password => f.write_str("password"),
         }
@@ -111,6 +114,10 @@ pub enum Error {
     /// The Interaction declined to answer (for example no passphrase given).
     #[error("cancelled: {0}")]
     Cancelled(String),
+
+    /// A saved credential cannot be used until its vault is unlocked.
+    #[error("locked: {0}")]
+    Locked(String),
 
     /// The known_hosts store could not be read or written.
     #[error("known_hosts error: {0}")]

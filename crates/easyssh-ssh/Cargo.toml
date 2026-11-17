@@ -17,6 +17,7 @@ sha1 = "0.10"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 tracing = "0.1"
+zeroize = "1"
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -780,7 +780,7 @@
         },
         "ssh_engine": {
           "$ref": "#/$defs/SshEngine",
-          "description": "Absent means openssh."
+          "description": "Absent means russh (the built-in engine); openssh only when the user chose it."
         }
       },
       "required": [
