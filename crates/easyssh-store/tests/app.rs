@@ -135,7 +135,13 @@ fn app_config_roundtrips_through_the_store() {
         name: "uptime".into(),
         content: "uptime".into(),
     });
-    store.save_app_config(&config).unwrap();
+    store.replace_all(&config).unwrap();
+    store.set_setting_as("theme", &config.theme).unwrap();
+    store.set_setting_as("locale", &config.locale).unwrap();
+    store.set_setting_as("terminal", &config.terminal).unwrap();
+    store
+        .set_setting_as("recent_connection_ids", &vec![db.id.clone()])
+        .unwrap();
 
     let loaded = store.load_app_config().unwrap();
     assert_eq!(loaded.connections.len(), 2);
@@ -153,11 +159,12 @@ fn app_config_roundtrips_through_the_store() {
     assert_eq!(loaded.snippets.len(), 1);
 
     // Saving what was loaded changes nothing; dropping a host removes it.
-    store.save_app_config(&loaded).unwrap();
+    store.replace_all(&loaded).unwrap();
+    assert_eq!(store.load_app_config().unwrap().connections.len(), 2);
     let mut smaller = loaded;
     smaller.connections.retain(|c| c.name != "Db");
-    smaller.recent_connection_ids.clear();
-    store.save_app_config(&smaller).unwrap();
+    store.replace_all(&smaller).unwrap();
+    store.remove_host(&db.id).unwrap();
     let again = store.load_app_config().unwrap();
     assert_eq!(again.connections.len(), 1);
     assert_eq!(again.connections[0].name, "Web");
@@ -174,9 +181,9 @@ fn removing_a_host_drops_it_from_the_recent_list() {
     let store = open_app_store(&v1(dir.path())).unwrap().store;
     let host = Connection::alias("Web", "web");
     store.save_host(&host, None).unwrap();
-    let mut config = store.load_app_config().unwrap();
-    config.recent_connection_ids = vec![host.id.clone()];
-    store.save_app_config(&config).unwrap();
+    store
+        .set_setting_as("recent_connection_ids", &vec![host.id.clone()])
+        .unwrap();
     assert!(store.remove_host(&host.id).unwrap());
     assert!(store
         .load_app_config()
@@ -184,4 +191,129 @@ fn removing_a_host_drops_it_from_the_recent_list() {
         .recent_connection_ids
         .is_empty());
     assert!(!store.remove_host("unknown").unwrap());
+}
+
+/// The bug this guards against: the in-process path loads the configuration,
+/// the daemon saves a host, then the in-process path saves a snippet. Saving
+/// the whole configuration back removed the new host.
+#[test]
+fn saving_a_snippet_from_a_stale_config_keeps_a_host_the_daemon_added() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = open_app_store(&v1(dir.path())).unwrap().store;
+    let daemon = open_app_store(&v1(dir.path())).unwrap().store;
+    let old = Connection::alias("Old", "old");
+    app.save_host(&old, None).unwrap();
+
+    let stale = app.load_app_config().unwrap();
+    let added = Connection::alias("Added", "added");
+    daemon.save_host(&added, None).unwrap();
+
+    let snippet = CommandSnippet {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: "uptime".into(),
+        content: "uptime".into(),
+    };
+    app.save_snippet(&snippet).unwrap();
+    // The other section savers and an import merge leave hosts alone too.
+    let mut sync = stale.sync.clone();
+    sync.branch = Some("dev".into());
+    app.save_sync_preferences(&sync).unwrap();
+    app.upsert_records(&stale).unwrap();
+
+    let names: Vec<_> = daemon
+        .load_app_config()
+        .unwrap()
+        .connections
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(names.contains(&"Added".to_owned()));
+    let loaded = app.load_app_config().unwrap();
+    assert_eq!(loaded.snippets.len(), 1);
+    assert_eq!(loaded.sync.branch.as_deref(), Some("dev"));
+
+    assert!(app.remove_snippet(&snippet.id).unwrap());
+    assert!(app.load_app_config().unwrap().snippets.is_empty());
+
+    // Only an explicit replace_all drops what the config does not list.
+    app.replace_all(&stale).unwrap();
+    let names: Vec<_> = app
+        .load_app_config()
+        .unwrap()
+        .connections
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    assert_eq!(names, ["Old"]);
+}
+
+/// Every field of a `Connection` survives save and load. A field added to
+/// `Connection` later must be set here too: the check below fails on any
+/// field still at its empty value, so a column that was forgotten (and reads
+/// back as a default) cannot go unnoticed.
+#[test]
+fn a_connection_with_every_field_set_roundtrips() {
+    use easyssh_core::{ConnectionTarget, TerminalPreferences};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = open_app_store(&v1(dir.path())).unwrap().store;
+    let group = Group {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: "Prod".into(),
+        color: None,
+        parent_id: None,
+    };
+    let mut full = Connection::alias("Full", "ignored");
+    full.target = ConnectionTarget::Endpoint {
+        hostname: "full.example.com".into(),
+        username: Some("deploy".into()),
+        port: 2222,
+    };
+    full.group_id = Some(group.id.clone());
+    full.tags = vec!["db".into(), "prod".into()];
+    full.favorite = true;
+    full.color = Some("#aabbcc".into());
+    full.notes = "rotate keys".into();
+    full.proxy_jump = Some("bastion".into());
+    full.local_forwards = vec!["8080:localhost:80".into()];
+    full.remote_forwards = vec!["9090:localhost:90".into()];
+    full.dynamic_forwards = vec!["1080".into()];
+    full.remote_command = Some("tmux attach".into());
+    full.local_directories = vec!["/home/me/work".into()];
+    full.remote_directories = vec!["/srv/app".into()];
+    full.terminal = TerminalPreferences {
+        font_size: 17.0,
+        scrollback_lines: 54_321,
+        startup_command: Some("cd /srv".into()),
+    };
+
+    // No field may still be at its empty value (null, false, 0, "", []).
+    let json = serde_json::to_value(&full).unwrap();
+    for (key, value) in json.as_object().unwrap() {
+        let empty = match value {
+            serde_json::Value::Null => true,
+            serde_json::Value::Bool(b) => !b,
+            serde_json::Value::String(s) => s.is_empty(),
+            serde_json::Value::Array(a) => a.is_empty(),
+            serde_json::Value::Number(n) => n.as_f64() == Some(0.0),
+            serde_json::Value::Object(o) => o.is_empty(),
+        };
+        assert!(!empty, "set `{key}` in this test so it is checked");
+    }
+
+    store.save_host(&full, Some(&group)).unwrap();
+    let loaded = store
+        .load_app_config()
+        .unwrap()
+        .connections
+        .into_iter()
+        .find(|c| c.id == full.id)
+        .unwrap();
+    let mut expected = serde_json::to_value(&full).unwrap();
+    let got = serde_json::to_value(&loaded).unwrap();
+    // The store stamps its own update time and keeps millisecond precision.
+    expected["updated_at"] = got["updated_at"].clone();
+    expected["created_at"] = got["created_at"].clone();
+    assert_eq!(got, expected);
 }

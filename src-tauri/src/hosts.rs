@@ -239,12 +239,6 @@ pub(crate) fn load_config() -> Result<AppConfig, String> {
         .map_err(|error| error.to_string())
 }
 
-pub(crate) fn save_config(config: &AppConfig) -> Result<(), String> {
-    open_store()?
-        .save_app_config(config)
-        .map_err(|error| error.to_string())
-}
-
 /// The daemon cannot be reached right now: use the database directly.
 pub(crate) fn daemon_down(error: &LinkError) -> bool {
     matches!(error.code.as_str(), "unavailable" | "disconnected")
