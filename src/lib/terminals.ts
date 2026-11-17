@@ -3,6 +3,8 @@ export interface TerminalTarget {
   /** Pastes text (bracketed when the shell asks for it); `run` presses Enter after. */
   send(text: string, run: boolean): void;
   connected(): boolean;
+  /** Ends the tab's session (closing the tab); unmounting alone only detaches. */
+  close(): void;
 }
 
 const terminals = new Map<string, TerminalTarget>();

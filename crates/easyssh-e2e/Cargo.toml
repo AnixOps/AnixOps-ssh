@@ -16,3 +16,6 @@ tempfile = "3"
 
 [dev-dependencies]
 portable-pty = "0.9"
+easysshd = { path = "../easysshd" }
+serde_json.workspace = true
+tokio.workspace = true
