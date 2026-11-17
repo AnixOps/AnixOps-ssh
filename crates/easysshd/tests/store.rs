@@ -59,7 +59,13 @@ async fn start(root: &Path) -> Running {
         idle_timeout: Duration::from_secs(600),
     };
     let daemon = Daemon::new(cfg).await.unwrap();
-    let runtime = root.join("run");
+    // A runtime directory per daemon: a Windows named pipe of a daemon that
+    // just stopped may not be reusable at once.
+    static STARTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let runtime = root.join(format!(
+        "run{}",
+        STARTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    ));
     let server = Server::start_service(&runtime, daemon.clone()).unwrap();
     let (stop, rx) = oneshot::channel();
     let task = tokio::spawn(async move {
