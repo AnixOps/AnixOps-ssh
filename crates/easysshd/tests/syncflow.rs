@@ -79,21 +79,40 @@ fn fast() -> SyncOptions {
     SyncOptions {
         kdf: KdfParams::insecure_for_tests(),
         // Background syncing is exercised by its own test; the others call
-        // `sync.now` so that they are deterministic.
+        // `sync.now` so that they are deterministic (a debounced background
+        // run after a save would merge before the test's own sync does).
         interval: Duration::from_secs(3600),
-        debounce: Duration::from_millis(40),
+        debounce: Duration::from_secs(3600),
         poll: Duration::from_secs(3600),
     }
 }
 
+/// The same, with the debounced sync after a local change switched on.
+fn background() -> SyncOptions {
+    SyncOptions {
+        debounce: Duration::from_millis(40),
+        ..fast()
+    }
+}
+
 async fn start(root: &Path, keys: Arc<MemoryKeyStore>) -> Device {
+    start_with(root, "run", keys, fast()).await
+}
+
+/// A daemon over the data in `root`, with its IPC files in `root/<run>`.
+async fn start_with(
+    root: &Path,
+    run: &str,
+    keys: Arc<MemoryKeyStore>,
+    options: SyncOptions,
+) -> Device {
     let cfg = DaemonConfig {
         config_store: ConfigStore::at(root.join("connections.json")),
         local_shell: Some("/bin/sh".into()),
         scrollback_bytes: 1 << 20,
         idle_timeout: Duration::from_secs(600),
     };
-    let runtime = root.join("run");
+    let runtime = root.join(run);
     let vault = Arc::new(Vault::with_kdf(
         keys.clone(),
         KdfParams::insecure_for_tests(),
@@ -103,7 +122,7 @@ async fn start(root: &Path, keys: Arc<MemoryKeyStore>) -> Device {
         runtime_dir: Some(runtime.clone()),
         vault: Some(vault),
         askpass_helper: Some("/nonexistent/askpass-helper".into()),
-        sync: fast(),
+        sync: options,
         ..DaemonExtras::default()
     };
     private_dir(&runtime);
@@ -671,7 +690,9 @@ async fn the_account_survives_a_restart_and_the_database_holds_no_plaintext() {
 
     // A new daemon over the same device key is still signed in and syncs on
     // its own at start.
-    let a = start(&root, keys).await;
+    // Another runtime directory: on Windows the first daemon's pipe can linger
+    // for a moment after it stopped.
+    let a = start_with(&root, "run2", keys, fast()).await;
     let status = a.call("sync.status", json!({})).await.unwrap();
     assert_eq!(status["signed_in"], true);
     assert_eq!(status["username"], "ann");
@@ -690,8 +711,14 @@ async fn the_account_survives_a_restart_and_the_database_holds_no_plaintext() {
 async fn a_local_change_is_pushed_in_the_background() {
     let server = start_server().await;
     let dir = tempfile::tempdir().unwrap();
-    let a = new_device(&dir, "a").await;
-    let b = new_device(&dir, "b").await;
+    let mut devices = Vec::new();
+    for name in ["a", "b"] {
+        let root = dir.path().join(name);
+        std::fs::create_dir_all(&root).unwrap();
+        devices.push(start_with(&root, "run", Arc::new(MemoryKeyStore::new()), background()).await);
+    }
+    let b = devices.pop().unwrap();
+    let a = devices.pop().unwrap();
     a.signup(&server.url, "ann").await;
     b.signin(&server.url, "ann", "b").await;
 
