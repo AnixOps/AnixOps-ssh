@@ -16,7 +16,7 @@ import { t } from "@/lib/i18n";
 
 type Busy = "export" | "import" | "push" | "pull" | "setup" | null;
 
-/** Export, import and Git sync; `onChanged` reloads hosts after an import or pull. */
+/** Export, import and backup to a Git folder; `onChanged` reloads hosts after an import or pull. */
 export function BackupSync({ onChanged }: { onChanged: () => void }) {
   const [sync, setSync] = useState<SyncState | null>(null);
   const [busy, setBusy] = useState<Busy>(null);

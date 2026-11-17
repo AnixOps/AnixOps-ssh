@@ -38,7 +38,8 @@ current 1.x app.
 | **Tunnels** | Local, remote and SOCKS forwards, one switch each, with live status. |
 | **Command palette** | Hosts, snippets, tunnels and actions in one search box. |
 | **Import from other clients** | Bring in hosts from `~/.ssh/config` (with `Include`), PuTTY, SecureCRT, MobaXterm, Xshell, FinalShell, Termius or CSV. Review them first, choose a group and what to do with duplicates; nothing you have is removed. Passwords and keys are never imported. |
-| **Backup and sync** | Export and import hosts, or keep them in a Git repository. Never includes passwords or keys. |
+| **Sync and team vaults** | Keep hosts, groups, snippets, tunnels and known hosts in step across your devices through your own [easyssh-server](crates/easyssh-server/README.md), end-to-end encrypted. Share a vault with a team after comparing safety numbers. See [Sync](#sync-and-team-vaults). |
+| **Backup** | Export and import hosts, or back them up to a Git repository. Never includes passwords or keys. |
 | **Design** | [AnixOps Design](https://github.com/AnixOps/AnixOps-design): light, dark or system theme; Chinese and English. |
 
 <table>
@@ -141,8 +142,47 @@ prompt jumps above. What the scripts do and the sequence format are in
   extra options or commands are rejected.
 - `SSH_ASKPASS` prompts reach the app over a loopback socket guarded by a
   random token. Answers are passed to OpenSSH and dropped.
-- Export files and Git sync carry hosts, groups, snippets and tunnels only.
-  Git authentication is left to the system `git`.
+- Export files and the Git backup carry hosts, groups, snippets and tunnels
+  only. Git authentication is left to the system `git`.
+- Sync never carries saved passwords, private keys or key passphrases (they
+  stay in the local vault), and the server only ever holds ciphertext. See
+  [Sync and team vaults](#sync-and-team-vaults).
+
+## Sync and team vaults
+
+Settings › Sync connects the app to an `easyssh-server` that you run (see
+[crates/easyssh-server](crates/easyssh-server/README.md)). The server URL must
+be `https`; plain `http` is accepted only for this machine, for testing.
+
+- **Sign up or sign in** with a server URL, an account name and an account
+  passphrase. The passphrase is stretched with Argon2id on this device and
+  never sent or stored. The account keys and the session token are kept
+  encrypted with the vault's device key, so you do not type it again. If you
+  forget the passphrase the data cannot be recovered.
+- **What syncs**: hosts, groups, snippets, tunnels and known hosts. Every
+  record is encrypted before it leaves the device and signed by the device.
+  Two devices that edit different fields of one host are merged field by
+  field; if both change the same field, the later edit wins and the other
+  value stays in the host's **History** (host editor), where **Restore** puts
+  it back as an ordinary edit.
+- **What never syncs**: saved passwords, private keys, key passphrases and
+  secret notes.
+- **When**: on start, two minutes apart, and shortly after a local change.
+  **Sync now** runs one at once. The status line shows the last success and the
+  last error. A revoked device (Settings › Sync › Devices) can no longer push
+  or pull.
+- **Team vaults** (the people icon in the sidebar): create a shared vault, add
+  members as owner, editor or viewer, and move hosts into it from the host
+  editor. Before someone is added you both read the **safety number** (twelve
+  groups of five digits derived from their public keys); add them only when the
+  numbers are identical, over a channel you trust. If their keys later change
+  the member is shown as "Keys changed".
+- **Known limits**: removing a member does not rotate the vault key, so what
+  they already synced stays with them (create a new vault and move the hosts if
+  that matters). A new device needs the account passphrase. When a token has
+  expired you sign in again.
+- **Backup to Git** (Settings › Backup) is the former Git sync, kept as an
+  export and import target. It is not a sync channel.
 
 ## Privacy
 

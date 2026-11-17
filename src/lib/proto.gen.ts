@@ -114,6 +114,13 @@ export type ImportDuplicatePolicy = "skip" | "update" | "keep-both";
  * via the `definition` "ImportGroupMode".
  */
 export type ImportGroupMode = "source" | "none" | "existing";
+/**
+ * `locked`: signed in, but the vault is locked, so the account secrets cannot be opened yet.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SyncState".
+ */
+export type SyncState = "signed_out" | "idle" | "syncing" | "error" | "locked";
 
 /**
  * Entities (v1 shapes), envelopes and the starting command/event set.
@@ -1050,4 +1057,352 @@ export interface AskpassUnbindParams {
  */
 export interface VaultChangedEvent {
   unlocked: boolean;
+}
+/**
+ * What the last sync run did.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SyncCounts".
+ */
+export interface SyncCounts {
+  pulled: number;
+  pushed: number;
+  merged: number;
+  /**
+   * Same-field conflicts a merge decided; the losing value is in the record's history.
+   */
+  resolved: number;
+}
+/**
+ * The sync state. No secret is ever part of it. Reply of `sync.status`, `sync.signup`, `sync.signin`, `sync.signout` and `sync.now`, and payload of event `sync.state`.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SyncStatus".
+ */
+export interface SyncStatus {
+  signed_in: boolean;
+  state: SyncState;
+  server_url: string | null;
+  username: string | null;
+  device_name: string | null;
+  device_id: string | null;
+  /**
+   * This account's safety number: twelve groups of five digits. Members compare it with what they see for you.
+   */
+  fingerprint: string | null;
+  /**
+   * RFC 3339.
+   */
+  last_sync_at: string | null;
+  last_error: string | null;
+  last_error_code: string | null;
+  /**
+   * Records waiting to be pushed.
+   */
+  pending: number;
+  last: SyncCounts;
+}
+/**
+ * Command `sync.status` payload. Reply: SyncStatus.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SyncStatusParams".
+ */
+export interface SyncStatusParams {}
+/**
+ * Command `sync.signup` payload: create an account on the server (OPAQUE registration), create the personal vault and enroll this device. Reply: SyncStatus.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SyncSignupParams".
+ */
+export interface SyncSignupParams {
+  /**
+   * https://, or http:// only for a loopback address.
+   */
+  server_url: string;
+  username: string;
+  /**
+   * Stretched on this device with Argon2id; never sent and never stored.
+   */
+  passphrase: string;
+  /**
+   * How this device appears in the device list; defaults to the host name.
+   */
+  device_name?: string;
+}
+/**
+ * Command `sync.signin` payload: sign in to an existing account on this device (OPAQUE login, unwrap the account keys, enroll this device with an account-signed certificate). Reply: SyncStatus. Fails with `wrong_passphrase`.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SyncSigninParams".
+ */
+export interface SyncSigninParams {
+  /**
+   * https://, or http:// only for a loopback address.
+   */
+  server_url: string;
+  username: string;
+  /**
+   * Stretched on this device with Argon2id; never sent and never stored.
+   */
+  passphrase: string;
+  /**
+   * How this device appears in the device list; defaults to the host name.
+   */
+  device_name?: string;
+}
+/**
+ * Command `sync.signout` payload: end the session, revoke nothing, forget the account keys and sync bookkeeping on this device. Hosts stay. Reply: SyncStatus.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SyncSignoutParams".
+ */
+export interface SyncSignoutParams {}
+/**
+ * Command `sync.now` payload: pull and push now. Reply: SyncStatus.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SyncNowParams".
+ */
+export interface SyncNowParams {}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SyncDevice".
+ */
+export interface SyncDevice {
+  device_id: string;
+  name: string;
+  /**
+   * Unix seconds.
+   */
+  created_at: number;
+  revoked: boolean;
+  this_device: boolean;
+}
+/**
+ * Command `sync.devices.list` payload. Reply: SyncDevicesListResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SyncDevicesListParams".
+ */
+export interface SyncDevicesListParams {}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SyncDevicesListResult".
+ */
+export interface SyncDevicesListResult {
+  devices: SyncDevice[];
+}
+/**
+ * Command `sync.devices.revoke` payload: the server stops accepting pushes from that device and ends its sessions. Reply: null. The current device cannot be revoked.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SyncDevicesRevokeParams".
+ */
+export interface SyncDevicesRevokeParams {
+  device_id: string;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultInfo".
+ */
+export interface VaultInfo {
+  id: string;
+  name: string;
+  kind: "personal" | "team";
+  /**
+   * The signed-in account's role in a team vault.
+   */
+  role: string | null;
+}
+/**
+ * Command `vaults.list` payload. Reply: VaultsListResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultsListParams".
+ */
+export interface VaultsListParams {}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultsListResult".
+ */
+export interface VaultsListResult {
+  vaults: VaultInfo[];
+}
+/**
+ * Command `vault.create_shared` payload: create a team vault on the server; the caller is its owner. Reply: VaultInfo.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultCreateSharedParams".
+ */
+export interface VaultCreateSharedParams {
+  name: string;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultMember".
+ */
+export interface VaultMember {
+  account_id: string;
+  username: string;
+  role: "owner" | "editor" | "viewer";
+  /**
+   * Safety number of the member's account keys.
+   */
+  fingerprint: string;
+  /**
+   * `confirmed`: a person compared the fingerprint when adding the member; `unconfirmed`: first seen from the server; `changed`: the keys differ from the pinned ones, and this member's records are refused.
+   */
+  trust: "self" | "confirmed" | "unconfirmed" | "changed";
+}
+/**
+ * Command `vault.members.list` payload. Reply: VaultMembersListResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultMembersListParams".
+ */
+export interface VaultMembersListParams {
+  vault_id: string;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultMembersListResult".
+ */
+export interface VaultMembersListResult {
+  members: VaultMember[];
+}
+/**
+ * Command `vault.members.lookup` payload: look an account up and compute its fingerprint, to show before adding. Reply: VaultMembersLookupResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultMembersLookupParams".
+ */
+export interface VaultMembersLookupParams {
+  username: string;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultMembersLookupResult".
+ */
+export interface VaultMembersLookupResult {
+  account_id: string;
+  username: string;
+  fingerprint: string;
+}
+/**
+ * Command `vault.members.add` payload (owner only): seal the vault key to the member and add them. Reply: VaultMember.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultMembersAddParams".
+ */
+export interface VaultMembersAddParams {
+  vault_id: string;
+  username: string;
+  role: "owner" | "editor" | "viewer";
+  /**
+   * The fingerprint the person compared. The daemon looks the account up again and refuses (`fingerprint_mismatch`) when the keys changed.
+   */
+  fingerprint: string;
+}
+/**
+ * Command `vault.members.remove` payload (owner only). The vault key is not rotated yet. Reply: null.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultMembersRemoveParams".
+ */
+export interface VaultMembersRemoveParams {
+  vault_id: string;
+  account_id: string;
+}
+/**
+ * Command `vault.members.role` payload (owner only). Reply: null.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultMembersRoleParams".
+ */
+export interface VaultMembersRoleParams {
+  vault_id: string;
+  account_id: string;
+  role: "owner" | "editor" | "viewer";
+}
+/**
+ * Command `hosts.move_vault` payload: move a host into another vault. The host gets a new id (a record never changes vault); its tunnels follow. Reply: HostsMoveVaultResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostsMoveVaultParams".
+ */
+export interface HostsMoveVaultParams {
+  id: string;
+  vault_id: string;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostsMoveVaultResult".
+ */
+export interface HostsMoveVaultResult {
+  id: string;
+}
+/**
+ * A value of one host field that an edit or a merge replaced.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostHistoryEntry".
+ */
+export interface HostHistoryEntry {
+  seq: number;
+  field: string;
+  /**
+   * Any JSON value.
+   */
+  value: unknown;
+  /**
+   * RFC 3339.
+   */
+  changed_at: string;
+  device: string;
+}
+/**
+ * Command `hosts.history` payload. Reply: HostsHistoryResult (newest first; secrets are never listed).
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostsHistoryParams".
+ */
+export interface HostsHistoryParams {
+  id: string;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostsHistoryResult".
+ */
+export interface HostsHistoryResult {
+  entries: HostHistoryEntry[];
+}
+/**
+ * Command `hosts.history_restore` payload: put one old value back, as an ordinary edit that syncs. Reply: null.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostsHistoryRestoreParams".
+ */
+export interface HostsHistoryRestoreParams {
+  id: string;
+  seq: number;
+}
+/**
+ * Command `hosts.vaults` payload. Reply: HostsVaultsResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostsVaultsParams".
+ */
+export interface HostsVaultsParams {}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostsVaultsResult".
+ */
+export interface HostsVaultsResult {
+  /**
+   * Host id to vault id, for the hosts that are not in the personal vault.
+   */
+  host_vaults: {
+    [k: string]: string;
+  };
 }
