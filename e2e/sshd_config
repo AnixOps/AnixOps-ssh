@@ -1,0 +1,23 @@
+# TEST ONLY.
+Port 22
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_rsa_key
+UsePAM yes
+PermitRootLogin no
+PrintMotd no
+AllowTcpForwarding yes
+Subsystem sftp /usr/lib/openssh/sftp-server
+
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+
+# pwuser: password only.
+Match User pwuser
+    PasswordAuthentication yes
+    PubkeyAuthentication no
+
+# keyuser: public key only.
+Match User keyuser
+    PasswordAuthentication no
+    PubkeyAuthentication yes

@@ -1,0 +1,21 @@
+[package]
+name = "easyssh-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "JSON Schema contract between the EasySSH daemon and UI, with generated Rust types and validation"
+
+[dependencies]
+chrono.workspace = true
+jsonschema = { version = "0.61", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+easyssh-core = { path = "../easyssh-core" }
+prettyplease = "0.2"
+schemars = "0.8"
+syn = "2"
+typify = "0.10"

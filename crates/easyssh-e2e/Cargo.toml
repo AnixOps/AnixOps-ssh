@@ -1,0 +1,15 @@
+[package]
+name = "easyssh-e2e"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "End-to-end tests that run the OpenSSH orchestration against real servers in Docker"
+
+[dependencies]
+easyssh-core = { path = "../easyssh-core" }
+tempfile = "3"
+
+[dev-dependencies]
+portable-pty = "0.9"

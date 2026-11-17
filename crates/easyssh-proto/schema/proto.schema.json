@@ -1,0 +1,1157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AnixOps/EasySSH/crates/easyssh-proto/schema/proto.schema.json",
+  "title": "EasySSH protocol",
+  "description": "Entities (v1 shapes), envelopes and the starting command/event set.",
+  "$defs": {
+    "TerminalPreferences": {
+      "type": "object",
+      "properties": {
+        "font_size": {
+          "type": "number"
+        },
+        "scrollback_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "startup_command": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "font_size",
+        "scrollback_lines",
+        "startup_command"
+      ],
+      "additionalProperties": false,
+      "description": "Terminal defaults. Rust: domain::TerminalPreferences."
+    },
+    "ConnectionTarget": {
+      "description": "Rust: domain::ConnectionTarget, internally tagged by `kind`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "alias"
+            },
+            "alias": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "alias"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "endpoint"
+            },
+            "hostname": {
+              "type": "string"
+            },
+            "username": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            }
+          },
+          "required": [
+            "kind",
+            "hostname",
+            "username",
+            "port"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Connection": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/ConnectionTarget"
+        },
+        "group_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "favorite": {
+          "type": "boolean"
+        },
+        "color": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notes": {
+          "type": "string"
+        },
+        "proxy_jump": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "local_forwards": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remote_forwards": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dynamic_forwards": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remote_command": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "local_directories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remote_directories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "terminal": {
+          "$ref": "#/$defs/TerminalPreferences"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "target",
+        "group_id",
+        "tags",
+        "favorite",
+        "color",
+        "notes",
+        "proxy_jump",
+        "local_forwards",
+        "remote_forwards",
+        "dynamic_forwards",
+        "remote_command",
+        "local_directories",
+        "remote_directories",
+        "terminal",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": false,
+      "description": "A saved host. Rust: domain::Connection. `proxy_jump` is the v1 jump host (OpenSSH ProxyJump spec)."
+    },
+    "Group": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "color": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parent_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "color"
+      ],
+      "additionalProperties": false,
+      "description": "Rust: domain::Group. `parent_id` has serde(default), so it is optional."
+    },
+    "CommandSnippet": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "content"
+      ],
+      "additionalProperties": false,
+      "description": "Rust: domain::CommandSnippet."
+    },
+    "TunnelKind": {
+      "type": "string",
+      "enum": [
+        "local",
+        "remote",
+        "dynamic"
+      ],
+      "description": "Rust: tunnel::TunnelKind (-L, -R, -D)."
+    },
+    "Tunnel": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/TunnelKind"
+        },
+        "bind_address": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bind_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "target_host": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_port": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "host_id",
+        "kind",
+        "bind_address",
+        "bind_port",
+        "target_host",
+        "target_port"
+      ],
+      "additionalProperties": false,
+      "description": "Rust: tunnel::Tunnel."
+    },
+    "SidebarNavigation": {
+      "type": "string",
+      "enum": [
+        "all",
+        "favorites",
+        "recent",
+        "open_ssh_config",
+        "ungrouped"
+      ]
+    },
+    "SidebarPreferences": {
+      "type": "object",
+      "properties": {
+        "width": {
+          "type": "number"
+        },
+        "collapsed_group_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "selected_navigation": {
+          "$ref": "#/$defs/SidebarNavigation"
+        },
+        "selected_tag": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "width",
+        "collapsed_group_ids",
+        "selected_navigation",
+        "selected_tag"
+      ],
+      "additionalProperties": false,
+      "description": "Rust: domain::SidebarPreferences."
+    },
+    "SessionRecord": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "connection_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "launched_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "verbose": {
+          "type": "boolean"
+        },
+        "launched": {
+          "type": "boolean"
+        },
+        "hidden": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "id",
+        "connection_id",
+        "name",
+        "target",
+        "launched_at",
+        "verbose",
+        "launched"
+      ],
+      "additionalProperties": false,
+      "description": "Rust: domain::SessionRecord. `hidden` has serde(default)."
+    },
+    "TransferDirection": {
+      "type": "string",
+      "enum": [
+        "upload",
+        "download"
+      ]
+    },
+    "TransferStatus": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "pending",
+        "authorizing",
+        "transferring",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted"
+      ]
+    },
+    "Transfer": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/TransferDirection"
+        },
+        "local_path": {
+          "type": "string",
+          "description": "PathBuf serialized as a string."
+        },
+        "remote_path": {
+          "type": "string"
+        },
+        "recursive": {
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/TransferStatus"
+        },
+        "started_at": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finished_at": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "direction",
+        "local_path",
+        "remote_path",
+        "recursive",
+        "status",
+        "started_at",
+        "finished_at",
+        "output"
+      ],
+      "additionalProperties": false,
+      "description": "Rust: transfer::Transfer."
+    },
+    "Workspace": {
+      "type": "string",
+      "enum": [
+        "home",
+        "hosts",
+        "transfers",
+        "keys",
+        "settings",
+        "files",
+        "snippets",
+        "forwarding"
+      ],
+      "description": "files/snippets/forwarding are legacy values kept so schema 5 metadata still deserializes."
+    },
+    "Theme": {
+      "type": "string",
+      "enum": [
+        "light",
+        "dark",
+        "system"
+      ]
+    },
+    "Locale": {
+      "type": "string",
+      "enum": [
+        "en",
+        "zh_cn",
+        "system"
+      ]
+    },
+    "DisplayDensity": {
+      "type": "string",
+      "enum": [
+        "compact",
+        "comfortable",
+        "large"
+      ]
+    },
+    "SyncPreferences": {
+      "type": "object",
+      "properties": {
+        "display_name": {
+          "type": "string"
+        },
+        "repository_path": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remote_url": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "branch": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_success_at": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_error": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_snapshot_hash": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "display_name",
+        "repository_path",
+        "remote_url",
+        "branch",
+        "last_success_at",
+        "last_error",
+        "last_snapshot_hash"
+      ],
+      "additionalProperties": false,
+      "description": "Rust: domain::SyncPreferences."
+    },
+    "ExperimentalFeatures": {
+      "type": "object",
+      "properties": {
+        "remote_file_browser": {
+          "type": "boolean",
+          "default": false
+        },
+        "remote_text_editing": {
+          "type": "boolean"
+        },
+        "image_preview": {
+          "type": "boolean"
+        },
+        "dual_pane_file_browsing": {
+          "type": "boolean"
+        },
+        "git_metadata_sync_ui": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "remote_text_editing",
+        "image_preview",
+        "dual_pane_file_browsing",
+        "git_metadata_sync_ui"
+      ],
+      "additionalProperties": false,
+      "description": "Rust: domain::ExperimentalFeatures. `remote_file_browser` has serde(default)."
+    },
+    "AppConfig": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295,
+          "description": "Storage schema of the v1 config file (AppConfig::SCHEMA_VERSION, 7). Unrelated to the protocol SchemaVersion."
+        },
+        "connections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Connection"
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Group"
+          }
+        },
+        "recent_connection_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "snippets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CommandSnippet"
+          }
+        },
+        "tunnels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tunnel"
+          }
+        },
+        "terminal": {
+          "$ref": "#/$defs/TerminalPreferences"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionRecord"
+          }
+        },
+        "transfer_history": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Transfer"
+          }
+        },
+        "workspace": {
+          "$ref": "#/$defs/Workspace"
+        },
+        "theme": {
+          "$ref": "#/$defs/Theme"
+        },
+        "display_density": {
+          "$ref": "#/$defs/DisplayDensity"
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "sidebar": {
+          "$ref": "#/$defs/SidebarPreferences"
+        },
+        "sync": {
+          "$ref": "#/$defs/SyncPreferences"
+        },
+        "experimental": {
+          "$ref": "#/$defs/ExperimentalFeatures"
+        }
+      },
+      "required": [
+        "schema_version",
+        "connections",
+        "groups",
+        "recent_connection_ids",
+        "snippets",
+        "theme",
+        "locale"
+      ],
+      "additionalProperties": false,
+      "description": "The v1 configuration file. Fields with serde(default) in Rust (tunnels, terminal, sessions, transfer_history, workspace, display_density, sidebar, sync, experimental) are optional here; v1 always writes them."
+    },
+    "SchemaVersion": {
+      "const": 1,
+      "type": "integer",
+      "description": "Protocol schema version. Additive changes only within a version."
+    },
+    "ProtoError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false,
+      "description": "Machine-readable code plus a human message."
+    },
+    "Command": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload": {
+          "description": "Shape depends on `kind`; see the *Params definitions.",
+          "tsType": "unknown"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "description": "UI -> daemon request."
+    },
+    "Event": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "payload": {
+          "description": "Shape depends on `kind`; see the *Event definitions.",
+          "tsType": "unknown"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-connection, strictly increasing."
+        }
+      },
+      "required": [
+        "kind",
+        "payload",
+        "seq"
+      ],
+      "additionalProperties": false,
+      "description": "Daemon -> UI notification."
+    },
+    "Reply": {
+      "description": "Answer to the Command with the same id: exactly one of `ok` or `error`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "ok": {
+              "description": "Result payload; shape depends on the command kind.",
+              "tsType": "unknown"
+            }
+          },
+          "required": [
+            "id",
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "error": {
+              "$ref": "#/$defs/ProtoError"
+            }
+          },
+          "required": [
+            "id",
+            "error"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ProtoHelloParams": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "$ref": "#/$defs/SchemaVersion"
+        }
+      },
+      "required": [
+        "schema_version"
+      ],
+      "additionalProperties": false,
+      "description": "Command `proto.hello` payload. Reply: ProtoHelloResult."
+    },
+    "ProtoHelloResult": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "$ref": "#/$defs/SchemaVersion"
+        }
+      },
+      "required": [
+        "schema_version"
+      ],
+      "additionalProperties": false
+    },
+    "HostsListParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `hosts.list` payload. Reply: HostsListResult."
+    },
+    "HostsListResult": {
+      "type": "object",
+      "properties": {
+        "connections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Connection"
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Group"
+          }
+        }
+      },
+      "required": [
+        "connections",
+        "groups"
+      ],
+      "additionalProperties": false
+    },
+    "HostsSaveParams": {
+      "type": "object",
+      "properties": {
+        "connection": {
+          "$ref": "#/$defs/Connection"
+        }
+      },
+      "required": [
+        "connection"
+      ],
+      "additionalProperties": false,
+      "description": "Command `hosts.save` payload. Reply: HostsSaveResult."
+    },
+    "HostsSaveResult": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "HostsDeleteParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `hosts.delete` payload. Reply: null."
+    },
+    "SessionOpenParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cols": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "host_id",
+        "cols",
+        "rows"
+      ],
+      "additionalProperties": false,
+      "description": "Command `session.open` payload. host_id null opens a local shell. Reply: SessionOpenResult."
+    },
+    "SessionOpenResult": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "additionalProperties": false
+    },
+    "SessionWriteParams": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "data": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "data"
+      ],
+      "additionalProperties": false,
+      "description": "Command `session.write` payload. Reply: null."
+    },
+    "SessionResizeParams": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "cols": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "session_id",
+        "cols",
+        "rows"
+      ],
+      "additionalProperties": false,
+      "description": "Command `session.resize` payload. Reply: null."
+    },
+    "SessionCloseParams": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `session.close` payload. Reply: null."
+    },
+    "AskpassReplyParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "answer": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "answer"
+      ],
+      "additionalProperties": false,
+      "description": "Command `askpass.reply` payload. answer null cancels the prompt. Reply: null."
+    },
+    "SessionOutputEvent": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "data": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "data"
+      ],
+      "additionalProperties": false,
+      "description": "Event `session.output` payload."
+    },
+    "SessionExitEvent": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "code": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "code"
+      ],
+      "additionalProperties": false,
+      "description": "Event `session.exit` payload."
+    },
+    "AskpassPromptEvent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "host": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "confirm": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "host",
+        "prompt",
+        "confirm"
+      ],
+      "additionalProperties": false,
+      "description": "Event `askpass.prompt` payload."
+    }
+  }
+}
