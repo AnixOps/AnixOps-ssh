@@ -12,6 +12,8 @@
 //! `SSH_AUTH_SOCK` is removed.
 #![cfg(unix)]
 
+pub mod russh_support;
+
 use easyssh_core::{Connection, OpenSsh, SshInvocation};
 use std::ffi::OsString;
 use std::io::{Read, Write};
