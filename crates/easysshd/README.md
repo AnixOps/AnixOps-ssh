@@ -3,7 +3,7 @@
 The EasySSH desktop daemon: the authenticated local IPC transport (`Server`,
 `Client`) and the services on top of it. Terminal sessions live here, so they
 survive a reload or close of the UI window. The binary
-(`easysshd [--runtime-dir <path>] [--config <connections.json>] [--idle-timeout-secs <n>]`)
+(`easysshd [--runtime-dir <path>] [--config <connections.json>, the v1 file; the database sits beside it] [--idle-timeout-secs <n>]`)
 serves the `easyssh-proto` command set; the app starts the same code from its
 own executable with the hidden `--easysshd` flag.
 
@@ -13,8 +13,16 @@ Every message after the handshake is an `easyssh-proto` `Command`; anything
 that fails `validate_command` is answered with a `ProtoError` (`invalid_command`,
 or `unknown_command` for an unknown kind) and the connection stays open.
 
-- `proto.hello`, `hosts.list|save|delete` (the same `connections.json` as the
-  v1 app, same validation). Every successful `hosts.save` or `hosts.delete`
+- `proto.hello`, `hosts.list|save|delete` (stored in `easyssh.db`, next to
+  where the v1 app kept `connections.json`; same validation). On start the
+  daemon opens the database through `easyssh_store::open_app_store`, which
+  migrates the v1 file once and keeps `connections.v1-backup.json`. The app's
+  in-process fallback calls the same function, so both agree; SQLite runs in
+  WAL mode with a busy timeout, so both may have it open at once.
+  `known_hosts.list|import|remove` expose the store's known hosts table
+  (`import` reads the file at the path the client gives, normally
+  `~/.ssh/known_hosts`; a removed entry returns when the file is imported
+  again). Every successful `hosts.save` or `hosts.delete`
   broadcasts a `hosts.changed` event to all connected clients, so each window
   refreshes its list. `hosts.save` may carry a `group` to create with the host.
 - `session.open|write|resize|close`: a PTY running the system `ssh` exactly as

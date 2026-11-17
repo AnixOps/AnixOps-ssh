@@ -106,8 +106,11 @@ prompt jumps above. What the scripts do and the sequence format are in
 
 ## Security boundary
 
-- Host metadata lives in a local JSON file in the OS configuration
-  directory. Fields that look like secrets are rejected on load and save.
+- Hosts, groups, snippets, tunnels, settings and known host keys live in a
+  local SQLite database (`easyssh.db`) in the OS configuration directory. The
+  first start of 2.0 migrates the v1 `connections.json` into it and keeps a
+  copy as `connections.v1-backup.json`. No passwords are stored; fields that
+  look like secrets are rejected when reading the v1 file.
 - The frontend only receives display data. Every `ssh`, `sftp` and tunnel
   command is built and validated in `easyssh-core`; values that could become
   extra options or commands are rejected.

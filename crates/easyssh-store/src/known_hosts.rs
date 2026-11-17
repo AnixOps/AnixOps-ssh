@@ -6,7 +6,7 @@ use crate::store::{b64, int, opt_text, text, Entity, Field, Fields, Record, Stor
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use rusqlite::types::Value;
-use rusqlite::Row;
+use rusqlite::{OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
@@ -56,6 +56,22 @@ fn derive_port(host: &str) -> u16 {
 }
 
 impl KnownHost {
+    /// The entry as `known_hosts.list` reports it (the protocol's
+    /// `KnownHostEntry`): everything but the key itself.
+    pub fn summary_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "id": self.id,
+            "host": self.host,
+            "port": self.port,
+            "hashed": self.hashed,
+            "marker": self.marker,
+            "key_type": self.key_type,
+            "fingerprint": self.fingerprint,
+            "comment": self.comment,
+            "added_at": self.added_at.to_rfc3339(),
+        })
+    }
+
     /// A key for `host` on `port`, written the way OpenSSH writes it.
     pub fn new(host: &str, port: u16, key_type: &str, key_blob: Vec<u8>) -> Self {
         let host = if port == 22 {
@@ -235,8 +251,8 @@ impl Store {
 
     /// Imports OpenSSH `known_hosts` text. Entries are kept as written: plain
     /// and hashed hosts alike, with markers and comments. Lines already stored
-    /// (same host, key type and key, even if soft-deleted) are counted as
-    /// duplicates; lines that cannot be read are reported in `skipped`.
+    /// (same host, key type and key) are counted as duplicates, except removed
+    /// ones, which are restored; lines that cannot be read are reported in `skipped`.
     pub fn import_known_hosts(&self, text: &str) -> Result<KnownHostsImport> {
         self.in_tx(|| {
             let mut report = KnownHostsImport::default();
@@ -253,15 +269,32 @@ impl Store {
                         continue;
                     }
                 };
-                let exists: i64 = self.conn.query_row(
-                    "SELECT EXISTS (SELECT 1 FROM known_hosts
-                     WHERE vault_id = ?1 AND host = ?2 AND key_type = ?3 AND key_blob = ?4)",
-                    rusqlite::params![self.vault_id, entry.host, entry.key_type, entry.key_blob],
-                    |row| row.get(0),
-                )?;
-                if exists != 0 {
-                    report.duplicates += 1;
-                    continue;
+                let existing: Option<(String, i64)> = self
+                    .conn
+                    .query_row(
+                        "SELECT id, deleted FROM known_hosts
+                         WHERE vault_id = ?1 AND host = ?2 AND key_type = ?3 AND key_blob = ?4",
+                        rusqlite::params![
+                            self.vault_id,
+                            entry.host,
+                            entry.key_type,
+                            entry.key_blob
+                        ],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()?;
+                match existing {
+                    // Removed earlier: importing the line again brings it back.
+                    Some((id, 1)) => {
+                        self.restore_known_host(&id)?;
+                        report.imported += 1;
+                        continue;
+                    }
+                    Some(_) => {
+                        report.duplicates += 1;
+                        continue;
+                    }
+                    None => {}
                 }
                 let mut entry = entry;
                 entry.added_at = now;

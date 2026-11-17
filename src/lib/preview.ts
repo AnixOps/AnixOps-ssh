@@ -1,4 +1,4 @@
-import type { Host, HostFields, HostInput, HostsSnapshot } from "./backend";
+import type { Host, HostFields, HostInput, HostsSnapshot, KnownHost, KnownHostsImport } from "./backend";
 
 /** Mirrors `display_target` and `display_command` in src-tauri/src/hosts.rs. */
 function describe(fields: HostFields): { target: string; command: string } {
@@ -99,4 +99,42 @@ export function previewDeleteHost(id: string): void {
 export function previewSetFavorite(id: string, favorite: boolean): void {
   const host = store.hosts.find((candidate) => candidate.id === id);
   if (host) host.favorite = favorite;
+}
+
+function sampleKnownHost(id: string, host: string, fingerprint: string, comment: string | null = null): KnownHost {
+  return {
+    id,
+    host,
+    port: 22,
+    hashed: false,
+    marker: null,
+    keyType: "ssh-ed25519",
+    fingerprint,
+    comment,
+    addedAt: "2026-01-01T00:00:00+00:00",
+  };
+}
+
+/** Sample known hosts; `?hosts=empty` starts without any. */
+let knownHosts: KnownHost[] =
+  new URLSearchParams(window.location.search).get("hosts") === "empty"
+    ? []
+    : [
+        sampleKnownHost("k1", "prod-web-01", "SHA256:3hL9r0xq2vGkX1uWZc5a8mT7yBnJdQe4FpRsUoVtKiA", "deploy@laptop"),
+        sampleKnownHost("k2", "github.com", "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"),
+      ];
+
+export function previewKnownHosts(): KnownHost[] {
+  return structuredClone(knownHosts);
+}
+
+export function previewImportKnownHosts(): KnownHostsImport {
+  const sample = sampleKnownHost("k3", "home-nas", "SHA256:qT5nD8aVwYb2KcXz0LrHj7mEoUfG1sPiN4tZ9xAeCkI");
+  if (knownHosts.some((entry) => entry.id === sample.id)) return { imported: 0, duplicates: 1, skipped: [] };
+  knownHosts = [...knownHosts, sample];
+  return { imported: 1, duplicates: 0, skipped: [] };
+}
+
+export function previewRemoveKnownHost(id: string): void {
+  knownHosts = knownHosts.filter((entry) => entry.id !== id);
 }

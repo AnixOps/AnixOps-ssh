@@ -3,10 +3,12 @@
 //! SQLite with numbered migrations, typed repositories, sync metadata on every
 //! syncable row (so the future sync lane can merge field by field), secret
 //! fields that only ever reach disk through a [`FieldCipher`], and migration
-//! of the v1 JSON configuration. It is not wired into the app yet.
+//! of the v1 JSON configuration. The app (daemon and in-process fallback) opens it
+//! through [`app::open_app_store`].
 
 #[macro_use]
 mod entities;
+pub mod app;
 pub mod cipher;
 pub mod error;
 mod known_hosts;
@@ -15,6 +17,7 @@ mod migrations;
 mod store;
 mod v1;
 
+pub use app::{db_path_for, is_invalid_input, open_app_store, AppStore, DB_FILE_NAME};
 #[cfg(test)]
 pub use cipher::PlaintextForTests;
 pub use cipher::{CipherError, FieldCipher, NotConfigured};

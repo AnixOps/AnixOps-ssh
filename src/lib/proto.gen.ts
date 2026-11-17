@@ -466,6 +466,88 @@ export interface HostsDeleteParams {
   id: string;
 }
 /**
+ * A stored known_hosts entry. The key itself is not sent, only its fingerprint.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "KnownHostEntry".
+ */
+export interface KnownHostEntry {
+  id: string;
+  /**
+   * The host pattern as stored: a name, `[host]:port`, a comma list, or a `|1|salt|hash` digest when `hashed`.
+   */
+  host: string;
+  port: number;
+  hashed: boolean;
+  /**
+   * `@cert-authority` or `@revoked`.
+   */
+  marker: string | null;
+  key_type: string;
+  /**
+   * `SHA256:...`, as `ssh-keygen -l` prints it.
+   */
+  fingerprint: string;
+  comment: string | null;
+  /**
+   * RFC 3339 timestamp.
+   */
+  added_at: string;
+}
+/**
+ * Command `known_hosts.list` payload. Reply: KnownHostsListResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "KnownHostsListParams".
+ */
+export interface KnownHostsListParams {}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "KnownHostsListResult".
+ */
+export interface KnownHostsListResult {
+  entries: KnownHostEntry[];
+}
+/**
+ * Command `known_hosts.import` payload. Reply: KnownHostsImportResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "KnownHostsImportParams".
+ */
+export interface KnownHostsImportParams {
+  /**
+   * Path of an OpenSSH known_hosts file, read by the daemon. The client picks it (normally `~/.ssh/known_hosts`).
+   */
+  path: string;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "KnownHostsImportResult".
+ */
+export interface KnownHostsImportResult {
+  imported: number;
+  /**
+   * Lines already stored.
+   */
+  duplicates: number;
+  /**
+   * Lines that could not be read.
+   */
+  skipped: {
+    line: number;
+    reason: string;
+  }[];
+}
+/**
+ * Command `known_hosts.remove` payload. Reply: null. Removing an unknown id is not an error.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "KnownHostsRemoveParams".
+ */
+export interface KnownHostsRemoveParams {
+  id: string;
+}
+/**
  * Command `session.open` payload. host_id null opens a local shell. Reply: SessionOpenResult.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema

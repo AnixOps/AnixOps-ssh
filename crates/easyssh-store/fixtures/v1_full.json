@@ -118,6 +118,7 @@
   ],
   "transfer_history": [],
   "workspace": "hosts",
+  "telemetry": { "crash_reports": true, "usage_stats": false },
   "theme": "dark",
   "display_density": "compact",
   "locale": "zh_cn",

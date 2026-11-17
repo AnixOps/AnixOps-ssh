@@ -11,11 +11,23 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "init",
-    sql: include_str!("../migrations/0001_init.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "init",
+        sql: include_str!("../migrations/0001_init.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "host_shell_integration",
+        sql: include_str!("../migrations/0002_host_shell_integration.sql"),
+    },
+    Migration {
+        version: 3,
+        name: "host_engine",
+        sql: include_str!("../migrations/0003_host_engine.sql"),
+    },
+];
 
 /// The newest schema version this build can apply.
 pub fn latest_version() -> i64 {

@@ -3,7 +3,7 @@
 
 use crate::askpass;
 use crate::daemon::{self, DaemonState};
-use crate::hosts::{self, load_config, save_config};
+use crate::hosts::{self, load_config, open_store};
 use easyssh_core::tunnel::spawn_tunnel;
 use easyssh_core::{OpenSsh, Tunnel, TunnelKind};
 use serde::{Deserialize, Serialize};
@@ -207,22 +207,19 @@ pub fn tunnel_save(input: TunnelInput) -> Result<String, String> {
     };
     tunnel.forward_spec().map_err(|error| error.to_string())?;
     hosts::connection(&tunnel.host_id)?;
-    let mut config = load_config()?;
-    let id = tunnel.id.clone();
-    match config.tunnels.iter().position(|saved| saved.id == id) {
-        Some(index) => config.tunnels[index] = tunnel,
-        None => config.tunnels.push(tunnel),
-    }
-    save_config(&config)?;
-    Ok(id)
+    open_store()?
+        .save_tunnel(&tunnel)
+        .map_err(|error| error.to_string())?;
+    Ok(tunnel.id)
 }
 
 #[tauri::command]
 pub async fn tunnel_delete(app: AppHandle, id: String) -> Result<(), String> {
     tunnel_stop(app, id.clone()).await?;
-    let mut config = load_config()?;
-    config.tunnels.retain(|tunnel| tunnel.id != id);
-    save_config(&config)
+    open_store()?
+        .remove_tunnel(&id)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

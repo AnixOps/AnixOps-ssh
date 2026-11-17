@@ -59,7 +59,7 @@ pub struct MigrationReport {
 
 /// A v1 id as a store id: UUIDs pass through, anything else becomes a stable
 /// UUIDv5 so references between records keep working.
-fn store_id(v1_id: &str) -> String {
+pub(crate) fn store_id(v1_id: &str) -> String {
     Uuid::parse_str(v1_id).map_or_else(
         |_| Uuid::new_v5(&ID_NAMESPACE, v1_id.as_bytes()).to_string(),
         |uuid| uuid.to_string(),
@@ -80,10 +80,21 @@ fn write_backup(source: &Path) -> Result<(PathBuf, bool)> {
     if backup.exists() {
         return Ok((backup, false));
     }
-    let partial = backup.with_extension("json.partial");
+    // A name of its own, so two processes starting together do not trample
+    // each other's copy; whoever renames first wins.
+    let partial = backup.with_extension(format!("json.{}.partial", Uuid::new_v4().simple()));
     std::fs::copy(source, &partial)?;
-    std::fs::rename(&partial, &backup)?;
-    Ok((backup, true))
+    match std::fs::rename(&partial, &backup) {
+        Ok(()) => Ok((backup, true)),
+        Err(_) if backup.exists() => {
+            let _ = std::fs::remove_file(&partial);
+            Ok((backup, false))
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(&partial);
+            Err(error.into())
+        }
+    }
 }
 
 impl Store {
@@ -345,8 +356,13 @@ impl Store {
             ("sidebar", sidebar),
             ("sync", serde_json::to_value(&config.sync)?),
             ("experimental", serde_json::to_value(&config.experimental)?),
+            ("telemetry", serde_json::to_value(&config.telemetry)?),
             ("recent_connection_ids", serde_json::to_value(recent)?),
         ];
+        let mut entries = entries.to_vec();
+        if let Some(engine) = config.ssh_engine {
+            entries.push(("ssh_engine", serde_json::to_value(engine)?));
+        }
         for (key, value) in entries {
             if self.setting_exists_any(key)? {
                 report.settings.existing += 1;
