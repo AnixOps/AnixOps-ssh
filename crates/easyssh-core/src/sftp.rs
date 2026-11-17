@@ -4,7 +4,7 @@
 //! that mode `sftp` echoes every command as `sftp> <command>` and line-buffers
 //! its output, so each command is followed by a marker (`lpwd`, which we never
 //! send otherwise) and its output is everything before the marker's echo.
-//! Transfers run in their own `sftp -b -` process so they can be cancelled.
+//! Transfers run in their own `sftp -oBatchMode=no -b -` process so they can be cancelled.
 //!
 //! These processes have no terminal, so OpenSSH asks for passwords and
 //! host-key confirmations through `SSH_ASKPASS`; callers pass that
@@ -51,7 +51,11 @@ pub fn sftp_args(connection: &Connection, batch: bool) -> Result<Vec<String>, Op
     validate_connection(connection)?;
     let mut args: Vec<String> = vec!["-q".into()];
     if batch {
-        args.extend(["-b".into(), "-".into()]);
+        // `-b` makes sftp append `-obatchmode yes` to the ssh arguments at the
+        // position of `-b`, and ssh keeps the first value it sees for an
+        // option. `BatchMode=no` must therefore come before `-b`, otherwise
+        // ssh never asks for a password and `SSH_ASKPASS` is not used.
+        args.extend(["-oBatchMode=no".into(), "-b".into(), "-".into()]);
     }
     if let Some(jump) = &connection.proxy_jump {
         validate_alias(jump)?;
@@ -309,7 +313,7 @@ fn forward_lines(
     });
 }
 
-/// Starts a transfer in its own `sftp -b -` process. The caller waits on or
+/// Starts a transfer in its own `sftp -oBatchMode=no -b -` process. The caller waits on or
 /// kills the returned child; standard error carries the failure reason.
 pub fn spawn_transfer(
     openssh: &OpenSsh,
@@ -396,6 +400,18 @@ lrwxrwxrwx    1 deploy   deploy         11 Sep  2 11:05 current -> releases/42
     }
 
     #[test]
+    fn batch_transfers_allow_askpass_before_batch_flag() {
+        let connection = Connection::alias("x", "prod");
+        let args = sftp_args(&connection, true).unwrap();
+        let mode = args.iter().position(|a| a == "-oBatchMode=no").unwrap();
+        let batch = args.iter().position(|a| a == "-b").unwrap();
+        assert!(mode < batch, "{args:?}");
+        assert!(!sftp_args(&connection, false)
+            .unwrap()
+            .contains(&"-b".to_string()));
+    }
+
+    #[test]
     fn endpoint_arguments_use_uppercase_port_and_bracket_ipv6() {
         let connection = Connection {
             target: ConnectionTarget::Endpoint {
@@ -406,6 +422,17 @@ lrwxrwxrwx    1 deploy   deploy         11 Sep  2 11:05 current -> releases/42
             ..Connection::alias("x", "unused")
         };
         let args = sftp_args(&connection, true).unwrap();
-        assert_eq!(args, ["-q", "-b", "-", "-P", "2222", "ops@[2001:db8::1]"]);
+        assert_eq!(
+            args,
+            [
+                "-q",
+                "-oBatchMode=no",
+                "-b",
+                "-",
+                "-P",
+                "2222",
+                "ops@[2001:db8::1]"
+            ]
+        );
     }
 }

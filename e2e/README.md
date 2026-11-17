@@ -15,7 +15,7 @@ Needs Docker with Compose, OpenSSH client tools (`ssh`, `sftp`, `scp`,
 e2e/prepare.sh                              # throwaway key in e2e/.keys (git-ignored)
 docker compose -f e2e/docker-compose.yml up -d --build
 e2e/wait-ready.sh                           # waits for an SSH banner on 2222 and 2223
-cargo test -p easyssh-e2e -- --ignored --test-threads=1 --skip known_bug_
+cargo test -p easyssh-e2e -- --ignored --test-threads=1
 docker compose -f e2e/docker-compose.yml down
 ```
 
@@ -98,7 +98,7 @@ it passed against v1 unchanged.
 | `password` | `sftp_session_with_wrong_password_errors_without_hanging` | passes | connect returns an error |
 | `password` | `tunnel_with_password_from_askpass` | passes |  |
 | `password` | `tunnel_with_wrong_password_exits` | passes | Permission denied |
-| `password` | `known_bug_transfer_with_password_from_askpass` | known failure | `sftp -b` implies BatchMode, no password prompt; see below |
+| `password` | `transfer_with_password_from_askpass` | failed on 1.0.1, fixed in 1.0.2 | `sftp -b` implied BatchMode, no password prompt; see below |
 | `jump` | `exec_through_proxy_jump_alias_from_config` | passes | ProxyJump in ssh config |
 | `jump` | `exec_through_connection_proxy_jump` | passes | Connection.proxy_jump (-J) |
 | `jump` | `sftp_through_proxy_jump_alias_from_config` | passes | session, upload, download |
@@ -107,22 +107,20 @@ it passed against v1 unchanged.
 
 ## Known v1 failures
 
-Tests for known v1 bugs are named `known_bug_*` and carry
-`#[ignore = "known v1 bug: ..."]`. CI skips them with `--skip known_bug_`.
-Run one on purpose with
-`cargo test -p easyssh-e2e known_bug_ -- --ignored`; it is expected to fail
-until the bug is fixed, and then the `known_bug_` prefix and the skip go away.
+No test is currently marked as a known bug. If one is added, name it
+`known_bug_*`, give it `#[ignore = "known v1 bug: ..."]` and skip it in CI with
+`--skip known_bug_`; remove both again once it is fixed.
 
-### Password-only hosts: file transfers cannot authenticate
+### Fixed in 1.0.2: file transfers to password-only hosts
 
-`sftp::spawn_transfer` starts `sftp -b -`. OpenSSH documents that batch mode
-disables interactive authentication (it implies `BatchMode=yes`), so ssh
-never asks for a password and `SSH_ASKPASS` is never called. Against `pwuser`
-the upload ends with `Connection closed` and the askpass helper's log stays
-empty (CI run 43990861805). Browsing (`SftpSession`, no `-b`), exec and tunnels
-do prompt through askpass. In the app this means transfers to a host that only
-accepts passwords fail even though browsing it works; hosts with a key or an
-agent are not affected. Not fixed here (phase 0 changes no behaviour).
+`sftp::spawn_transfer` starts `sftp -b -`. `-b` makes sftp pass
+`-obatchmode yes` to ssh, so ssh never asked for a password and `SSH_ASKPASS`
+was never called; against `pwuser` the upload ended with `Connection closed`
+and the askpass log stayed empty (CI run 43990861805). The fix passes
+`-oBatchMode=no` before `-b`: sftp adds its `-obatchmode yes` at the position
+of `-b`, and ssh keeps the first value of an option (checked with
+`sftp -S <fake ssh>`, which prints the ssh arguments). Errors are still
+reported through the exit code of batch mode.
 
 ### Listing a missing directory is timing dependent (observed, not fixed)
 
