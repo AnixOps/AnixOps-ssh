@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/easyssh-core", "crates/easyssh-e2e", "crates/easyssh-proto", "crates/easysshd", "src-tauri"]
+members = ["crates/easyssh-core", "crates/easyssh-e2e", "crates/easyssh-proto", "crates/easyssh-ssh","crates/easysshd", "src-tauri"]
 
 [workspace.package]
 version = "1.0.1"
