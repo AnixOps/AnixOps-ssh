@@ -19,7 +19,7 @@ use crate::askpass::Hub;
 use easyssh_ssh::{
     AgentSource, ConnectParams, Error as SshError, Session, ShellHandle, ShellOptions,
 };
-use interact::{Broadcast, DaemonInteraction, HostKeyPrompts};
+use interact::{Broadcast, DaemonInteraction, HostKeyPrompts, SavedPassword};
 use known_hosts::LayeredKnownHosts;
 use plan::{HostSpec, RusshPlan};
 use serde_json::{json, Value};
@@ -65,6 +65,7 @@ pub struct Engine {
     hub: Arc<Hub>,
     hostkeys: Arc<HostKeyPrompts>,
     paths: Mutex<KnownHostsPaths>,
+    secrets: Mutex<Option<Arc<dyn easyssh_vault::SecretSource>>>,
     pub(crate) files: files::Files,
     pub(crate) tunnels: tunnels::Tunnels,
 }
@@ -81,9 +82,15 @@ impl Engine {
             hostkeys: HostKeyPrompts::new(broadcast),
             hub,
             paths: Mutex::new(paths),
+            secrets: Mutex::new(None),
             files: files::Files::default(),
             tunnels: tunnels::Tunnels::default(),
         })
+    }
+
+    /// Where saved passwords come from (the daemon's vault).
+    pub fn set_secrets(&self, secrets: Arc<dyn easyssh_vault::SecretSource>) {
+        *lock(&self.secrets) = Some(secrets);
     }
 
     pub fn set_known_hosts(&self, paths: KnownHostsPaths) {
@@ -129,10 +136,21 @@ impl Engine {
     ) -> Result<Session, SharedError> {
         let hops: Vec<ConnectParams> = plan.hops.iter().map(|h| self.params(h, agent)).collect();
         let target = self.params(&plan.target, agent);
+        // TODO: a private key (and its passphrase) saved in the vault should
+        // be offered to the built-in engine from memory too; that needs an
+        // in-memory identity in `ConnectParams`. Until then OpenSSH is the
+        // only engine that uses saved keys; passwords work here.
+        let saved_password = lock(&self.secrets).clone().map(|secrets| SavedPassword {
+            account: format!("{}@{}", plan.target.user, plan.target.host),
+            secrets,
+            host_id: plan.key.host_id.clone(),
+            used: std::sync::atomic::AtomicBool::new(false),
+        });
         let interaction = DaemonInteraction {
             hub: self.hub.clone(),
             hostkeys: self.hostkeys.clone(),
             label: plan.target.label.clone(),
+            saved_password,
         };
         Session::connect_via(&hops, target, &interaction)
             .await

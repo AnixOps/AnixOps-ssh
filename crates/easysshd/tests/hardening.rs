@@ -53,6 +53,7 @@ async fn start_daemon(root: &Path, build: &str, log_dir: Option<PathBuf>) -> Run
     let extras = DaemonExtras {
         build_version: Some(build.to_owned()),
         log_dir,
+        ..DaemonExtras::default()
     };
     let daemon = Daemon::new_with(cfg, extras).await.unwrap();
     let server = Server::start_service(root.join("run"), daemon.clone()).unwrap();

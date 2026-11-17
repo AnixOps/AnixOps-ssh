@@ -4,14 +4,17 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Overlay } from "@/components/ui/overlay";
-import { onAskpass, onAskpassResolved, replyAskpass, type AskpassPrompt } from "@/lib/backend";
+import { onAskpass, onAskpassResolved, replyAskpass, unlockForAskpass, type AskpassPrompt } from "@/lib/backend";
 import { t } from "@/lib/i18n";
+import { vaultErrorText } from "@/lib/vaultUi";
 
 /** Answers OpenSSH prompts from processes without a terminal (the file pane
  *  and transfers). The answer goes straight back to OpenSSH; nothing is kept. */
 export function AskpassDialog() {
   const [queue, setQueue] = useState<AskpassPrompt[]>([]);
   const [value, setValue] = useState("");
+  const [remember, setRemember] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const current = queue[0];
 
@@ -22,13 +25,27 @@ export function AskpassDialog() {
 
   useEffect(() => {
     setValue("");
+    setRemember(false);
+    setError(null);
     if (current) window.requestAnimationFrame(() => inputRef.current?.focus());
   }, [current]);
 
   const answer = (prompt: AskpassPrompt, reply: string | null) => {
-    replyAskpass(prompt.id, reply);
+    replyAskpass(prompt.id, reply, remember && !!prompt.rememberable && reply !== null);
     setValue("");
     setQueue((items) => items.slice(1));
+  };
+
+  // The vault is locked and holds the answer: unlock it and let it answer.
+  const unlockAndUse = async (prompt: AskpassPrompt) => {
+    setError(null);
+    try {
+      await unlockForAskpass(prompt.id, value);
+      setValue("");
+      setQueue((items) => items.filter((item) => item.id !== prompt.id));
+    } catch (reason) {
+      setError(vaultErrorText(reason));
+    }
   };
 
   return (
@@ -38,7 +55,9 @@ export function AskpassDialog() {
           key={current.id}
           labelledBy="askpass-title"
           onDismiss={() => answer(current, null)}
-          onSubmit={() => answer(current, current.confirm ? "yes" : value)}
+          onSubmit={() =>
+            current.vaultLocked ? void unlockAndUse(current) : answer(current, current.confirm ? "yes" : value)
+          }
           className="max-w-md p-6"
         >
           <div className="flex items-start gap-3">
@@ -64,10 +83,32 @@ export function AskpassDialog() {
                 autoComplete="off"
                 value={value}
                 onChange={(event) => setValue(event.target.value)}
-                aria-label={current.prompt}
+                aria-label={current.vaultLocked ? t.vaultPassphrase : current.prompt}
                 className="mt-5"
               />
-              <p className="mt-2 text-caption font-normal text-label-3">{t.askpassNotSaved}</p>
+              {current.vaultLocked ? (
+                <p className="mt-2 text-caption font-normal text-label-3">{t.askpassVaultLocked}</p>
+              ) : current.rememberable ? (
+                <label className="mt-3 flex items-start gap-2 text-callout text-label-2">
+                  <input
+                    type="checkbox"
+                    checked={remember}
+                    onChange={(event) => setRemember(event.target.checked)}
+                    className="mt-1 accent-(--accent)"
+                  />
+                  <span>
+                    {t.askpassRemember}
+                    <span className="block text-caption font-normal text-label-3">{t.askpassRememberHint}</span>
+                  </span>
+                </label>
+              ) : (
+                <p className="mt-2 text-caption font-normal text-label-3">{t.askpassNotSaved}</p>
+              )}
+              {error && (
+                <p role="alert" className="mt-2 text-caption font-normal text-danger">
+                  {error}
+                </p>
+              )}
             </>
           )}
           <div className="mt-6 flex justify-end gap-2">
@@ -75,7 +116,7 @@ export function AskpassDialog() {
               {t.cancel}
             </Button>
             <Button type="submit" variant="primary">
-              {current.confirm ? t.askpassTrust : t.askpassSubmit}
+              {current.confirm ? t.askpassTrust : current.vaultLocked ? t.askpassUnlockUse : t.askpassSubmit}
             </Button>
           </div>
         </Overlay>

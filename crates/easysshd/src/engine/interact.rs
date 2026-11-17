@@ -11,9 +11,11 @@ use crate::askpass::{Hub, ANSWER_TIMEOUT};
 use async_trait::async_trait;
 use easyssh_ssh::known_hosts::KnownHostStatus;
 use easyssh_ssh::{Decision, HostKeyDetails, Interaction, KbdPrompt};
+use easyssh_vault::SecretSource;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::oneshot;
 
@@ -97,6 +99,35 @@ pub struct DaemonInteraction {
     pub hub: Arc<Hub>,
     pub hostkeys: Arc<HostKeyPrompts>,
     pub label: String,
+    /// The saved password of the target host, offered once when the server
+    /// asks for exactly that user's password (never for a jump host, and
+    /// never again after the server refused it).
+    pub saved_password: Option<SavedPassword>,
+}
+
+/// A saved password and the prompt it belongs to.
+pub struct SavedPassword {
+    /// `user@host`, which the engine's password prompt starts with.
+    pub account: String,
+    pub secrets: Arc<dyn SecretSource>,
+    pub host_id: String,
+    pub used: AtomicBool,
+}
+
+impl SavedPassword {
+    fn take(&self, prompt: &str) -> Option<String> {
+        if !prompt.starts_with(&format!("{}'s password", self.account)) {
+            return None;
+        }
+        if self.used.swap(true, Ordering::SeqCst) {
+            return None;
+        }
+        // A locked vault or a missing entry means: ask the user.
+        let secrets = self.secrets.host_secrets(&self.host_id).ok()?;
+        secrets
+            .password
+            .map(|password| password.expose().to_owned())
+    }
 }
 
 #[async_trait]
@@ -123,6 +154,9 @@ impl Interaction for DaemonInteraction {
     }
 
     async fn password(&self, prompt: &str) -> Option<String> {
+        if let Some(saved) = self.saved_password.as_ref().and_then(|s| s.take(prompt)) {
+            return Some(saved);
+        }
         self.hub
             .prompt(&self.label, prompt, "password", false)
             .await
@@ -167,6 +201,44 @@ impl Interaction for DaemonInteraction {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Fixed(Option<&'static str>);
+
+    impl SecretSource for Fixed {
+        fn host_secrets(
+            &self,
+            _: &str,
+        ) -> Result<easyssh_store::StoredSecrets, easyssh_vault::VaultError> {
+            Ok(easyssh_store::StoredSecrets {
+                password: self.0.map(easyssh_crypto::SecretText::new),
+                ..Default::default()
+            })
+        }
+    }
+
+    fn saved_with(password: Option<&'static str>) -> SavedPassword {
+        SavedPassword {
+            account: "me@example.com".into(),
+            secrets: Arc::new(Fixed(password)),
+            host_id: "h".into(),
+            used: AtomicBool::new(false),
+        }
+    }
+
+    #[test]
+    fn a_saved_password_answers_only_its_own_prompt_and_only_once() {
+        let saved = saved_with(Some("pw"));
+        // Another user (or a jump host) is never answered from the vault.
+        assert_eq!(saved.take("you@example.com's password"), None);
+        assert_eq!(saved.take("me@other.com's password"), None);
+        assert_eq!(
+            saved.take("me@example.com's password").as_deref(),
+            Some("pw")
+        );
+        // The server refused it: the next prompt goes to the user.
+        assert_eq!(saved.take("me@example.com's password"), None);
+        assert_eq!(saved_with(None).take("me@example.com's password"), None);
+    }
 
     fn details(status: KnownHostStatus) -> HostKeyDetails {
         HostKeyDetails {

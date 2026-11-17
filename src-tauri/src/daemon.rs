@@ -91,6 +91,8 @@ impl LinkHandler for Handler {
             "host": prompt.host,
             "prompt": prompt.prompt,
             "confirm": prompt.confirm,
+            "rememberable": prompt.rememberable,
+            "vaultLocked": prompt.vault_locked,
         });
         if let Some(kind) = prompt.kind {
             payload["kind"] = serde_json::json!(kind);
@@ -153,6 +155,12 @@ impl LinkHandler for Handler {
 
     fn hosts_changed(&self) {
         let _ = self.app.emit("hosts-changed", ());
+    }
+
+    fn vault_changed(&self, unlocked: bool) {
+        let _ = self
+            .app
+            .emit("vault-changed", serde_json::json!({ "unlocked": unlocked }));
     }
 
     fn lost(&self) {

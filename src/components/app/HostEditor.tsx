@@ -1,5 +1,6 @@
-import { CircleAlert, Star, Trash2 } from "lucide-react";
+import { CircleAlert, FileUp, Star, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { SecretField } from "@/components/app/SecretField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Overlay } from "@/components/ui/overlay";
@@ -8,18 +9,30 @@ import { Switch } from "@/components/ui/switch";
 import {
   deleteHost,
   hostColor,
+  isVaultLocked,
   saveHost,
+  secretsSet,
+  secretsStatus,
   type EnginePreference,
   type Group,
   type Host,
   type HostFields,
+  type SecretsInput,
+  type SecretsStatus,
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
+import { requestVaultUnlock } from "@/lib/vaultUi";
 import { cn } from "@/lib/utils";
 
 const COLORS = ["chart-1", "chart-2", "chart-3", "chart-4", "chart-5", "chart-6", "chart-7", "chart-8"];
 
 const emptyFields: HostFields = { alias: null, hostname: "", username: null, port: 22, proxyJump: null, notes: "", shellIntegration: false };
+
+type SecretName = keyof SecretsStatus;
+/** What the user did to one saved secret: typed a new value, or marked it for removal. */
+type Draft = { value: string; cleared: boolean };
+const emptyDraft: Draft = { value: "", cleared: false };
+const noSecrets: SecretsStatus = { password: false, privateKey: false, passphrase: false };
 
 /** Create or edit a host. `host` is null for a new one. */
 export function HostEditor({
@@ -45,8 +58,45 @@ export function HostEditor({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const firstRef = useRef<HTMLInputElement>(null);
+  const keyFileRef = useRef<HTMLInputElement>(null);
+  // Which secrets are saved (never their values) and what is being changed.
+  const [savedSecrets, setSavedSecrets] = useState<SecretsStatus>(noSecrets);
+  const [drafts, setDrafts] = useState<Record<SecretName, Draft>>({
+    password: emptyDraft,
+    privateKey: emptyDraft,
+    passphrase: emptyDraft,
+  });
+  const [keyNote, setKeyNote] = useState<string | null>(null);
 
   useEffect(() => firstRef.current?.focus(), []);
+  useEffect(() => {
+    if (host && saved) secretsStatus(host.id).then(setSavedSecrets).catch(console.error);
+  }, [host, saved]);
+
+  const draft = (name: SecretName, change: Partial<Draft>) =>
+    setDrafts((current) => ({ ...current, [name]: { ...current[name], ...change } }));
+
+  /** Reads a key file chosen by the user. Only the content is kept, not the path. */
+  const importKey = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      draft("privateKey", { value: await file.text(), cleared: false });
+      setKeyNote(t.keyImported);
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
+
+  /** What to send to the vault: untouched fields are left out so they stay as saved. */
+  const secretChanges = (): SecretsInput => {
+    const input: SecretsInput = {};
+    for (const name of ["password", "privateKey", "passphrase"] as const) {
+      const { value, cleared } = drafts[name];
+      if (cleared) input[name] = "";
+      else if (value !== "") input[name] = value;
+    }
+    return input;
+  };
 
   const set = <K extends keyof HostFields>(key: K, value: HostFields[K]) =>
     setFields((current) => ({ ...current, [key]: value }));
@@ -55,7 +105,7 @@ export function HostEditor({
     setBusy(true);
     setError(null);
     try {
-      await saveHost({
+      const id = await saveHost({
         id: host?.id ?? null,
         name: name.trim() || (byAlias ? fields.alias ?? "" : fields.hostname),
         group: group.trim() || null,
@@ -66,6 +116,18 @@ export function HostEditor({
           ? { ...fields, alias: fields.alias?.trim() || null }
           : { ...fields, alias: null, port: Number(fields.port) || 22 },
       });
+      const changes = secretChanges();
+      if (Object.keys(changes).length > 0) {
+        try {
+          await secretsSet(id, changes);
+        } catch (reason) {
+          // The host itself is saved; only its secrets are not.
+          if (isVaultLocked(reason)) requestVaultUnlock();
+          setError(`${t.secretsSaveFailed}: ${String(reason)}`);
+          setBusy(false);
+          return;
+        }
+      }
       onDone();
     } catch (reason) {
       setError(String(reason));
@@ -230,6 +292,69 @@ export function HostEditor({
               onClick={() => set("shellIntegration", !fields.shellIntegration)}
             />
           </div>
+
+          <section aria-labelledby="host-editor-credentials" className="space-y-3 rounded-md bg-fill-1 p-3">
+            <div>
+              <h3 id="host-editor-credentials" className="text-caption text-label-2">
+                {t.savedCredentials}
+              </h3>
+              <p className="mt-0.5 text-caption font-normal text-label-3">{t.credentialsHint}</p>
+            </div>
+            <Field label={t.savePassword} hint={t.optional} group>
+              <SecretField
+                label={t.savePassword}
+                saved={savedSecrets.password}
+                value={drafts.password.value}
+                cleared={drafts.password.cleared}
+                onValue={(value) => draft("password", { value, cleared: false })}
+                onCleared={(cleared) => draft("password", { cleared })}
+              />
+            </Field>
+            <Field label={t.privateKey} hint={t.optional} group>
+              <SecretField
+                label={t.privateKey}
+                multiline
+                placeholder={t.keyPaste}
+                saved={savedSecrets.privateKey}
+                value={drafts.privateKey.value}
+                cleared={drafts.privateKey.cleared}
+                onValue={(value) => {
+                  setKeyNote(null);
+                  draft("privateKey", { value, cleared: false });
+                }}
+                onCleared={(cleared) => draft("privateKey", { cleared })}
+                actions={
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <input
+                      ref={keyFileRef}
+                      type="file"
+                      hidden
+                      aria-label={t.keyImport}
+                      onChange={(event) => {
+                        void importKey(event.target.files?.[0]);
+                        event.target.value = "";
+                      }}
+                    />
+                    <Button type="button" variant="secondary" size="sm" onClick={() => keyFileRef.current?.click()}>
+                      <FileUp />
+                      {t.keyImport}
+                    </Button>
+                    <span className="text-caption font-normal text-label-3">{keyNote ?? t.keyImportHint}</span>
+                  </div>
+                }
+              />
+            </Field>
+            <Field label={t.keyPassphrase} hint={t.optional} group>
+              <SecretField
+                label={t.keyPassphrase}
+                saved={savedSecrets.passphrase}
+                value={drafts.passphrase.value}
+                cleared={drafts.passphrase.cleared}
+                onValue={(value) => draft("passphrase", { value, cleared: false })}
+                onCleared={(cleared) => draft("passphrase", { cleared })}
+              />
+            </Field>
+          </section>
 
           <Field label={t.notes} hint={t.optional}>
             <textarea

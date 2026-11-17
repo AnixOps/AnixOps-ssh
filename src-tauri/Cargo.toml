@@ -13,8 +13,10 @@ tauri-build = { version = "2", features = [] }
 chrono.workspace = true
 dirs.workspace = true
 easyssh-core = { path = "../crates/easyssh-core" }
+easyssh-crypto = { path = "../crates/easyssh-crypto" }
 easyssh-store = { path = "../crates/easyssh-store" }
 easyssh-telemetry = { path = "../crates/easyssh-telemetry" }
+easyssh-vault = { path = "../crates/easyssh-vault", features = ["os-keyring"] }
 easysshd = { path = "../crates/easysshd" }
 portable-pty = "0.9"
 serde.workspace = true
@@ -25,6 +27,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tokio.workspace = true
 uuid.workspace = true
+zeroize = "1"
 
 [dev-dependencies]
 tempfile.workspace = true

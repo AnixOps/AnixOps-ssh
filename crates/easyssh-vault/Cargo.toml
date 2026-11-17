@@ -1,0 +1,24 @@
+[package]
+name = "easyssh-vault"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The encrypted local vault for saved passwords and private keys: lock state, passphrase, auto-lock, askpass answers"
+
+[features]
+default = []
+# Use the operating system keychain for the device key (see `Vault::os`).
+os-keyring = ["easyssh-crypto/os-keyring"]
+
+[dependencies]
+easyssh-core = { path = "../easyssh-core" }
+easyssh-crypto = { path = "../easyssh-crypto" }
+easyssh-store = { path = "../easyssh-store" }
+thiserror.workspace = true
+uuid.workspace = true
+zeroize = "1"
+
+
+[dev-dependencies]
+tempfile.workspace = true

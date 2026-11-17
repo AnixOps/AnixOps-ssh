@@ -12,13 +12,14 @@ pub mod field;
 pub mod kdf;
 pub mod keys;
 pub mod keystore;
+pub mod protect;
 pub mod record;
 pub mod secret;
 pub mod sign;
 pub mod version_vector;
 
 pub use error::{CryptoError, Result};
-pub use field::{DeviceFieldCipher, FieldCipher};
+pub use field::{DeviceFieldCipher, DeviceKeyCipher, FieldCipher, NotConfigured};
 pub use kdf::{derive_account_secrets, AccountSecrets, KdfHeader, KdfParams};
 pub use keys::{
     open_vault_key, seal_vault_key, unwrap_account_keys, wrap_account_keys, AccountKeyPair,
@@ -28,7 +29,7 @@ pub use keys::{
 pub use keystore::OsKeyStore;
 pub use keystore::{load_or_create_device_key, KeyStore, KeyStoreError, MemoryKeyStore};
 pub use record::{decrypt_record, encrypt_record, Aad};
-pub use secret::{AccountKey, AuthSecret, DeviceKey, VaultKey};
+pub use secret::{AccountKey, AuthSecret, DeviceKey, SecretText, VaultKey};
 pub use sign::{
     certify_device, sign_envelope, verify_envelope, DeviceCert, DeviceSigningKey, Envelope,
     EnvelopeFields,

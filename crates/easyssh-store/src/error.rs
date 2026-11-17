@@ -1,4 +1,4 @@
-use crate::cipher::CipherError;
+use easyssh_crypto::CryptoError;
 use thiserror::Error;
 
 pub type Result<T, E = StoreError> = std::result::Result<T, E>;
@@ -17,7 +17,7 @@ pub enum StoreError {
     )]
     DatabaseTooNew { found: i64, supported: i64 },
     #[error(transparent)]
-    Cipher(#[from] CipherError),
+    Cipher(#[from] CryptoError),
     #[error("{entity} {id} was not found")]
     NotFound { entity: &'static str, id: String },
     #[error("{entity} {id} is deleted; restore it before changing it")]

@@ -77,6 +77,10 @@ pub struct AskpassPrompt {
     /// engine's prompts; `None` for OpenSSH's.
     pub kind: Option<String>,
     pub echo: Option<bool>,
+    /// A saved host's password or key passphrase: offer "Remember in vault".
+    pub rememberable: bool,
+    /// A saved answer exists but the vault is locked: offer to unlock it.
+    pub vault_locked: bool,
 }
 
 /// The built-in engine needs a decision about a host key.
@@ -130,6 +134,8 @@ pub trait LinkHandler: Send + Sync + 'static {
     /// `status` is `completed`, `failed` or `cancelled`.
     fn transfer_done(&self, _transfer_id: &str, _status: &str, _error: Option<&str>) {}
     fn tunnel_status(&self, _status: TunnelStatus) {}
+    /// The vault locked or unlocked (also by auto-lock).
+    fn vault_changed(&self, _unlocked: bool) {}
 }
 
 type Reply = Result<Value, LinkError>;
@@ -242,6 +248,8 @@ impl Inner {
                 confirm: payload["confirm"].as_bool().unwrap_or(false),
                 kind: payload["kind"].as_str().map(str::to_owned),
                 echo: payload["echo"].as_bool(),
+                rememberable: payload["rememberable"].as_bool().unwrap_or(false),
+                vault_locked: payload["vault_locked"].as_bool().unwrap_or(false),
             }),
             Some("hostkey.prompt") => self.handler.hostkey_prompt(HostKeyPrompt {
                 id: payload["id"].as_u64().unwrap_or(0),
@@ -285,6 +293,9 @@ impl Inner {
                 .handler
                 .askpass_resolved(payload["id"].as_u64().unwrap_or(0)),
             Some("hosts.changed") => self.handler.hosts_changed(),
+            Some("vault.changed") => self
+                .handler
+                .vault_changed(payload["unlocked"].as_bool().unwrap_or(false)),
             _ => {}
         }
     }
@@ -555,9 +566,34 @@ impl Link {
         )
     }
 
+    /// `askpass.bind`: the OpenSSH process using askpass `context` connects
+    /// to the saved host `host_id`, so the daemon may answer its password
+    /// and passphrase prompts for that host from the vault. Queued ahead of
+    /// anything sent later, so call it before starting the process.
+    pub fn askpass_bind(&self, context: &str, host_id: &str) -> Result<(), LinkError> {
+        self.post(
+            "askpass.bind",
+            json!({"context": context, "host_id": host_id}),
+        )
+    }
+
     /// `askpass.reply`; `None` cancels the prompt.
     pub fn askpass_reply(&self, id: u64, answer: Option<String>) -> Result<(), LinkError> {
-        self.post("askpass.reply", json!({"id": id, "answer": answer}))
+        self.askpass_reply_with(id, answer, false)
+    }
+
+    /// `askpass.reply`; with `remember` the answer is also saved in the vault
+    /// (only honoured for prompts the daemon marked `rememberable`).
+    pub fn askpass_reply_with(
+        &self,
+        id: u64,
+        answer: Option<String>,
+        remember: bool,
+    ) -> Result<(), LinkError> {
+        self.post(
+            "askpass.reply",
+            json!({"id": id, "answer": answer, "remember": remember}),
+        )
     }
 }
 

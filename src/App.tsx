@@ -3,6 +3,7 @@ import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AskpassDialog } from "@/components/app/AskpassDialog";
 import { HostKeyDialog } from "@/components/app/HostKeyDialog";
+import { VaultUnlockDialog } from "@/components/app/VaultUnlockDialog";
 import { CommandPalette, type PaneAction } from "@/components/app/CommandPalette";
 import { FilesPane } from "@/components/app/FilesPane";
 import { ForwardsPanel } from "@/components/app/ForwardsPanel";
@@ -465,6 +466,7 @@ export function App() {
       </AnimatePresence>
       <AskpassDialog />
       <HostKeyDialog />
+      <VaultUnlockDialog />
     </TooltipProvider>
     </MotionConfig>
   );

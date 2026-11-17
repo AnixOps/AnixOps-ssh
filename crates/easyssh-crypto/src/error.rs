@@ -25,4 +25,10 @@ pub enum CryptoError {
     SignerMismatch,
     #[error("sealed key could not be opened (wrong recipient or corrupted)")]
     SealOpen,
+    /// The cipher exists but its key is not loaded (a locked vault).
+    #[error("the vault is locked")]
+    Locked,
+    /// No cipher was set up; secrets are refused rather than stored in the clear.
+    #[error("no field cipher is configured; refusing to store or read a secret")]
+    NotConfigured,
 }

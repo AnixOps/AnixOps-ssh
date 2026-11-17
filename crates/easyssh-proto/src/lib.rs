@@ -98,6 +98,38 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("tunnel.start", "TunnelStartParams", "TunnelStartResult"),
     ("tunnel.stop", "TunnelStopParams", ""),
     ("tunnel.list", "TunnelListParams", "TunnelListResult"),
+    ("askpass.unlock", "AskpassUnlockParams", ""),
+    ("askpass.bind", "AskpassBindParams", ""),
+    ("askpass.unbind", "AskpassUnbindParams", ""),
+    ("vault.status", "VaultStatusParams", "VaultStatus"),
+    ("vault.unlock", "VaultUnlockParams", "VaultStatus"),
+    ("vault.lock", "VaultLockParams", "VaultStatus"),
+    (
+        "vault.set_passphrase",
+        "VaultSetPassphraseParams",
+        "VaultStatus",
+    ),
+    (
+        "vault.remove_passphrase",
+        "VaultRemovePassphraseParams",
+        "VaultStatus",
+    ),
+    (
+        "vault.set_auto_lock",
+        "VaultSetAutoLockParams",
+        "VaultStatus",
+    ),
+    (
+        "vault.forget_all",
+        "VaultForgetAllParams",
+        "VaultForgetAllResult",
+    ),
+    (
+        "secrets.status",
+        "SecretsStatusParams",
+        "SecretsStatusResult",
+    ),
+    ("secrets.set", "SecretsSetParams", "SecretsStatusResult"),
 ];
 
 /// The event set: `(kind, payload schema)`.
@@ -112,6 +144,7 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("transfer.progress", "TransferProgressEvent"),
     ("transfer.done", "TransferDoneEvent"),
     ("tunnel.status", "TunnelStatusEvent"),
+    ("vault.changed", "VaultChangedEvent"),
 ];
 
 fn validators() -> &'static HashMap<String, Validator> {
