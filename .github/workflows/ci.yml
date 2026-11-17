@@ -113,12 +113,44 @@ jobs:
             target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
+  e2e:
+    name: End-to-end (Linux)
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash -o pipefail {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate test key
+        run: mkdir -p logs && e2e/prepare.sh
+      - name: Start OpenSSH containers
+        run: docker compose -f e2e/docker-compose.yml up -d --build 2>&1 | tee logs/e2e-compose.log
+      - name: Wait for both servers
+        run: e2e/wait-ready.sh 90 2>&1 | tee logs/e2e-wait.log
+      - name: Build tests
+        run: cargo test -p easyssh-e2e --no-run 2>&1 | tee logs/e2e-build.log
+      - name: Run end-to-end tests
+        run: cargo test -p easyssh-e2e -- --ignored --test-threads=1 2>&1 | tee logs/e2e.log
+      - name: Container logs
+        if: always()
+        run: |
+          mkdir -p logs
+          docker compose -f e2e/docker-compose.yml logs --no-color > logs/e2e-containers.log 2>&1 || true
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-e2e
+          path: logs/
+          if-no-files-found: ignore
+
   # Publishes logs and screenshots to the `ci-results/<branch>` branch so they
   # can be read with plain git (no API token or log download needed).
   report:
     name: Publish results
     if: always() && github.event_name == 'push'
-    needs: [frontend, rust]
+    needs: [frontend, rust, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -131,6 +163,7 @@ jobs:
         env:
           FRONTEND: ${{ needs.frontend.result }}
           RUST: ${{ needs.rust.result }}
+          E2E: ${{ needs.e2e.result }}
           BRANCH: ${{ github.ref_name }}
         run: |
           cd results
@@ -140,6 +173,7 @@ jobs:
             echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             echo "- Frontend and screenshots: ${FRONTEND}"
             echo "- Rust (all platforms): ${RUST}"
+            echo "- End-to-end (Linux): ${E2E}"
           } > SUMMARY.md
           git init -q -b results
           git config user.name "github-actions[bot]"

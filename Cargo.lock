@@ -957,6 +957,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "easyssh-e2e"
+version = "1.0.1"
+dependencies = [
+ "easyssh-core",
+ "portable-pty",
+ "tempfile",
+]
+
+[[package]]
 name = "embed-resource"
 version = "3.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
