@@ -21,8 +21,8 @@ pub use error::{CryptoError, Result};
 pub use field::{DeviceFieldCipher, FieldCipher};
 pub use kdf::{derive_account_secrets, AccountSecrets, KdfHeader, KdfParams};
 pub use keys::{
-    open_vault_key, seal_vault_key, AccountKeyPair, AccountSealingKey, AccountSigningKey,
-    SealPublicKey,
+    open_vault_key, seal_vault_key, unwrap_account_keys, wrap_account_keys, AccountKeyPair,
+    AccountSealingKey, AccountSigningKey, SealPublicKey,
 };
 #[cfg(feature = "os-keyring")]
 pub use keystore::OsKeyStore;

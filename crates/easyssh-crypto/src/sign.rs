@@ -245,7 +245,7 @@ pub fn verify_envelope(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AccountKey, AccountKeyPair, MemoryKeyStore};
+    use crate::{AccountKeyPair, MemoryKeyStore};
 
     struct Setup {
         account: AccountKeyPair,
@@ -255,7 +255,7 @@ mod tests {
     }
 
     fn setup() -> Setup {
-        let account = AccountKeyPair::from_account_key(&AccountKey::from_bytes([1; 32])).unwrap();
+        let account = AccountKeyPair::from_seeds([1; 32], [11; 32]);
         let device = DeviceSigningKey::from_seed([2; 32]);
         let cert = certify_device(&account.signing, &device.public(), "laptop", 1_700_000_000);
         let env = sign_envelope(
@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn cert_from_another_account_fails() {
         let s = setup();
-        let other = AccountKeyPair::from_account_key(&AccountKey::from_bytes([5; 32])).unwrap();
+        let other = AccountKeyPair::from_seeds([5; 32], [15; 32]);
         let cert = certify_device(&other.signing, &s.device.public(), "laptop", 1_700_000_000);
         assert_eq!(
             verify_envelope(&s.env, &cert, &s.account.signing.public()),

@@ -1,12 +1,19 @@
-//! Account key pair and sealed vault keys.
+//! Account key pairs, their passphrase wrapping, and sealed vault keys.
 //!
-//! The account's X25519 (sealing) and Ed25519 (certifying) keys are both
-//! **derived** from the passphrase-derived [`AccountKey`] with HKDF, not
-//! generated. Why: the account must be recoverable on a new device from the
-//! passphrase alone, with no server-held private-key blob to protect and
-//! no extra state to sync. The cost is that rotating either key means
-//! rotating the passphrase-derived root (new salt), which is acceptable
-//! for a passphrase change.
+//! The account's X25519 (sealing) and Ed25519 (certifying) key pairs are
+//! generated randomly once. They are stored only wrapped under the
+//! passphrase-derived [`AccountKey`], so a passphrase change just re-wraps
+//! the blob: vault shares and device certificates stay valid. A new device
+//! recovers the pairs by unwrapping the blob the server stores (the server
+//! never sees the account key).
+//!
+//! Wrapped account keys (105 bytes):
+//!
+//! ```text
+//! 0x01 || nonce(24) || XChaCha20-Poly1305(x25519_secret(32) || ed25519_seed(32)) + tag(16)
+//!   key = HKDF-SHA256(ikm = AccountKey, info = "easyssh/v1/account-keys-wrap")
+//!   aad = "easyssh/v1/account-keys" || key_pair_version(0x01)
+//! ```
 //!
 //! Sealed vault key (ECIES-style, built from standard parts):
 //!
@@ -26,8 +33,11 @@ use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-pub const ACCOUNT_X25519_INFO: &[u8] = b"easyssh/v1/account-x25519";
-pub const ACCOUNT_ED25519_INFO: &[u8] = b"easyssh/v1/account-ed25519";
+pub const WRAP_KEY_INFO: &[u8] = b"easyssh/v1/account-keys-wrap";
+pub const WRAP_AAD: &[u8] = b"easyssh/v1/account-keys";
+/// Version of the key-pair layout (also the wrapped blob's version byte).
+pub const KEY_PAIR_VERSION: u8 = 1;
+pub const WRAPPED_LEN: usize = 1 + NONCE_LEN + 64 + 16;
 pub const SEALED_INFO: &[u8] = b"easyssh/v1/sealed-vault-key";
 pub const SEALED_VERSION: u8 = 1;
 pub const SEALED_LEN: usize = 1 + 32 + NONCE_LEN + 32 + 16;
@@ -72,7 +82,7 @@ impl core::fmt::Debug for AccountSigningKey {
     }
 }
 
-/// Both account keys, derived from one [`AccountKey`].
+/// Both account key pairs.
 #[derive(Debug)]
 pub struct AccountKeyPair {
     pub sealing: AccountSealingKey,
@@ -80,19 +90,80 @@ pub struct AccountKeyPair {
 }
 
 impl AccountKeyPair {
-    pub fn from_account_key(account_key: &AccountKey) -> Result<Self> {
-        let hk = Hkdf::<Sha256>::new(None, account_key.expose());
+    /// Fresh random pairs from the OS CSPRNG.
+    pub fn generate() -> Result<Self> {
         let mut x = Zeroizing::new([0u8; 32]);
         let mut e = Zeroizing::new([0u8; 32]);
-        hk.expand(ACCOUNT_X25519_INFO, &mut *x)
-            .map_err(|_| CryptoError::Kdf)?;
-        hk.expand(ACCOUNT_ED25519_INFO, &mut *e)
-            .map_err(|_| CryptoError::Kdf)?;
-        Ok(Self {
-            sealing: AccountSealingKey::from_bytes(*x),
-            signing: AccountSigningKey::from_seed(*e),
-        })
+        fill_random(&mut *x)?;
+        fill_random(&mut *e)?;
+        Ok(Self::from_seeds(*x, *e))
     }
+
+    /// Build from raw secrets (X25519 secret, Ed25519 seed).
+    pub fn from_seeds(x25519_secret: [u8; 32], ed25519_seed: [u8; 32]) -> Self {
+        Self {
+            sealing: AccountSealingKey::from_bytes(x25519_secret),
+            signing: AccountSigningKey::from_seed(ed25519_seed),
+        }
+    }
+}
+
+fn wrap_key(account_key: &AccountKey) -> Result<Zeroizing<[u8; 32]>> {
+    let hk = Hkdf::<Sha256>::new(None, account_key.expose());
+    let mut k = Zeroizing::new([0u8; 32]);
+    hk.expand(WRAP_KEY_INFO, &mut *k)
+        .map_err(|_| CryptoError::Kdf)?;
+    Ok(k)
+}
+
+fn wrap_aad() -> Vec<u8> {
+    let mut aad = WRAP_AAD.to_vec();
+    aad.push(KEY_PAIR_VERSION);
+    aad
+}
+
+/// Encrypt both key pairs under the account key, for storage on the server
+/// or in the local profile. Re-run with a new `AccountKey` on passphrase change.
+pub fn wrap_account_keys(account_key: &AccountKey, pairs: &AccountKeyPair) -> Result<Vec<u8>> {
+    let mut nonce = [0u8; NONCE_LEN];
+    fill_random(&mut nonce)?;
+    wrap_account_keys_with_nonce(account_key, pairs, &nonce)
+}
+
+/// Deterministic variant for test vectors only; never reuse a nonce.
+#[doc(hidden)]
+pub fn wrap_account_keys_with_nonce(
+    account_key: &AccountKey,
+    pairs: &AccountKeyPair,
+    nonce: &[u8; NONCE_LEN],
+) -> Result<Vec<u8>> {
+    let mut pt = Zeroizing::new([0u8; 64]);
+    pt[..32].copy_from_slice(&pairs.sealing.0.to_bytes());
+    pt[32..].copy_from_slice(&pairs.signing.0.to_bytes());
+    seal_blob(
+        KEY_PAIR_VERSION,
+        &*wrap_key(account_key)?,
+        nonce,
+        &wrap_aad(),
+        &*pt,
+    )
+}
+
+/// Recover the key pairs. A wrong passphrase (wrong `AccountKey`), tampering,
+/// truncation or an unknown version all fail.
+pub fn unwrap_account_keys(account_key: &AccountKey, blob: &[u8]) -> Result<AccountKeyPair> {
+    if blob.len() != WRAPPED_LEN {
+        return Err(CryptoError::Malformed("wrapped account keys length"));
+    }
+    let pt = Zeroizing::new(open_blob(
+        KEY_PAIR_VERSION,
+        &*wrap_key(account_key)?,
+        &wrap_aad(),
+        blob,
+    )?);
+    let x: [u8; 32] = pt[..32].try_into().expect("32");
+    let e: [u8; 32] = pt[32..].try_into().expect("32");
+    Ok(AccountKeyPair::from_seeds(x, e))
 }
 
 fn seal_key_and_aad(
@@ -176,17 +247,76 @@ mod tests {
     use super::*;
 
     fn pair(n: u8) -> AccountKeyPair {
-        AccountKeyPair::from_account_key(&AccountKey::from_bytes([n; 32])).unwrap()
+        AccountKeyPair::from_seeds([n; 32], [n.wrapping_add(100); 32])
     }
 
     #[test]
-    fn derivation_is_deterministic_and_separated() {
-        let a = pair(1);
-        let b = pair(1);
-        assert_eq!(a.sealing.public(), b.sealing.public());
-        assert_eq!(a.signing.public(), b.signing.public());
-        assert_ne!(a.sealing.public(), pair(2).sealing.public());
+    fn generated_pairs_differ_and_are_separate() {
+        let a = AccountKeyPair::generate().unwrap();
+        let b = AccountKeyPair::generate().unwrap();
+        assert_ne!(a.sealing.public(), b.sealing.public());
+        assert_ne!(a.signing.public(), b.signing.public());
         assert_ne!(a.sealing.public().0, a.signing.public().to_bytes());
+    }
+
+    #[test]
+    fn wrap_round_trip() {
+        let ak = AccountKey::from_bytes([1; 32]);
+        let p = AccountKeyPair::generate().unwrap();
+        let blob = wrap_account_keys(&ak, &p).unwrap();
+        assert_eq!(blob.len(), WRAPPED_LEN);
+        assert_eq!(blob[0], 1);
+        let q = unwrap_account_keys(&ak, &blob).unwrap();
+        assert_eq!(q.sealing.public(), p.sealing.public());
+        assert_eq!(q.signing.public(), p.signing.public());
+        // sealed vault key still opens after a passphrase change (re-wrap)
+        let vk = VaultKey::generate().unwrap();
+        let sealed = seal_vault_key(&vk, &p.sealing.public()).unwrap();
+        let ak2 = AccountKey::from_bytes([2; 32]);
+        let blob2 = wrap_account_keys(&ak2, &q).unwrap();
+        let r = unwrap_account_keys(&ak2, &blob2).unwrap();
+        assert_eq!(open_vault_key(&sealed, &r.sealing).unwrap(), vk);
+    }
+
+    #[test]
+    fn wrong_account_key_fails() {
+        let p = pair(1);
+        let blob = wrap_account_keys(&AccountKey::from_bytes([1; 32]), &p).unwrap();
+        assert!(unwrap_account_keys(&AccountKey::from_bytes([2; 32]), &blob).is_err());
+    }
+
+    #[test]
+    fn wrapped_tamper_truncation_version_fail() {
+        let ak = AccountKey::from_bytes([1; 32]);
+        let blob = wrap_account_keys(&ak, &pair(1)).unwrap();
+        for i in 0..blob.len() {
+            for bit in 0..8 {
+                let mut t = blob.clone();
+                t[i] ^= 1 << bit;
+                assert!(unwrap_account_keys(&ak, &t).is_err(), "byte {i} bit {bit}");
+            }
+        }
+        for len in 0..blob.len() {
+            assert!(unwrap_account_keys(&ak, &blob[..len]).is_err());
+        }
+        let mut t = blob.clone();
+        t.push(0);
+        assert!(unwrap_account_keys(&ak, &t).is_err());
+        let mut t = blob;
+        t[0] = 2;
+        assert_eq!(
+            unwrap_account_keys(&ak, &t).err(),
+            Some(CryptoError::UnsupportedVersion(2))
+        );
+    }
+
+    #[test]
+    fn wrapped_blob_is_not_a_record_or_field_blob() {
+        // distinct AAD domain: a wrapped blob cannot be opened as a field blob
+        let ak = AccountKey::from_bytes([1; 32]);
+        let blob = wrap_account_keys(&ak, &pair(1)).unwrap();
+        let fc = crate::DeviceFieldCipher::new(&crate::DeviceKey::from_bytes([1; 32])).unwrap();
+        assert!(crate::FieldCipher::decrypt(&fc, &blob, b"").is_err());
     }
 
     #[test]

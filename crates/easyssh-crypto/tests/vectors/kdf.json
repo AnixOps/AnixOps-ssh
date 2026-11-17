@@ -1,17 +1,13 @@
 [
   {
-    "account_ed25519_public_hex": "4b6d0d7f51b2b6e01fe9a3b0e0ff396d42a9cb1470200600574ea3277988df0a",
     "account_key_hex": "588a4454a3c7c92aa0b648f2f5e77d6db7cf427b9e55c6747f8fdc481347d657",
-    "account_x25519_public_hex": "114b07d9e8ab3fef03bf18569f92f38f31b03c5d039b638c6a19d8843d24781d",
     "auth_secret_hex": "d0d97c444eb3469d3f1effcefac18229bcaa77fd5faba20137cd94a974152be2",
     "header_hex": "0100000040000000010000000111111111111111111111111111111111",
     "name": "test-params",
     "passphrase_utf8": "correct horse battery staple"
   },
   {
-    "account_ed25519_public_hex": "c50d252aabf84c5978e250f5611651b5ec5891ea2a1e98991053626c8215b526",
     "account_key_hex": "6f715721b880d7f2f058bdbad708bbb264f9f29b3fe7d5409ca3bebef2314a1c",
-    "account_x25519_public_hex": "0e0d13f6947ba18db306631ed755e7fe661b031fd0f226f7aff445a5f0a09811",
     "auth_secret_hex": "8423c5726bab8a631700298f3da6e8e1bc08670d04045afa0e68e77ecf95c94a",
     "header_hex": "0100010000000000030000000122222222222222222222222222222222",
     "name": "desktop-v1",

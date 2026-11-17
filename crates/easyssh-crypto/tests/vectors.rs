@@ -6,7 +6,7 @@
 //! change (which needs a new format version byte!):
 //! `UPDATE_VECTORS=1 cargo test -p easyssh-crypto --test vectors`.
 
-use easyssh_crypto::keys::seal_vault_key_with;
+use easyssh_crypto::keys::{seal_vault_key_with, wrap_account_keys_with_nonce};
 use easyssh_crypto::record::encrypt_record_with_nonce;
 use easyssh_crypto::*;
 use serde_json::{json, Value};
@@ -18,6 +18,10 @@ fn h(b: &[u8]) -> String {
 
 fn unh<const N: usize>(s: &str) -> [u8; N] {
     hex::decode(s).unwrap().try_into().unwrap()
+}
+
+fn test_pair() -> AccountKeyPair {
+    AccountKeyPair::from_seeds([0x0a; 32], [0x0b; 32])
 }
 
 fn path(name: &str) -> PathBuf {
@@ -47,15 +51,12 @@ fn kdf_vectors() {
     for (name, params, salt) in cases {
         let header = KdfHeader { params, salt };
         let s = derive_account_secrets("correct horse battery staple".as_bytes(), &header).unwrap();
-        let pair = AccountKeyPair::from_account_key(&s.account_key).unwrap();
         out.push(json!({
             "name": name,
             "passphrase_utf8": "correct horse battery staple",
             "header_hex": h(&header.to_bytes()),
             "account_key_hex": h(s.account_key.expose()),
             "auth_secret_hex": h(s.auth_secret.expose()),
-            "account_x25519_public_hex": h(&pair.sealing.public().0),
-            "account_ed25519_public_hex": h(&pair.signing.public().to_bytes()),
         }));
     }
     let v = check("kdf.json", &Value::Array(out));
@@ -105,7 +106,7 @@ fn record_vectors() {
 
 #[test]
 fn sealed_vault_key_vectors() {
-    let acct = AccountKeyPair::from_account_key(&AccountKey::from_bytes([0x03; 32])).unwrap();
+    let acct = test_pair();
     let vk = VaultKey::from_bytes([0x04; 32]);
     let eph = [0x05u8; 32];
     let nonce = [0x06u8; 24];
@@ -113,7 +114,6 @@ fn sealed_vault_key_vectors() {
     let v = check(
         "sealed_vault_key.json",
         &json!({
-            "account_key_hex": h(&[0x03; 32]),
             "recipient_x25519_public_hex": h(&acct.sealing.public().0),
             "vault_key_hex": h(vk.expose()),
             "ephemeral_secret_hex": h(&eph),
@@ -127,7 +127,7 @@ fn sealed_vault_key_vectors() {
 
 #[test]
 fn envelope_vectors() {
-    let acct = AccountKeyPair::from_account_key(&AccountKey::from_bytes([0x03; 32])).unwrap();
+    let acct = test_pair();
     let device = DeviceSigningKey::from_seed([0x07; 32]);
     let cert = certify_device(
         &acct.signing,
@@ -163,7 +163,6 @@ fn envelope_vectors() {
     let v = check(
         "envelope.json",
         &json!({
-            "account_key_hex": h(&[0x03; 32]),
             "account_ed25519_public_hex": h(&acct.signing.public().to_bytes()),
             "device_seed_hex": h(&[0x07; 32]),
             "device_public_hex": h(&device.public()),
@@ -227,4 +226,28 @@ fn field_cipher_vectors() {
         c.decrypt(&committed, b"hosts/1/password").unwrap(),
         b"hunter2"
     );
+}
+
+#[test]
+fn account_keys_vectors() {
+    let ak = AccountKey::from_bytes([0x0c; 32]);
+    let pairs = test_pair();
+    let nonce = [0x0d; 24];
+    let blob = wrap_account_keys_with_nonce(&ak, &pairs, &nonce).unwrap();
+    let v = check(
+        "account_keys.json",
+        &json!({
+            "account_key_hex": h(ak.expose()),
+            "x25519_secret_hex": h(&[0x0a; 32]),
+            "ed25519_seed_hex": h(&[0x0b; 32]),
+            "x25519_public_hex": h(&pairs.sealing.public().0),
+            "ed25519_public_hex": h(&pairs.signing.public().to_bytes()),
+            "nonce_hex": h(&nonce),
+            "wrapped_hex": h(&blob),
+        }),
+    );
+    let committed = hex::decode(v["wrapped_hex"].as_str().unwrap()).unwrap();
+    let out = unwrap_account_keys(&ak, &committed).unwrap();
+    assert_eq!(out.sealing.public(), pairs.sealing.public());
+    assert_eq!(out.signing.public(), pairs.signing.public());
 }

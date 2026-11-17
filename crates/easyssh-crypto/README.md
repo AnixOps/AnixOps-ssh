@@ -15,9 +15,12 @@ Keychain, Linux Secret Service). Default features need no secret service.
 ```text
 passphrase ──Argon2id(m=64 MiB, t=3, p=1, salt16)──▶ master (32 B, transient)
                  │
-                 ├─HKDF "easyssh/v1/account-key"──▶ AccountKey ──┬─HKDF "…/account-x25519"──▶ X25519 key pair  (seals vault keys)
-                 │                                               └─HKDF "…/account-ed25519"─▶ Ed25519 key pair (certifies devices)
+                 ├─HKDF "easyssh/v1/account-key"──▶ AccountKey ──wraps (XChaCha20-Poly1305)──▶ account key pairs blob
                  └─HKDF "easyssh/v1/auth"─────────▶ AuthSecret   (sent to the server at sign-in; phase 5, OPAQUE)
+
+Account key pairs (random, generated once; stored only wrapped):
+   X25519  ──seals──▶ VaultKey per member
+   Ed25519 ──certifies──▶ device signing keys
 
 VaultKey  (32 random B) ──sealed to each member's X25519 public key──▶ protects records of one vault
 DeviceKey (32 random B, OS keychain) ──HKDF "easyssh/v1/field-cipher"──▶ protects local database fields
@@ -26,20 +29,20 @@ DeviceSigningKey (Ed25519, seed in keychain) ──certified by the account Ed25
 
 | Key | Stored | Protects / is used for |
 |---|---|---|
-| Passphrase | nowhere | root of the account keys |
-| `AccountKey` | never (re-derived) | root of the account key pairs |
+| Passphrase | nowhere | root of `AccountKey` and `AuthSecret` |
+| `AccountKey` | never (re-derived) | wraps the account key pairs |
 | `AuthSecret` | never (re-derived) | server sign-in only; independent of `AccountKey` |
-| Account X25519 | never (re-derived) | opens sealed vault keys |
-| Account Ed25519 | never (re-derived) | signs device certificates |
+| Account X25519 / Ed25519 pairs | wrapped blob (device profile, later the server) | open sealed vault keys; sign device certificates |
 | `VaultKey` | sealed per member, server may hold the sealed copies | record ciphertexts |
 | `DeviceKey` | OS keychain | local database fields |
 | Device Ed25519 | seed in OS keychain | envelope signatures |
 
-The account X25519 and Ed25519 keys are **derived** from the passphrase
-(not generated and stored) so that a new device can recover the account
-from the passphrase alone, with no private-key blob for a server to hold.
-Changing the passphrase therefore changes both keys and requires re-sealing
-vault keys and re-certifying devices.
+The account key pairs are **random**, not derived from the passphrase. A
+passphrase change derives a new `AccountKey` and only re-wraps the blob
+(`unwrap_account_keys` with the old key, `wrap_account_keys` with the new
+one): vault shares and device certificates stay valid. A new device recovers
+the pairs by unwrapping the stored blob with the passphrase-derived
+`AccountKey`; the server stores the blob but never sees the account key.
 
 ## Formats
 
@@ -56,6 +59,13 @@ for desktop is m=65536, t=3, p=1 (`KdfParams::DESKTOP_V1`).
 keyed by the `VaultKey`. Associated data:
 `"easyssh/v1/record" || lp(record_id) || lp(vault_id) || schema_version(u32) || version_vector_digest(32)`.
 `version_vector_digest` is SHA-256 of the version vector's canonical encoding.
+
+**Wrapped account keys** (105 bytes): `0x01 || nonce(24) || ct(64) || tag(16)`;
+plaintext is `x25519_secret(32) || ed25519_seed(32)`. Key =
+`HKDF-SHA256(ikm = AccountKey, info = "easyssh/v1/account-keys-wrap")`; AAD =
+`"easyssh/v1/account-keys" || key_pair_version(0x01)`. The leading byte is both
+the blob version and the key-pair layout version. A wrong passphrase, any
+tampering or truncation fails to unwrap.
 
 **Sealed vault key** (105 bytes): `0x01 || eph_pub(32) || nonce(24) || ct(32) || tag(16)`.
 An ECIES construction from standard parts (the `crypto_box` crate has no
@@ -106,6 +116,7 @@ uncertified device or a certificate from another account fails.
 - Rollback protection state (remembering the newest vector seen per record):
   `verify_envelope` is stateless, callers compare version vectors.
 - Certificate revocation and expiry policy, cert distribution.
+- Rotating the account key pairs themselves (new random pairs would need every vault re-sealed and devices re-certified).
 - Authenticating who sealed a vault key; vault membership / key rotation.
 - Session-log encryption (secretstream), SSH key handling, the SQLite schema.
 - Hardware-backed key unlock (Windows Hello, Touch ID, FIDO2).
