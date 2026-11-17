@@ -182,6 +182,7 @@ impl Entity for Host {
                 scrollback_lines: row.get::<_, i64>("term_scrollback")?.max(0) as usize,
                 startup_command: row.get("term_startup_command")?,
             },
+            shell_integration: false,
             created_at: parse_ts(&row.get::<_, String>("created_at")?)?,
             updated_at: meta.updated_at,
         };

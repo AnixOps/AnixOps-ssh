@@ -169,8 +169,10 @@ themselves (we may also offer a hosted one).
 - **Splits and broadcast input** across panes and tabs.
 - **Shell integration** is opt-in per host: a small script, sent only when
   enabled, reports prompt boundaries, the working directory, command start
-  and exit codes through our own OSC sequence. bash, zsh and fish first; it
-  degrades quietly on shells it does not know.
+  and exit codes through our own OSC sequence (`OSC 6973`, see
+  `shell-integration/README.md`). bash, zsh and fish first; it degrades quietly
+  on shells it does not know. The daemon delivers it, on the byte stream every
+  engine produces, so russh needs nothing extra.
 - **Completion** uses an open JSON spec format in a separate repository that
   anyone can contribute to, starting with about 50 frequent commands, plus
   history and remote paths read through the session's SFTP channel. Themes

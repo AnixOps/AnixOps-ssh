@@ -5,7 +5,7 @@ use crate::agent::validate_agent_socket;
 use crate::askpass::{Hub, Prompt};
 use crate::log::Logger;
 use crate::server::{BoxFuture, Outbox, Service};
-use crate::terminal::{TermSession, DEFAULT_SCROLLBACK};
+use crate::terminal::{SpawnOptions, TermSession, DEFAULT_SCROLLBACK};
 use easyssh_core::security::{validate_alias, validate_connection};
 use easyssh_core::{AppConfig, ConfigStore, Connection, OpenSsh, SshInvocation};
 use easyssh_proto as proto;
@@ -465,14 +465,25 @@ impl Daemon {
             exit_log.info(&format!("session {sid} ended, exit code {code:?}"));
         });
         let session = tokio::task::spawn_blocking(move || {
-            let command = command_for(
+            let (command, shell_integration) = command_for(
                 &store,
                 shell.as_deref(),
                 host_id.as_deref(),
                 agent_sock.as_deref(),
             )?;
-            TermSession::spawn(spawn_id, host_id, command, cols, rows, scrollback, on_exit)
-                .map_err(|e| fail("spawn_failed", e))
+            TermSession::spawn(
+                spawn_id,
+                host_id,
+                command,
+                SpawnOptions {
+                    cols,
+                    rows,
+                    scrollback,
+                    shell_integration,
+                },
+                on_exit,
+            )
+            .map_err(|e| fail("spawn_failed", e))
         })
         .await
         .map_err(|e| fail("internal", e.to_string()))??;
@@ -584,13 +595,15 @@ fn command_for(
     shell: Option<&std::path::Path>,
     host_id: Option<&str>,
     agent_sock: Option<&Path>,
-) -> Result<CommandBuilder, Failure> {
+) -> Result<(CommandBuilder, bool), Failure> {
+    let mut shell_integration = false;
     let mut command = match host_id {
         Some(host_id) => {
             let config = store
                 .load()
                 .map_err(|e| fail("config_error", e.to_string()))?;
             let connection = resolve(&config, host_id)?;
+            shell_integration = connection.shell_integration;
             let invocation = SshInvocation::for_connection(&OpenSsh, &connection)
                 .map_err(|e| fail("invalid_host", e.to_string()))?;
             let mut command = CommandBuilder::new(invocation.executable);
@@ -610,7 +623,7 @@ fn command_for(
     if let Some(home) = dirs::home_dir() {
         command.cwd(home);
     }
-    Ok(command)
+    Ok((command, shell_integration))
 }
 
 #[cfg(windows)]

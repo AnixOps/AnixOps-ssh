@@ -3,12 +3,15 @@
 FROM debian:bookworm-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openssh-server openssh-client openssh-sftp-server socat procps \
+ && apt-get install -y --no-install-recommends openssh-server openssh-client openssh-sftp-server socat procps zsh fish \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /run/sshd \
  && ssh-keygen -A \
  && useradd -m -s /bin/bash keyuser \
  && useradd -m -s /bin/bash pwuser \
+ && useradd -m -s /usr/bin/zsh zshuser \
+ && useradd -m -s /usr/bin/fish fishuser \
+ && touch /home/zshuser/.zshrc && chown zshuser:zshuser /home/zshuser/.zshrc \
  && echo 'pwuser:e2e-test-password' | chpasswd \
  && sed -i 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@' /etc/pam.d/sshd
 

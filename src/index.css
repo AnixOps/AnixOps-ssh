@@ -26,6 +26,32 @@
   --color-ring: var(--accent);
 }
 
+/* Gutter bar per prompt (shell integration); xterm positions the element. */
+.prompt-mark {
+  /* A 3px bar inside an 8px hit area, left of the text, so the tooltip is reachable. */
+  width: 8px !important;
+  box-sizing: border-box;
+  padding-inline: 2.5px;
+  background-clip: content-box;
+  border-radius: 2px;
+  transform: translateX(-11px);
+  pointer-events: auto;
+  background-color: var(--color-label-3);
+  opacity: 0.5;
+}
+.prompt-mark-running {
+  background-color: var(--accent);
+  opacity: 1;
+}
+.prompt-mark-succeeded {
+  background-color: var(--color-success);
+  opacity: 1;
+}
+.prompt-mark-failed {
+  background-color: var(--color-danger);
+  opacity: 1;
+}
+
 @layer base {
   html,
   body,

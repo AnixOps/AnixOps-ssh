@@ -27,6 +27,8 @@ import { CompletionController, type ViewState } from "@/lib/completion/controlle
 import { completionPrefs, commandHistory, onCompletionPrefs } from "@/lib/completion/prefs";
 import { createPathLister } from "@/lib/completion/remotePaths";
 import { commandNames, loadSpec } from "@/lib/completion/specs";
+import { attachShellIntegration } from "@/lib/shellIntegration/attach";
+import { ShellIntegrationLineSource } from "@/lib/shellIntegration/lineSource";
 import { pasteNeedsConfirm, type BroadcastScope, targetsFor } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
 import { duration, ease, enter, leave } from "@/lib/motion";
@@ -121,7 +123,19 @@ export function TerminalView({
     // Command completion: follows what is typed and shows a list at the cursor.
     let files: FilesHandle | null = null;
     let hostNames: Promise<string[]> | null = null;
+    const cursorOf = () => {
+      const active = terminal.buffer.active;
+      return { x: active.cursorX, y: active.cursorY, absoluteY: active.baseY + active.cursorY, cols: terminal.cols };
+    };
+    // Keystrokes until the host's shell reports itself through the opt-in
+    // shell integration; from then on the shell's own command lines and cwd.
+    const lineSource = new ShellIntegrationLineSource(() => {
+      const cursor = cursorOf();
+      return { x: cursor.x, y: cursor.absoluteY, cols: cursor.cols };
+    });
+    const integration = attachShellIntegration(terminal, lineSource);
     const controller = new CompletionController({
+      source: lineSource,
       hostId,
       history: commandHistory,
       deps: {
@@ -143,10 +157,7 @@ export function TerminalView({
             )
             .catch(() => [])),
       },
-      cursor: () => {
-        const active = terminal.buffer.active;
-        return { x: active.cursorX, y: active.cursorY, absoluteY: active.baseY + active.cursorY, cols: terminal.cols };
-      },
+      cursor: cursorOf,
       write: (data) => sessionRef.current?.write(data),
       enabled: () => completionPrefs().enabled,
     });
@@ -200,6 +211,8 @@ export function TerminalView({
       } else if (shortcut === "find") {
         setFindOpen(true);
         window.requestAnimationFrame(() => findInputRef.current?.select());
+      } else if (shortcut === "prev-prompt" || shortcut === "next-prompt") {
+        integration.jump(shortcut === "prev-prompt" ? "previous" : "next");
       }
       // Other shortcuts are handled by the app's window listener.
       return false;
@@ -342,6 +355,7 @@ export function TerminalView({
       unregister();
       stopView();
       stopPrefs();
+      integration.dispose();
       writeParsed.dispose();
       bufferChange.dispose();
       controller.dispose();

@@ -58,6 +58,9 @@ pub struct HostFields {
     pub port: u16,
     pub proxy_jump: Option<String>,
     pub notes: String,
+    /// Opt-in shell integration for terminals on this host.
+    #[serde(default)]
+    pub shell_integration: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -119,6 +122,7 @@ fn fields_of(connection: &Connection) -> HostFields {
     let mut fields = HostFields {
         proxy_jump: connection.proxy_jump.clone(),
         notes: connection.notes.clone(),
+        shell_integration: connection.shell_integration,
         port: 22,
         ..HostFields::default()
     };
@@ -206,6 +210,7 @@ fn apply(
     connection.color = trimmed(input.color.as_deref());
     connection.proxy_jump = trimmed(fields.proxy_jump.as_deref());
     connection.notes = fields.notes.trim().to_owned();
+    connection.shell_integration = fields.shell_integration;
     validate_connection(connection).map_err(|error| error.to_string())?;
     if let Some(jump) = &connection.proxy_jump {
         validate_alias(jump).map_err(|error| error.to_string())?;

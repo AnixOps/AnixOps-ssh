@@ -184,6 +184,10 @@
         "terminal": {
           "$ref": "#/$defs/TerminalPreferences"
         },
+        "shell_integration": {
+          "type": "boolean",
+          "description": "Opt-in shell integration: after the shell starts, the daemon sends a small script that reports prompts, working directory and exit codes through OSC 6973. Absent means off."
+        },
         "created_at": {
           "type": "string",
           "format": "date-time"

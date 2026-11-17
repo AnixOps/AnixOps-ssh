@@ -4,13 +4,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Overlay } from "@/components/ui/overlay";
 import { Segmented } from "@/components/ui/segmented";
+import { Switch } from "@/components/ui/switch";
 import { deleteHost, hostColor, saveHost, type Group, type Host, type HostFields } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const COLORS = ["chart-1", "chart-2", "chart-3", "chart-4", "chart-5", "chart-6", "chart-7", "chart-8"];
 
-const emptyFields: HostFields = { alias: null, hostname: "", username: null, port: 22, proxyJump: null, notes: "" };
+const emptyFields: HostFields = { alias: null, hostname: "", username: null, port: 22, proxyJump: null, notes: "", shellIntegration: false };
 
 /** Create or edit a host. `host` is null for a new one. */
 export function HostEditor({
@@ -196,6 +197,18 @@ export function HostEditor({
               </button>
             </div>
           </Field>
+
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-caption text-label-2">{t.shellIntegration}</p>
+              <p className="mt-0.5 text-caption font-normal text-label-3">{t.shellIntegrationHint}</p>
+            </div>
+            <Switch
+              on={fields.shellIntegration}
+              label={t.shellIntegration}
+              onClick={() => set("shellIntegration", !fields.shellIntegration)}
+            />
+          </div>
 
           <Field label={t.notes} hint={t.optional}>
             <textarea

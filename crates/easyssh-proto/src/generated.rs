@@ -106,6 +106,9 @@ pub struct Connection {
     pub remote_command: ::std::option::Option<::std::string::String>,
     pub remote_directories: ::std::vec::Vec<::std::string::String>,
     pub remote_forwards: ::std::vec::Vec<::std::string::String>,
+    ///Opt-in shell integration: after the shell starts, the daemon sends a small script that reports prompts, working directory and exit codes through OSC 6973. Absent means off.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub shell_integration: ::std::option::Option<bool>,
     pub tags: ::std::vec::Vec<::std::string::String>,
     pub target: ConnectionTarget,
     pub terminal: TerminalPreferences,
