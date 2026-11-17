@@ -1,6 +1,7 @@
-import { ChevronRight, CircleAlert, FileText, LoaderCircle, ShieldCheck } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ChevronRight, FileText, LoaderCircle, ShieldCheck } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Badge, Field, Notice } from "@/components/ui/form";
 import { Overlay } from "@/components/ui/overlay";
 import { Select } from "@/components/ui/select";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -244,12 +245,9 @@ export function ImportDialog({
         )}
 
         {error && (
-          <p role="alert" className="flex items-start gap-2 rounded-sm bg-danger-soft px-3 py-2 text-callout text-danger">
-            <CircleAlert className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
-            <span className="selectable min-w-0 break-words">
-              {t.importFailed}: {error}
-            </span>
-          </p>
+          <Notice>
+            {t.importFailed}: {error}
+          </Notice>
         )}
       </div>
 
@@ -288,15 +286,6 @@ export function ImportDialog({
         )}
       </div>
     </Overlay>
-  );
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-callout text-label-2">{label}</span>
-      {children}
-    </label>
   );
 }
 
@@ -386,21 +375,6 @@ function HostTable({
         </tbody>
       </table>
     </div>
-  );
-}
-
-function Badge({ tone, children }: { tone: "neutral" | "accent" | "danger"; children: ReactNode }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex h-5 items-center whitespace-nowrap rounded-pill px-2 text-callout font-medium",
-        tone === "neutral" && "bg-fill-2 text-label-2",
-        tone === "accent" && "bg-accent-soft text-(--accent)",
-        tone === "danger" && "bg-danger-soft text-danger",
-      )}
-    >
-      {children}
-    </span>
   );
 }
 

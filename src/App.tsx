@@ -479,6 +479,7 @@ export function App() {
           tabBroadcast={activeTab ? broadcast.tabs.has(activeTab.key) : false}
           globalBroadcast={broadcast.global}
           onNav={setNav}
+          onShortcutList={() => setShortcutsOpen(true)}
         />
       )}
       </AnimatePresence>

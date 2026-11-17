@@ -2,6 +2,7 @@ import { LockKeyhole } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Overlay } from "@/components/ui/overlay";
 import { vaultUnlock } from "@/lib/backend";
@@ -64,9 +65,7 @@ export function VaultUnlockDialog() {
             className="mt-5"
           />
           {error && (
-            <p role="alert" className="mt-2 text-callout text-danger">
-              {error}
-            </p>
+            <Notice className="mt-2">{error}</Notice>
           )}
           <div className="mt-6 flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={close}>
