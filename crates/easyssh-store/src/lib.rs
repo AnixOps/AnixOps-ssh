@@ -17,6 +17,7 @@ pub mod meta;
 mod migrations;
 pub mod secrets;
 mod store;
+pub mod sync;
 mod v1;
 
 pub use app::{
@@ -31,6 +32,7 @@ pub use known_hosts::{fingerprint_of, KnownHost, KnownHostsImport, SkippedLine};
 pub use meta::{FieldChange, FieldStamp, HistoryEntry, Meta};
 pub use migrations::latest_version;
 pub use secrets::{SecretChange, SecretFlags, SecretsUpdate, StoredSecrets};
+pub use sync::{personal_vault_server_id, StoreSync, SyncAccountRow, SyncPin};
 pub use store::{Record, Store, Vault, VaultKind, PERSONAL_VAULT_ID};
 pub use v1::{EntityCounts, MigrationReport, Skipped, MIGRATION_SETTING};
 
@@ -39,3 +41,6 @@ mod tests;
 
 #[cfg(test)]
 mod secrets_tests;
+
+#[cfg(test)]
+mod sync_tests;

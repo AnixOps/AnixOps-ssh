@@ -9,6 +9,7 @@
 
 mod error;
 pub mod field;
+pub mod fingerprint;
 pub mod kdf;
 pub mod keys;
 pub mod keystore;
@@ -19,6 +20,7 @@ pub mod sign;
 pub mod version_vector;
 
 pub use error::{CryptoError, Result};
+pub use fingerprint::{account_fingerprint, fingerprints_match, FINGERPRINT_GROUPS};
 pub use field::{DeviceFieldCipher, DeviceKeyCipher, FieldCipher, NotConfigured};
 pub use kdf::{derive_account_secrets, AccountSecrets, KdfHeader, KdfParams};
 pub use keys::{

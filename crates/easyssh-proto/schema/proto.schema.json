@@ -2108,6 +2108,656 @@
       ],
       "additionalProperties": false,
       "description": "Event `vault.changed` payload. Sent to every client when the vault locks or unlocks (also by auto-lock)."
+    },
+    "SyncState": {
+      "type": "string",
+      "enum": [
+        "signed_out",
+        "idle",
+        "syncing",
+        "error",
+        "locked"
+      ],
+      "description": "`locked`: signed in, but the vault is locked, so the account secrets cannot be opened yet."
+    },
+    "SyncCounts": {
+      "type": "object",
+      "properties": {
+        "pulled": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pushed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "merged": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resolved": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Same-field conflicts a merge decided; the losing value is in the record's history."
+        }
+      },
+      "required": [
+        "pulled",
+        "pushed",
+        "merged",
+        "resolved"
+      ],
+      "additionalProperties": false,
+      "description": "What the last sync run did."
+    },
+    "SyncStatus": {
+      "type": "object",
+      "properties": {
+        "signed_in": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/SyncState"
+        },
+        "server_url": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "username": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "device_name": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "device_id": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fingerprint": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "This account's safety number: twelve groups of five digits. Members compare it with what they see for you."
+        },
+        "last_sync_at": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "RFC 3339."
+        },
+        "last_error": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_error_code": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pending": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Records waiting to be pushed."
+        },
+        "last": {
+          "$ref": "#/$defs/SyncCounts"
+        }
+      },
+      "required": [
+        "signed_in",
+        "state",
+        "server_url",
+        "username",
+        "device_name",
+        "device_id",
+        "fingerprint",
+        "last_sync_at",
+        "last_error",
+        "last_error_code",
+        "pending",
+        "last"
+      ],
+      "additionalProperties": false,
+      "description": "The sync state. No secret is ever part of it. Reply of `sync.status`, `sync.signup`, `sync.signin`, `sync.signout` and `sync.now`, and payload of event `sync.state`."
+    },
+    "SyncStatusParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `sync.status` payload. Reply: SyncStatus."
+    },
+    "SyncSignupParams": {
+      "type": "object",
+      "properties": {
+        "server_url": {
+          "type": "string",
+          "description": "https://, or http:// only for a loopback address."
+        },
+        "username": {
+          "type": "string"
+        },
+        "passphrase": {
+          "type": "string",
+          "description": "Stretched on this device with Argon2id; never sent and never stored."
+        },
+        "device_name": {
+          "type": "string",
+          "description": "How this device appears in the device list; defaults to the host name."
+        }
+      },
+      "required": [
+        "server_url",
+        "username",
+        "passphrase"
+      ],
+      "additionalProperties": false,
+      "description": "Command `sync.signup` payload: create an account on the server (OPAQUE registration), create the personal vault and enroll this device. Reply: SyncStatus."
+    },
+    "SyncSigninParams": {
+      "type": "object",
+      "properties": {
+        "server_url": {
+          "type": "string",
+          "description": "https://, or http:// only for a loopback address."
+        },
+        "username": {
+          "type": "string"
+        },
+        "passphrase": {
+          "type": "string",
+          "description": "Stretched on this device with Argon2id; never sent and never stored."
+        },
+        "device_name": {
+          "type": "string",
+          "description": "How this device appears in the device list; defaults to the host name."
+        }
+      },
+      "required": [
+        "server_url",
+        "username",
+        "passphrase"
+      ],
+      "additionalProperties": false,
+      "description": "Command `sync.signin` payload: sign in to an existing account on this device (OPAQUE login, unwrap the account keys, enroll this device with an account-signed certificate). Reply: SyncStatus. Fails with `wrong_passphrase`."
+    },
+    "SyncSignoutParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `sync.signout` payload: end the session, revoke nothing, forget the account keys and sync bookkeeping on this device. Hosts stay. Reply: SyncStatus."
+    },
+    "SyncNowParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `sync.now` payload: pull and push now. Reply: SyncStatus."
+    },
+    "SyncDevice": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix seconds."
+        },
+        "revoked": {
+          "type": "boolean"
+        },
+        "this_device": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "device_id",
+        "name",
+        "created_at",
+        "revoked",
+        "this_device"
+      ],
+      "additionalProperties": false
+    },
+    "SyncDevicesListParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `sync.devices.list` payload. Reply: SyncDevicesListResult."
+    },
+    "SyncDevicesListResult": {
+      "type": "object",
+      "properties": {
+        "devices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SyncDevice"
+          }
+        }
+      },
+      "required": [
+        "devices"
+      ],
+      "additionalProperties": false
+    },
+    "SyncDevicesRevokeParams": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "device_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `sync.devices.revoke` payload: the server stops accepting pushes from that device and ends its sessions. Reply: null. The current device cannot be revoked."
+    },
+    "VaultInfo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "personal",
+            "team"
+          ]
+        },
+        "role": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The signed-in account's role in a team vault."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "role"
+      ],
+      "additionalProperties": false
+    },
+    "VaultsListParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `vaults.list` payload. Reply: VaultsListResult."
+    },
+    "VaultsListResult": {
+      "type": "object",
+      "properties": {
+        "vaults": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VaultInfo"
+          }
+        }
+      },
+      "required": [
+        "vaults"
+      ],
+      "additionalProperties": false
+    },
+    "VaultCreateSharedParams": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.create_shared` payload: create a team vault on the server; the caller is its owner. Reply: VaultInfo."
+    },
+    "VaultMember": {
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "owner",
+            "editor",
+            "viewer"
+          ]
+        },
+        "fingerprint": {
+          "type": "string",
+          "description": "Safety number of the member's account keys."
+        },
+        "trust": {
+          "type": "string",
+          "enum": [
+            "self",
+            "confirmed",
+            "unconfirmed",
+            "changed"
+          ],
+          "description": "`confirmed`: a person compared the fingerprint when adding the member; `unconfirmed`: first seen from the server; `changed`: the keys differ from the pinned ones, and this member's records are refused."
+        }
+      },
+      "required": [
+        "account_id",
+        "username",
+        "role",
+        "fingerprint",
+        "trust"
+      ],
+      "additionalProperties": false
+    },
+    "VaultMembersListParams": {
+      "type": "object",
+      "properties": {
+        "vault_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "vault_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.members.list` payload. Reply: VaultMembersListResult."
+    },
+    "VaultMembersListResult": {
+      "type": "object",
+      "properties": {
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VaultMember"
+          }
+        }
+      },
+      "required": [
+        "members"
+      ],
+      "additionalProperties": false
+    },
+    "VaultMembersLookupParams": {
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "username"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.members.lookup` payload: look an account up and compute its fingerprint, to show before adding. Reply: VaultMembersLookupResult."
+    },
+    "VaultMembersLookupResult": {
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_id",
+        "username",
+        "fingerprint"
+      ],
+      "additionalProperties": false
+    },
+    "VaultMembersAddParams": {
+      "type": "object",
+      "properties": {
+        "vault_id": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "owner",
+            "editor",
+            "viewer"
+          ]
+        },
+        "fingerprint": {
+          "type": "string",
+          "description": "The fingerprint the person compared. The daemon looks the account up again and refuses (`fingerprint_mismatch`) when the keys changed."
+        }
+      },
+      "required": [
+        "vault_id",
+        "username",
+        "role",
+        "fingerprint"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.members.add` payload (owner only): seal the vault key to the member and add them. Reply: VaultMember."
+    },
+    "VaultMembersRemoveParams": {
+      "type": "object",
+      "properties": {
+        "vault_id": {
+          "type": "string"
+        },
+        "account_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "vault_id",
+        "account_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.members.remove` payload (owner only). The vault key is not rotated yet. Reply: null."
+    },
+    "VaultMembersRoleParams": {
+      "type": "object",
+      "properties": {
+        "vault_id": {
+          "type": "string"
+        },
+        "account_id": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "owner",
+            "editor",
+            "viewer"
+          ]
+        }
+      },
+      "required": [
+        "vault_id",
+        "account_id",
+        "role"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.members.role` payload (owner only). Reply: null."
+    },
+    "HostsMoveVaultParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "vault_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "vault_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `hosts.move_vault` payload: move a host into another vault. The host gets a new id (a record never changes vault); its tunnels follow. Reply: HostsMoveVaultResult."
+    },
+    "HostsMoveVaultResult": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "HostHistoryEntry": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer"
+        },
+        "field": {
+          "type": "string"
+        },
+        "value": {
+          "description": "Any JSON value.",
+          "tsType": "unknown"
+        },
+        "changed_at": {
+          "type": "string",
+          "description": "RFC 3339."
+        },
+        "device": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "seq",
+        "field",
+        "value",
+        "changed_at",
+        "device"
+      ],
+      "additionalProperties": false,
+      "description": "A value of one host field that an edit or a merge replaced."
+    },
+    "HostsHistoryParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `hosts.history` payload. Reply: HostsHistoryResult (newest first; secrets are never listed)."
+    },
+    "HostsHistoryResult": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostHistoryEntry"
+          }
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    "HostsHistoryRestoreParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "seq"
+      ],
+      "additionalProperties": false,
+      "description": "Command `hosts.history_restore` payload: put one old value back, as an ordinary edit that syncs. Reply: null."
     }
   }
 }

@@ -99,6 +99,15 @@ impl AccountKeyPair {
         Ok(Self::from_seeds(*x, *e))
     }
 
+    /// The raw secrets (X25519 secret, then Ed25519 seed), for storage that
+    /// is itself encrypted, such as the app database. Zeroized on drop.
+    pub fn to_seeds(&self) -> Zeroizing<[u8; 64]> {
+        let mut out = Zeroizing::new([0u8; 64]);
+        out[..32].copy_from_slice(&self.sealing.0.to_bytes());
+        out[32..].copy_from_slice(&self.signing.0.to_bytes());
+        out
+    }
+
     /// Build from raw secrets (X25519 secret, Ed25519 seed).
     pub fn from_seeds(x25519_secret: [u8; 32], ed25519_seed: [u8; 32]) -> Self {
         Self {
