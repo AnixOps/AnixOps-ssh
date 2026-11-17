@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Overlay } from "@/components/ui/overlay";
-import { onAskpass, replyAskpass, type AskpassPrompt } from "@/lib/backend";
+import { onAskpass, onAskpassResolved, replyAskpass, type AskpassPrompt } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 
 /** Answers OpenSSH prompts from processes without a terminal (the file pane
@@ -16,6 +16,9 @@ export function AskpassDialog() {
   const current = queue[0];
 
   useEffect(() => onAskpass((prompt) => setQueue((items) => [...items, prompt])), []);
+
+  // Another window answered (or the prompt timed out): close it here too.
+  useEffect(() => onAskpassResolved((id) => setQueue((items) => items.filter((item) => item.id !== id))), []);
 
   useEffect(() => {
     setValue("");

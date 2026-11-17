@@ -61,6 +61,12 @@ pub struct AskpassReplyParams {
     pub answer: ::std::option::Option<::std::string::String>,
     pub id: u64,
 }
+///Event `askpass.resolved` payload. The prompt `id` was answered, cancelled or timed out; clients close any dialog for it.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct AskpassResolvedEvent {
+    pub id: u64,
+}
 ///UI -> daemon request.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
@@ -118,6 +124,17 @@ pub enum ConnectionTarget {
         #[serde(deserialize_with = "::std::option::Option::deserialize")]
         username: ::std::option::Option<::std::string::String>,
     },
+}
+///Command `daemon.shutdown_when_idle` payload. The daemon refuses new sessions (error `draining`) and exits once no session is running, even if clients stay connected. Reply: DaemonShutdownWhenIdleResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct DaemonShutdownWhenIdleParams {}
+///`DaemonShutdownWhenIdleResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct DaemonShutdownWhenIdleResult {
+    ///Sessions still running; the daemon exits when this reaches 0.
+    pub running_sessions: u64,
 }
 ///`DisplayDensity`
 #[derive(
@@ -230,6 +247,10 @@ pub struct Group {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub parent_id: ::std::option::Option<::std::string::String>,
 }
+///Event `hosts.changed` payload. Sent to every connected client after `hosts.save` or `hosts.delete`; clients refresh their host list.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct HostsChangedEvent {}
 ///Command `hosts.delete` payload. Reply: null.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
@@ -252,6 +273,9 @@ pub struct HostsListResult {
 #[serde(deny_unknown_fields)]
 pub struct HostsSaveParams {
     pub connection: Connection,
+    ///A group to create when no group with this id exists yet; `connection.group_id` may refer to it.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub group: ::std::option::Option<Group>,
 }
 ///`HostsSaveResult`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -325,17 +349,28 @@ pub struct ProtoError {
     pub code: ::std::string::String,
     pub message: ::std::string::String,
 }
-///Command `proto.hello` payload. Reply: ProtoHelloResult.
+///Command `proto.hello` payload. Reply: ProtoHelloResult, or the error `schema_mismatch`.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct ProtoHelloParams {
-    pub schema_version: SchemaVersion,
+    ///Build version of the client application. The app compares the daemon's `app_version` with its own and asks a daemon from another build to drain (`daemon.shutdown_when_idle`).
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub app_version: ::std::option::Option<::std::string::String>,
+    ///The protocol schema version the client speaks. A daemon that speaks another version answers with the `schema_mismatch` error.
+    pub schema_version: u64,
 }
 ///`ProtoHelloResult`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct ProtoHelloResult {
-    pub schema_version: SchemaVersion,
+    ///Build version of the daemon (the application executable it runs from).
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub app_version: ::std::option::Option<::std::string::String>,
+    ///True once the daemon was asked to exit when its sessions end; it refuses new sessions.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub draining: ::std::option::Option<bool>,
+    ///The protocol schema version the daemon speaks.
+    pub schema_version: u64,
 }
 ///Answer to the Command with the same id: exactly one of `ok` or `error`.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -456,6 +491,9 @@ pub struct SessionOpenParams {
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub host_id: ::std::option::Option<::std::string::String>,
     pub rows: u16,
+    ///The client's current SSH_AUTH_SOCK, so the session uses the agent of the user's current login. Must be an absolute path to a socket owned by the daemon's user; otherwise it is ignored. Ignored on Windows.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub ssh_auth_sock: ::std::option::Option<::std::string::String>,
 }
 ///`SessionOpenResult`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]

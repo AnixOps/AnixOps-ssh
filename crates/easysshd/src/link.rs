@@ -56,6 +56,13 @@ pub enum SessionMsg {
     },
 }
 
+/// How [`Link::connect_with`] introduces itself.
+#[derive(Debug, Clone, Default)]
+pub struct LinkOptions {
+    /// Build version sent in `proto.hello`.
+    pub app_version: Option<String>,
+}
+
 /// Receives a session's messages; returns `false` when its consumer is gone,
 /// which drops the sink (the session keeps running in the daemon).
 pub type SessionSink = Box<dyn FnMut(SessionMsg) -> bool + Send>;
@@ -71,8 +78,13 @@ pub struct AskpassPrompt {
 pub trait LinkHandler: Send + Sync + 'static {
     /// OpenSSH asked for a password, passphrase or confirmation.
     fn askpass_prompt(&self, prompt: AskpassPrompt);
-    /// The connection to the daemon ended. Every sink has received `Exit`.
+    /// The connection to the daemon ended. Every sink has received
+    /// `Exit { code: None }` (after [`Link::is_alive`] turned false).
     fn lost(&self) {}
+    /// Prompt `id` was answered, cancelled or timed out (by any client).
+    fn askpass_resolved(&self, _id: u64) {}
+    /// A client saved or deleted a host: refresh the host list.
+    fn hosts_changed(&self) {}
 }
 
 type Reply = Result<Value, LinkError>;
@@ -88,9 +100,11 @@ struct Inner {
     tx: mpsc::UnboundedSender<Value>,
     pending: Mutex<HashMap<String, Pending>>,
     sinks: Mutex<HashMap<String, SessionSink>>,
-    alive: AtomicBool,
+    alive: Arc<AtomicBool>,
     askpass_endpoint: OnceLock<String>,
     handler: Arc<dyn LinkHandler>,
+    daemon_version: OnceLock<Option<String>>,
+    draining: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -182,6 +196,10 @@ impl Inner {
                 prompt: payload["prompt"].as_str().unwrap_or_default().to_owned(),
                 confirm: payload["confirm"].as_bool().unwrap_or(false),
             }),
+            Some("askpass.resolved") => self
+                .handler
+                .askpass_resolved(payload["id"].as_u64().unwrap_or(0)),
+            Some("hosts.changed") => self.handler.hosts_changed(),
             _ => {}
         }
     }
@@ -201,6 +219,15 @@ impl Link {
         runtime_dir: impl AsRef<Path>,
         handler: Arc<dyn LinkHandler>,
     ) -> Result<Link, LinkError> {
+        Self::connect_with(runtime_dir, handler, LinkOptions::default()).await
+    }
+
+    /// [`Link::connect`] with an app version for the handshake.
+    pub async fn connect_with(
+        runtime_dir: impl AsRef<Path>,
+        handler: Arc<dyn LinkHandler>,
+        options: LinkOptions,
+    ) -> Result<Link, LinkError> {
         let client = Client::connect(runtime_dir)
             .await
             .map_err(|e| err("connect_failed", e.to_string()))?;
@@ -210,24 +237,32 @@ impl Link {
             tx,
             pending: Mutex::new(HashMap::new()),
             sinks: Mutex::new(HashMap::new()),
-            alive: AtomicBool::new(true),
+            alive: Arc::new(AtomicBool::new(true)),
             askpass_endpoint: OnceLock::new(),
             handler,
+            daemon_version: OnceLock::new(),
+            draining: AtomicBool::new(false),
         });
         tokio::spawn(read_loop(inner.clone(), reader));
         tokio::spawn(write_loop(inner.clone(), writer, rx));
         let link = Link { inner };
-        let hello = link
-            .request(
-                "proto.hello",
-                json!({"schema_version": proto::SCHEMA_VERSION}),
-            )
-            .await?;
+        let mut hello_params = json!({"schema_version": proto::SCHEMA_VERSION});
+        if let Some(version) = &options.app_version {
+            hello_params["app_version"] = json!(version);
+        }
+        let hello = link.request("proto.hello", hello_params).await?;
         if hello["schema_version"].as_u64() != Some(proto::SCHEMA_VERSION as u64) {
             return Err(err(
                 "schema_mismatch",
                 format!("the daemon speaks schema {}", hello["schema_version"]),
             ));
+        }
+        let _ = link
+            .inner
+            .daemon_version
+            .set(hello["app_version"].as_str().map(str::to_owned));
+        if hello["draining"].as_bool() == Some(true) {
+            link.inner.draining.store(true, Ordering::SeqCst);
         }
         let endpoint = link.request("askpass.endpoint", json!({})).await?;
         let _ = link
@@ -239,6 +274,31 @@ impl Link {
 
     pub fn is_alive(&self) -> bool {
         self.inner.alive.load(Ordering::SeqCst)
+    }
+
+    /// A flag that turns false when the connection ends, before any sink or
+    /// handler hears of it. Lets a sink tell a lost connection from a session
+    /// that really ended.
+    pub fn alive_flag(&self) -> Arc<AtomicBool> {
+        self.inner.alive.clone()
+    }
+
+    /// The daemon's build version, when it reported one.
+    pub fn daemon_app_version(&self) -> Option<&str> {
+        self.inner.daemon_version.get()?.as_deref()
+    }
+
+    /// True once the daemon is draining: it keeps its running sessions but
+    /// refuses new ones, and exits when the last one ends.
+    pub fn is_draining(&self) -> bool {
+        self.inner.draining.load(Ordering::SeqCst)
+    }
+
+    /// `daemon.shutdown_when_idle`: returns how many sessions still run.
+    pub async fn shutdown_when_idle(&self) -> Result<u64, LinkError> {
+        let reply = self.request("daemon.shutdown_when_idle", json!({})).await?;
+        self.inner.draining.store(true, Ordering::SeqCst);
+        Ok(reply["running_sessions"].as_u64().unwrap_or(0))
     }
 
     /// `"<port> <token>"` for `ANIXOPS_SSH_ASKPASS`; a secret, for OpenSSH
@@ -295,13 +355,24 @@ impl Link {
         rows: u16,
         sink: SessionSink,
     ) -> Result<String, LinkError> {
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut payload = json!({"host_id": host_id, "cols": cols, "rows": rows});
+        // The agent of the user's current login, not the daemon's (Unix only).
+        #[cfg(unix)]
+        if let Some(sock) = std::env::var("SSH_AUTH_SOCK")
+            .ok()
+            .filter(|s| !s.is_empty())
+        {
+            payload["ssh_auth_sock"] = json!(sock);
+        }
         let reply = self
-            .send_request(
-                "session.open",
-                json!({"host_id": host_id, "cols": cols, "rows": rows}),
-                Some((None, sink)),
-            )
-            .await?;
+            .send_request("session.open", payload, Some((None, sink)))
+            .await
+            .inspect_err(|e| {
+                if e.code == "draining" {
+                    self.inner.draining.store(true, Ordering::SeqCst);
+                }
+            })?;
         Ok(reply["session_id"].as_str().unwrap_or_default().to_owned())
     }
 
