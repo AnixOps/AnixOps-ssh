@@ -1,0 +1,9 @@
+{
+  "account_key_hex": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+  "ed25519_public_hex": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
+  "ed25519_seed_hex": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+  "nonce_hex": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+  "wrapped_hex": "010d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d6bb4883c9bd4dc4dac568e03d40fc71d8da1c726a84b3aeed6c6443b700b9f2fa685ee970e3b9f9b15fef9823c37a0d49fdf3414df72c897c054b85e8bc863aea4c06f448ec54d4f4f760b1ba9aac63f",
+  "x25519_public_hex": "f77ff4b10788bfdca62ca0bb160d427cf5762d85f2b5cad6807ec9c3febbde09",
+  "x25519_secret_hex": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+}
