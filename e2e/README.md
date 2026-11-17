@@ -6,6 +6,12 @@ what v1 does today so that later rewrites can be compared with it. They run on
 Linux only, in the CI job "End-to-end (Linux)". Windows and macOS keep unit
 tests and the manual smoke test in `RELEASING.md`.
 
+The `tests/russh_*.rs` files run the same scenarios against the new engine
+(`crates/easyssh-ssh`, built on russh) with the same containers. They need no
+`ssh` client except `ssh-keygen`, `ssh-agent` and `ssh-add` for the key and
+agent tests. The phase 2 exit criterion is that the russh column below passes
+the whole suite.
+
 ## Run locally
 
 Needs Docker with Compose, OpenSSH client tools (`ssh`, `sftp`, `scp`,
@@ -71,39 +77,54 @@ and check that OpenSSH really asked it for the password.
 | `tests/password.rs` | askpass password for exec, `SftpSession`, transfer and tunnel; wrong password fails without hanging |
 | `tests/jump.rs` | exec and SFTP through a `ProxyJump` alias and through `Connection::proxy_jump` |
 
-## Baseline against v1
+## Baseline against v1 and russh
 
 Results from the CI run on the branch that added these tests. "passes" means
 it passed against v1 unchanged.
 
-| File | Test | v1 | Notes |
-| --- | --- | --- | --- |
-| `exec` | `config_is_isolated_from_the_real_home` | passes | ssh -G through the wrappers shows the test config |
-| `exec` | `exec_through_alias_returns_stdout` | passes |  |
-| `exec` | `exec_propagates_remote_exit_code` | passes | remote `exit 7` gives exit code 7 |
-| `exec` | `exec_through_endpoint_target` | passes | host, user and port instead of an alias |
-| `terminal` | `interactive_shell_on_a_pty` | passes | marker round trip, resize, exit ends ssh |
-| `sftp` | `browse_and_manage_files` | passes | connect, home, mkdir, list, upload, rename, remove, rmdir |
-| `sftp` | `missing_directory_is_reported_as_not_found_or_empty` | passes (either outcome) | listing a missing directory gives a "not found" error or an empty list depending on timing; see below |
-| `sftp` | `upload_and_download_through_sftp_transfer` | passes | 300 kB, bytes identical |
-| `sftp` | `download_of_a_missing_file_fails_with_a_reason` | passes | non-zero exit, no local file |
-| `sftp` | `upload_and_download_through_scp_invocation` | passes | ScpInvocation, bytes identical |
-| `tunnels` | `local_forward_reaches_the_echo_service` | passes | -L, port closes after stop |
-| `tunnels` | `dynamic_forward_speaks_socks5` | passes | -D, SOCKS5 CONNECT by hand |
-| `tunnels` | `remote_forward_reaches_a_local_listener` | passes | -R, checked from inside the container |
-| `tunnels` | `forward_to_a_busy_local_port_fails_fast` | passes | ExitOnForwardFailure makes ssh exit |
-| `password` | `exec_with_password_from_askpass` | passes | askpass was asked for the password |
-| `password` | `wrong_password_fails_cleanly` | passes | Permission denied, no hang |
-| `password` | `sftp_session_with_password_from_askpass` | passes |  |
-| `password` | `sftp_session_with_wrong_password_errors_without_hanging` | passes | connect returns an error |
-| `password` | `tunnel_with_password_from_askpass` | passes |  |
-| `password` | `tunnel_with_wrong_password_exits` | passes | Permission denied |
-| `password` | `transfer_with_password_from_askpass` | failed on 1.0.1, fixed in 1.0.2 | `sftp -b` implied BatchMode, no password prompt; see below |
-| `jump` | `exec_through_proxy_jump_alias_from_config` | passes | ProxyJump in ssh config |
-| `jump` | `exec_through_connection_proxy_jump` | passes | Connection.proxy_jump (-J) |
-| `jump` | `sftp_through_proxy_jump_alias_from_config` | passes | session, upload, download |
-| `jump` | `sftp_through_connection_proxy_jump` | passes | session, upload, download |
-| `jump` | `the_bastion_is_a_different_machine` | passes | sanity check for the jump tests |
+| File | Test | v1 | Notes | russh test | russh |
+| --- | --- | --- | --- | --- | --- |
+| `exec` | `config_is_isolated_from_the_real_home` | passes | ssh -G through the wrappers shows the test config | n/a (the russh tests build their own parameters; no ssh config is read) | n/a |
+| `exec` | `exec_through_alias_returns_stdout` | passes |  | `russh_exec::exec_returns_stdout_stderr_and_exit` | passes |
+| `exec` | `exec_propagates_remote_exit_code` | passes | remote `exit 7` gives exit code 7 | `russh_exec::exec_propagates_remote_exit_code` | passes |
+| `exec` | `exec_through_endpoint_target` | passes | host, user and port instead of an alias | `russh_exec::exec_returns_stdout_stderr_and_exit` | passes |
+| `terminal` | `interactive_shell_on_a_pty` | passes | marker round trip, resize, exit ends ssh | `russh_terminal::interactive_shell_on_a_pty` | passes |
+| `sftp` | `browse_and_manage_files` | passes | connect, home, mkdir, list, upload, rename, remove, rmdir | `russh_sftp::browse_and_manage_files` | passes |
+| `sftp` | `missing_directory_is_reported_as_not_found_or_empty` | passes (either outcome) | listing a missing directory gives a "not found" error or an empty list depending on timing; see below | `russh_sftp::missing_paths_are_reported_as_not_found` | passes |
+| `sftp` | `upload_and_download_through_sftp_transfer` | passes | 300 kB, bytes identical | `russh_sftp::upload_and_download_300_kb_streams` | passes |
+| `sftp` | `download_of_a_missing_file_fails_with_a_reason` | passes | non-zero exit, no local file | `russh_sftp::download_of_a_missing_file_fails_with_a_reason` | passes |
+| `sftp` | `upload_and_download_through_scp_invocation` | passes | ScpInvocation, bytes identical | `russh_sftp::upload_and_download_300_kb_streams` | passes |
+| `tunnels` | `local_forward_reaches_the_echo_service` | passes | -L, port closes after stop | `russh_tunnels::local_forward_reaches_the_echo_service` | passes |
+| `tunnels` | `dynamic_forward_speaks_socks5` | passes | -D, SOCKS5 CONNECT by hand | `russh_tunnels::dynamic_forward_speaks_socks5` | passes |
+| `tunnels` | `remote_forward_reaches_a_local_listener` | passes | -R, checked from inside the container | `russh_tunnels::remote_forward_reaches_a_local_listener` | passes |
+| `tunnels` | `forward_to_a_busy_local_port_fails_fast` | passes | ExitOnForwardFailure makes ssh exit | `russh_tunnels::forward_to_a_busy_local_port_fails_fast` | passes |
+| `password` | `exec_with_password_from_askpass` | passes | askpass was asked for the password | `russh_password::exec_with_password_from_the_interaction` | passes |
+| `password` | `wrong_password_fails_cleanly` | passes | Permission denied, no hang | `russh_password::wrong_password_fails_cleanly` | passes |
+| `password` | `sftp_session_with_password_from_askpass` | passes |  | `russh_password::sftp_session_with_password` | passes |
+| `password` | `sftp_session_with_wrong_password_errors_without_hanging` | passes | connect returns an error | `russh_password::wrong_password_fails_cleanly` | passes |
+| `password` | `tunnel_with_password_from_askpass` | passes |  | `russh_password::tunnel_with_password` | passes |
+| `password` | `tunnel_with_wrong_password_exits` | passes | Permission denied | `russh_password::wrong_password_fails_cleanly` | passes |
+| `password` | `transfer_with_password_from_askpass` | failed on 1.0.1, fixed in 1.0.2 | `sftp -b` implied BatchMode, no password prompt; see below | `russh_password::sftp_session_with_password` | passes |
+| `jump` | `exec_through_proxy_jump_alias_from_config` | passes | ProxyJump in ssh config | `russh_jump::exec_through_the_bastion` | passes |
+| `jump` | `exec_through_connection_proxy_jump` | passes | Connection.proxy_jump (-J) | `russh_jump::exec_through_the_bastion` | passes |
+| `jump` | `sftp_through_proxy_jump_alias_from_config` | passes | session, upload, download | `russh_jump::sftp_through_the_bastion` | passes |
+| `jump` | `sftp_through_connection_proxy_jump` | passes | session, upload, download | `russh_jump::sftp_through_the_bastion` | passes |
+| `jump` | `the_bastion_is_a_different_machine` | passes | sanity check for the jump tests | `russh_jump::the_bastion_is_a_different_machine` | passes |
+
+### russh-only tests
+
+These have no OpenSSH counterpart: `russh_exec` (`many_channels_share_one_connection`,
+`exec_after_disconnect_fails`), `russh_terminal` (`shell_and_exec_run_on_one_connection`),
+`russh_sftp` (`sftp_and_exec_share_the_connection`), `russh_tunnels`
+(`all_three_forwards_run_on_one_connection`), `russh_password`
+(`cancelled_password_prompt_fails_without_hanging`,
+`chain_falls_through_to_password_when_keys_are_not_accepted`,
+`rejected_host_key_stops_before_any_password_is_asked`), `russh_keys` (identity
+file, encrypted key with passphrase, wrong passphrase, key order, agent first,
+empty or missing agent, no credentials), `russh_hostkey` (trust on first use,
+rejection, accept once, changed key never auto-accepted and replaceable on
+purpose, hashed entries, per-port entries) and `russh_jump` (forward through the
+bastion, rejected hop key, unreachable target).
 
 ## Known v1 failures
 
