@@ -540,7 +540,10 @@ async fn askpass_prompts_reach_clients_and_answers_return() {
 
     // With nobody attached there is nobody to ask.
     drop(c);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    eventually("the daemon notices the client left", || {
+        s.daemon.client_count() == 0
+    })
+    .await;
     let ep = endpoint.clone();
     let nobody = tokio::task::spawn_blocking(move || askpass::ask(&ep, "ctx-3", "h", "p: "))
         .await

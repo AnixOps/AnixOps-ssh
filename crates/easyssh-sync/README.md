@@ -150,6 +150,17 @@ Trusted accounts: the client's own, plus members of shared vaults added with
 `trust_members`, which takes their signing keys from the server's member
 list (trust on first use; compare fingerprints out of band for sensitive vaults).
 
+## Request size
+
+The server sends `x-easyssh-max-body: <bytes>` on every response. `HttpClient`
+remembers it and, for a later request whose JSON body is larger, fails
+locally with `TransportError::Api { status: 413, code: TooLarge, .. }`, the
+error the server itself would answer with, without sending the body. Until
+the first response the limit is unknown and the server decides (it answers
+413 `too_large`, reading and discarding bodies up to 4 times its limit so the
+answer arrives). Servers that do not send the header are never limited by the
+client, and older clients simply ignore it: the change is additive.
+
 ## Limits
 
 - The crate does not touch SQLite: `SyncStore` is the adapter the engine
