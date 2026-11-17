@@ -1,0 +1,39 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "crontab",
+  "description": "Maintain crontab files for individual users",
+  "options": [
+    {
+      "name": "-l",
+      "description": "Display the current crontab"
+    },
+    {
+      "name": "-e",
+      "description": "Edit the current crontab"
+    },
+    {
+      "name": "-r",
+      "description": "Remove the current crontab"
+    },
+    {
+      "name": "-u",
+      "description": "Operate on this user's crontab",
+      "args": [
+        {
+          "name": "user"
+        }
+      ]
+    },
+    {
+      "name": "-i",
+      "description": "Ask before removing the crontab"
+    }
+  ],
+  "args": [
+    {
+      "name": "file",
+      "optional": true,
+      "template": "filepaths"
+    }
+  ]
+}
