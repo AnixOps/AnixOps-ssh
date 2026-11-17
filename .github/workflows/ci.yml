@@ -167,12 +167,159 @@ jobs:
           path: logs/
           if-no-files-found: ignore
 
+  # Mobile prototype (docs/mobile-prototype.md): the engine crates build for
+  # Android, and the Tauri app builds a debug APK with the runner's SDK and NDK.
+  # Nothing is signed or published; the APK is an artifact for trying on a phone.
+  android:
+    name: Android (debug APK)
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash -o pipefail {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - name: Android SDK and NDK
+        run: |
+          mkdir -p logs
+          # The runner image ships the SDK and an NDK; accept the licences so
+          # Gradle may fetch the platform and build tools it asks for.
+          echo "ANDROID_HOME=$ANDROID_HOME" "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" | tee logs/android-env.log
+          echo "NDK_HOME=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --list_installed 2>&1 | tee -a logs/android-env.log
+          java -version 2>&1 | tee -a logs/android-env.log
+      - name: Engine crates build for Android
+        run: |
+          # What `tauri android build` sets up for cargo, for a plain `cargo check`.
+          BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$BIN/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$BIN/llvm-ar"
+          cargo check --target aarch64-linux-android \
+            -p easyssh-core -p easyssh-crypto -p easyssh-ssh -p easyssh-store -p easyssh-vault -p easyssh-engine \
+            2>&1 | tee logs/android-engine-check.log
+      - name: Install frontend
+        run: npm install > logs/npm-install.log 2>&1
+      - name: Build debug APK
+        run: |
+          start=$(date +%s)
+          npx tauri android build --debug --apk --target aarch64 2>&1 | tee logs/android-build.log
+          echo "debug_build_seconds=$(( $(date +%s) - start ))" > logs/android-timing.env
+      - name: Measure
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p apk
+          apk=$(find src-tauri/gen/android/app/build/outputs/apk -name '*debug*.apk' | head -1)
+          if [ -z "$apk" ]; then echo "no debug APK was built" | tee logs/android-metrics.md; exit 1; fi
+          cp "$apk" apk/AnixOps-SSH-debug-aarch64.apk
+          {
+            echo "# Android debug APK"
+            echo
+            echo "- APK: $(basename "$apk"), $(stat -c %s "$apk") bytes"
+            echo "- $(tr '_' ' ' < logs/android-timing.env | sed 's/=/: /')"
+            echo "- Native library inside:"
+            unzip -l "$apk" | grep -E '\.so$' | sed 's/^/    /'
+          } | tee logs/android-metrics.md
+      # The debug APK carries debug symbols; the release build is what a user
+      # would download. Unsigned, informational: it must not fail the job.
+      - name: Build release APK (size only)
+        continue-on-error: true
+        run: |
+          start=$(date +%s)
+          npx tauri android build --apk --target aarch64 2>&1 | tee logs/android-release-build.log
+          apk=$(find src-tauri/gen/android/app/build/outputs/apk -name '*release*.apk' | head -1)
+          {
+            echo
+            echo "# Android release APK (unsigned)"
+            echo
+            echo "- APK: $(basename "$apk"), $(stat -c %s "$apk") bytes"
+            echo "- release build seconds: $(( $(date +%s) - start ))"
+            unzip -l "$apk" | grep -E '\.so$' | sed 's/^/    /'
+          } | tee -a logs/android-metrics.md
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-android
+          path: logs/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AnixOps-SSH-Android-debug
+          path: apk/*.apk
+          if-no-files-found: error
+
+  # Bonus: the engine crates and the app library build for iOS, with no
+  # signing. The generated Xcode project is informational for now.
+  ios:
+    name: iOS (simulator)
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash -o pipefail {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+      - name: Install and build frontend
+        run: |
+          mkdir -p logs
+          npm install > logs/npm-install.log 2>&1
+          npm run build 2>&1 | tee logs/frontend-build.log
+      - name: Engine crates build for iOS
+        run: |
+          cargo check --target aarch64-apple-ios \
+            -p easyssh-core -p easyssh-crypto -p easyssh-ssh -p easyssh-store -p easyssh-vault -p easyssh-engine \
+            2>&1 | tee logs/ios-engine-check.log
+      - name: App library for the iOS simulator
+        run: |
+          start=$(date +%s)
+          cargo build --release --target aarch64-apple-ios-sim -p anixops-ssh --lib 2>&1 | tee logs/ios-lib-build.log
+          {
+            echo "# iOS simulator library"
+            echo
+            echo "- libanixops_ssh_lib.a: $(stat -f %z target/aarch64-apple-ios-sim/release/libanixops_ssh_lib.a) bytes"
+            echo "- build seconds: $(( $(date +%s) - start ))"
+          } | tee logs/ios-metrics.md
+      - name: Xcode project and simulator app (informational)
+        continue-on-error: true
+        run: |
+          brew install xcodegen > /dev/null 2>&1 || true
+          # The Xcode project is checked in; generate it only when it is missing.
+          [ -d src-tauri/gen/apple ] || npx tauri ios init --ci 2>&1 | tee logs/ios-init.log
+          npx tauri ios build --debug --target aarch64-sim --ci 2>&1 | tee logs/ios-build.log
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-iOS
+          path: |
+            logs/
+            src-tauri/gen/apple/
+            !src-tauri/gen/apple/build/
+            !src-tauri/gen/apple/Externals/
+            !src-tauri/gen/apple/assets/
+          if-no-files-found: ignore
+
   # Publishes logs and screenshots to the `ci-results/<branch>` branch so they
   # can be read with plain git (no API token or log download needed).
   report:
     name: Publish results
     if: always() && github.event_name == 'push'
-    needs: [frontend, rust, e2e]
+    needs: [frontend, rust, e2e, android, ios]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -186,6 +333,8 @@ jobs:
           FRONTEND: ${{ needs.frontend.result }}
           RUST: ${{ needs.rust.result }}
           E2E: ${{ needs.e2e.result }}
+          ANDROID: ${{ needs.android.result }}
+          IOS: ${{ needs.ios.result }}
           BRANCH: ${{ github.ref_name }}
         run: |
           cd results
@@ -196,6 +345,8 @@ jobs:
             echo "- Frontend and screenshots: ${FRONTEND}"
             echo "- Rust (all platforms): ${RUST}"
             echo "- End-to-end (Linux): ${E2E}"
+            echo "- Android (debug APK): ${ANDROID}"
+            echo "- iOS (simulator): ${IOS}"
           } > SUMMARY.md
           git init -q -b results
           git config user.name "github-actions[bot]"

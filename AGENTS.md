@@ -17,6 +17,10 @@ push: frontend typecheck and build, Playwright screenshots in light and dark,
 then `cargo fmt`, `clippy -D warnings`, `cargo test` and `tauri build` on
 Windows, macOS and Linux.
 
+CI also builds the mobile prototype (`docs/mobile-prototype.md`): the
+"Android (debug APK)" job builds an APK, and "iOS (simulator)" builds the app
+library without signing.
+
 Results (logs, screenshots, lockfiles) are force-pushed to the branch
 `ci-results/<branch>`; read them with
 `git fetch origin ci-results/<branch>` and `git show FETCH_HEAD:<path>`.
@@ -57,5 +61,9 @@ The audit and the button-level mapping are in `docs/design-audit.md`.
   the shell inside terminals; never use Ctrl+Alt.
 - All user-facing strings live in `src/lib/i18n.ts` (Chinese and English). The
   product is "AnixOps SSH" everywhere the user sees a name.
+- The touch UI for phones and tablets is `src/components/mobile/` (shown when
+  `isMobileShell()` says so, or with `?mobile=1` in a browser). It reuses the
+  same components and tokens; touch targets are at least 44 px and the
+  screenshot script fails on any smaller one.
 - `npm run dev` without Tauri uses `src/lib/preview.ts`; keep it in step with
   the backend types so screenshots stay meaningful.

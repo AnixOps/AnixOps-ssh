@@ -85,6 +85,27 @@
     user-select: text;
   }
 
+  /* On a touch screen every text field is at least 16 px, or iOS zooms into it
+     (typography.md). */
+  @media (pointer: coarse) {
+    input:not([type="checkbox"]):not([type="radio"]),
+    textarea,
+    select {
+      font-size: max(var(--type-body-size), 16px);
+    }
+  }
+
+  /* Touch targets are never smaller than 44 x 44 on phones (layout.md). */
+  @media (pointer: coarse) {
+    [data-slot="button"],
+    [data-slot="input"] {
+      min-height: var(--size-control-lg);
+    }
+    [data-slot="button"]:not(:has(:not(svg))) {
+      min-width: var(--size-control-lg);
+    }
+  }
+
   *,
   ::before,
   ::after {
@@ -99,6 +120,21 @@
   button {
     cursor: default;
   }
+}
+
+/* Touch screens (components/mobile): bars respect the screen's cut-outs
+   (accessibility.md, layout.md). */
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@utility px-safe {
+  padding-left: max(var(--space-4), env(safe-area-inset-left));
+  padding-right: max(var(--space-4), env(safe-area-inset-right));
 }
 
 /* Frosted bars and sidebars with an opaque fallback (guidelines/layout.md). */

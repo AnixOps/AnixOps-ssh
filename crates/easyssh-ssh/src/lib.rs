@@ -19,7 +19,10 @@ mod interaction;
 pub mod known_hosts;
 mod params;
 mod security_key;
-#[cfg(all(feature = "hardware-key", not(windows)))]
+#[cfg(all(
+    feature = "hardware-key",
+    any(target_os = "linux", target_os = "macos")
+))]
 mod security_key_hid;
 #[cfg(any(test, feature = "software-key"))]
 pub mod security_key_software;

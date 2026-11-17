@@ -8,7 +8,7 @@ description = "SSH engine on russh: auth chain, channels, SFTP, forwards, jump c
 
 [features]
 default = ["hardware-key"]
-# Real FIDO2 authenticators over USB HID (CTAP2). Compiled on Linux and macOS;
+# Real FIDO2 authenticators over USB HID (CTAP2). Compiled on Linux and macOS only (not Windows, Android or iOS);
 # Windows keeps the OpenSSH fallback for sk-* keys (see security_key.rs).
 hardware-key = ["dep:ctap-hid-fido2"]
 # A software authenticator that makes real sk signatures, for tests.
@@ -30,7 +30,7 @@ ed25519-dalek = { version = "3", optional = true }
 p256 = { version = "0.14", optional = true, features = ["ecdsa"] }
 sha2 = { workspace = true, optional = true }
 
-[target.'cfg(not(windows))'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 ctap-hid-fido2 = { version = "3.6.1", optional = true }
 
 [dev-dependencies]

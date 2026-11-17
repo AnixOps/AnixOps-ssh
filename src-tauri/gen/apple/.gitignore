@@ -1,0 +1,5 @@
+build/
+Externals/
+assets/
+xcuserdata/
+*.xcworkspace/xcuserdata/

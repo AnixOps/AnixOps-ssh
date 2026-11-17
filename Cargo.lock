@@ -107,6 +107,7 @@ dependencies = [
  "easyssh-ai",
  "easyssh-core",
  "easyssh-crypto",
+ "easyssh-engine",
  "easyssh-sessionlog",
  "easyssh-store",
  "easyssh-telemetry",
@@ -1794,6 +1795,7 @@ dependencies = [
  "base64 0.22.1",
  "easyssh-core",
  "easyssh-crypto",
+ "easyssh-engine",
  "easyssh-sessionlog",
  "easyssh-ssh",
  "easyssh-store",
@@ -1803,6 +1805,22 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "easyssh-engine"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "easyssh-core",
+ "easyssh-ssh",
+ "easyssh-store",
+ "russh",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1986,6 +2004,7 @@ dependencies = [
  "dirs 5.0.1",
  "easyssh-core",
  "easyssh-crypto",
+ "easyssh-engine",
  "easyssh-proto",
  "easyssh-server",
  "easyssh-sessionlog",
