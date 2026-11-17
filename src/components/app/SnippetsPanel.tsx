@@ -7,7 +7,8 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { deleteSnippet, loadSnippets, saveSnippet, type Snippet } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { appear, reflow } from "@/lib/motion";
-import { connectedTerminals, terminalFor } from "@/lib/terminals";
+import { targetsFor, toggleGlobalBroadcast, useBroadcast } from "@/lib/broadcast";
+import { terminalFor } from "@/lib/terminals";
 import { cn } from "@/lib/utils";
 
 type Draft = { id: string | null; name: string; content: string };
@@ -18,7 +19,8 @@ export function SnippetsPanel({ activeKey }: { activeKey: string | null }) {
   const [snippets, setSnippets] = useState<Snippet[]>([]);
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [broadcast, setBroadcast] = useState(false);
+  // The same switch as "all panes in all tabs" in the tab bar.
+  const broadcast = useBroadcast().global;
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
 
@@ -30,8 +32,11 @@ export function SnippetsPanel({ activeKey }: { activeKey: string | null }) {
   useEffect(reload, [reload]);
 
   const send = (snippet: Snippet, run: boolean) => {
-    const targets = broadcast ? connectedTerminals() : [terminalFor(activeKey)].filter((target) => target !== undefined);
-    if (targets.length === 0) {
+    const source = terminalFor(activeKey);
+    // Panes in the active pane's broadcast scope get it too; the active pane goes last, so it keeps the focus.
+    const others = activeKey ? targetsFor(activeKey, (id) => terminalFor(id)?.connected() ?? false) : [];
+    const targets = [...others.map((id) => terminalFor(id)), source].filter((target) => target !== undefined);
+    if (!source) {
       setError(t.noTerminal);
       return;
     }
@@ -154,14 +159,14 @@ export function SnippetsPanel({ activeKey }: { activeKey: string | null }) {
           type="button"
           role="switch"
           aria-checked={broadcast}
-          onClick={() => setBroadcast(!broadcast)}
+          onClick={toggleGlobalBroadcast}
           className={cn(
             "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-callout transition-colors duration-micro",
             broadcast ? "bg-accent-soft text-(--accent)" : "text-label-2 hover:bg-fill-1 hover:text-label-1",
           )}
         >
           <Radio className="size-4" strokeWidth={1.5} />
-          <span className="flex-1 text-left">{t.broadcast}</span>
+          <span className="flex-1 text-left">{t.broadcastAll}</span>
           <span className="text-caption font-normal">{broadcast ? t.on : t.off}</span>
         </button>
         <p className="mt-1.5 flex items-center gap-1 px-2 text-caption font-normal text-label-3">

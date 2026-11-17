@@ -65,6 +65,8 @@ export type SessionEvent =
   | { kind: "resumed" };
 
 export interface SessionHandle {
+  /** The daemon's id for the session, kept so a layout can reattach to it. */
+  id: string;
   write(data: string): void;
   resize(cols: number, rows: number): void;
   /** Stops listening; the session keeps running in the background daemon. */
@@ -142,6 +144,7 @@ export async function openSession(
 function sessionHandle(id: string): SessionHandle {
   const report = (reason: unknown) => console.error(reason);
   return {
+    id,
     write: (data) => void invoke("session_write", { id, data }).catch(report),
     resize: (cols, rows) => void invoke("session_resize", { id, cols, rows }).catch(report),
     detach: () => void invoke("session_detach", { id }).catch(report),
