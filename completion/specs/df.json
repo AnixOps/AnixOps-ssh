@@ -1,0 +1,121 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "df",
+  "description": "Report file system disk space usage",
+  "options": [
+    {
+      "name": [
+        "-h",
+        "--human-readable"
+      ],
+      "description": "Print sizes in powers of 1024"
+    },
+    {
+      "name": [
+        "-H",
+        "--si"
+      ],
+      "description": "Print sizes in powers of 1000"
+    },
+    {
+      "name": [
+        "-T",
+        "--print-type"
+      ],
+      "description": "Print the file system type"
+    },
+    {
+      "name": [
+        "-a",
+        "--all"
+      ],
+      "description": "Include dummy file systems"
+    },
+    {
+      "name": [
+        "-i",
+        "--inodes"
+      ],
+      "description": "List inode information instead of block usage"
+    },
+    {
+      "name": [
+        "-l",
+        "--local"
+      ],
+      "description": "Limit the listing to local file systems"
+    },
+    {
+      "name": [
+        "-t",
+        "--type"
+      ],
+      "description": "Limit to file systems of this type",
+      "args": [
+        {
+          "name": "type",
+          "suggestions": [
+            "ext4",
+            "xfs",
+            "btrfs",
+            "tmpfs"
+          ]
+        }
+      ],
+      "repeatable": true
+    },
+    {
+      "name": [
+        "-x",
+        "--exclude-type"
+      ],
+      "description": "Exclude file systems of this type",
+      "args": [
+        {
+          "name": "type",
+          "suggestions": [
+            "tmpfs",
+            "devtmpfs",
+            "squashfs"
+          ]
+        }
+      ],
+      "repeatable": true
+    },
+    {
+      "name": "--total",
+      "description": "Produce a grand total"
+    },
+    {
+      "name": "-k",
+      "description": "Use 1 KiB blocks"
+    },
+    {
+      "name": [
+        "-B",
+        "--block-size"
+      ],
+      "description": "Scale sizes by this size",
+      "args": [
+        {
+          "name": "size"
+        }
+      ]
+    },
+    {
+      "name": [
+        "-P",
+        "--portability"
+      ],
+      "description": "Use the POSIX output format"
+    }
+  ],
+  "args": [
+    {
+      "name": "file",
+      "optional": true,
+      "variadic": true,
+      "template": "filepaths"
+    }
+  ]
+}

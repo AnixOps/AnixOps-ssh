@@ -1,0 +1,45 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "mkdir",
+  "description": "Create directories",
+  "options": [
+    {
+      "name": [
+        "-p",
+        "--parents"
+      ],
+      "description": "Create parent directories and ignore existing ones"
+    },
+    {
+      "name": [
+        "-m",
+        "--mode"
+      ],
+      "description": "Set the file mode",
+      "args": [
+        {
+          "name": "mode",
+          "suggestions": [
+            "755",
+            "700",
+            "775"
+          ]
+        }
+      ]
+    },
+    {
+      "name": [
+        "-v",
+        "--verbose"
+      ],
+      "description": "Print a message for each created directory"
+    }
+  ],
+  "args": [
+    {
+      "name": "directory",
+      "variadic": true,
+      "template": "folders"
+    }
+  ]
+}

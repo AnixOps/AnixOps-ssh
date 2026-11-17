@@ -1,0 +1,113 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "ping",
+  "description": "Send ICMP echo requests to a host",
+  "options": [
+    {
+      "name": "-c",
+      "description": "Stop after sending this many packets",
+      "args": [
+        {
+          "name": "count"
+        }
+      ]
+    },
+    {
+      "name": "-i",
+      "description": "Seconds to wait between packets",
+      "args": [
+        {
+          "name": "interval"
+        }
+      ]
+    },
+    {
+      "name": "-W",
+      "description": "Seconds to wait for a reply",
+      "args": [
+        {
+          "name": "timeout"
+        }
+      ]
+    },
+    {
+      "name": "-w",
+      "description": "Stop after this many seconds in total",
+      "args": [
+        {
+          "name": "deadline"
+        }
+      ]
+    },
+    {
+      "name": "-s",
+      "description": "Number of data bytes to send",
+      "args": [
+        {
+          "name": "size"
+        }
+      ]
+    },
+    {
+      "name": "-t",
+      "description": "Set the IP time to live",
+      "args": [
+        {
+          "name": "ttl"
+        }
+      ]
+    },
+    {
+      "name": "-I",
+      "description": "Send from this interface or address",
+      "args": [
+        {
+          "name": "interface"
+        }
+      ]
+    },
+    {
+      "name": "-4",
+      "description": "Use IPv4 only",
+      "exclusiveWith": [
+        "-6"
+      ]
+    },
+    {
+      "name": "-6",
+      "description": "Use IPv6 only",
+      "exclusiveWith": [
+        "-4"
+      ]
+    },
+    {
+      "name": "-q",
+      "description": "Quiet output, only the summary"
+    },
+    {
+      "name": "-v",
+      "description": "Verbose output"
+    },
+    {
+      "name": "-n",
+      "description": "Numeric output only, no name lookups"
+    },
+    {
+      "name": "-D",
+      "description": "Print a timestamp before each line"
+    },
+    {
+      "name": "-b",
+      "description": "Allow pinging a broadcast address"
+    }
+  ],
+  "args": [
+    {
+      "name": "host",
+      "template": [
+        "hosts",
+        "history"
+      ]
+    }
+  ]
+}

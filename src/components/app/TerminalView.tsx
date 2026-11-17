@@ -6,6 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { ChevronDown, ChevronUp, LoaderCircle, RotateCw, SquareArrowOutUpRight, Unplug, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { CompletionPopup, type PopupPlacement } from "@/components/app/CompletionPopup";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasteConfirm, BroadcastBadge } from "@/components/app/PaneOverlays";
@@ -13,12 +14,19 @@ import { Tooltip } from "@/components/ui/tooltip";
 import {
   attachSession,
   copyText,
+  loadHosts,
+  openFiles,
   openExternal,
   openSession,
   pasteText,
+  type FilesHandle,
   type SessionEvent,
   type SessionHandle,
 } from "@/lib/backend";
+import { CompletionController, type ViewState } from "@/lib/completion/controller";
+import { completionPrefs, commandHistory, onCompletionPrefs } from "@/lib/completion/prefs";
+import { createPathLister } from "@/lib/completion/remotePaths";
+import { commandNames, loadSpec } from "@/lib/completion/specs";
 import { pasteNeedsConfirm, type BroadcastScope, targetsFor } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
 import { duration, ease, enter, leave } from "@/lib/motion";
@@ -54,7 +62,10 @@ export function TerminalView({
   /** Set while this pane receives broadcast input; shows the indicator. */
   broadcast?: BroadcastScope;
 }) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const controllerRef = useRef<CompletionController | null>(null);
+  const [completion, setCompletion] = useState<{ view: ViewState; placement: PopupPlacement } | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const searchRef = useRef<SearchAddon | null>(null);
@@ -106,11 +117,78 @@ export function TerminalView({
       }
     }
     fit.fit();
+
+    // Command completion: follows what is typed and shows a list at the cursor.
+    let files: FilesHandle | null = null;
+    let hostNames: Promise<string[]> | null = null;
+    const controller = new CompletionController({
+      hostId,
+      history: commandHistory,
+      deps: {
+        loadSpec,
+        commandNames,
+        history: commandHistory,
+        paths: hostId
+          ? createPathLister(async () => {
+              const opened = await openFiles(hostId);
+              if (disposed) opened.close();
+              files = opened;
+              return opened;
+            })
+          : undefined,
+        hostNames: () =>
+          (hostNames ??= loadHosts()
+            .then((snapshot) =>
+              [...new Set(snapshot.hosts.flatMap((host) => [host.fields.alias ?? host.fields.hostname, host.name]))].filter(Boolean),
+            )
+            .catch(() => [])),
+      },
+      cursor: () => {
+        const active = terminal.buffer.active;
+        return { x: active.cursorX, y: active.cursorY, absoluteY: active.baseY + active.cursorY, cols: terminal.cols };
+      },
+      write: (data) => sessionRef.current?.write(data),
+      enabled: () => completionPrefs().enabled,
+    });
+    controllerRef.current = controller;
+    const stopView = controller.subscribe((view) => {
+      const wrapper = wrapperRef.current;
+      const screen = container.querySelector<HTMLElement>(".xterm-screen");
+      if (!view.popup || !wrapper || !screen) {
+        setCompletion(null);
+        return;
+      }
+      const box = wrapper.getBoundingClientRect();
+      const grid = screen.getBoundingClientRect();
+      const cellW = grid.width / terminal.cols;
+      const cellH = grid.height / terminal.rows;
+      const lineTop = grid.top - box.top + view.cursor.y * cellH;
+      const left = Math.max(8, Math.min(grid.left - box.left + view.cursor.x * cellW, box.width - 336));
+      const below = box.height - (lineTop + cellH);
+      const placement: PopupPlacement =
+        below < 290 && lineTop > below ? { left, bottom: box.height - lineTop + 2 } : { left, top: lineTop + cellH + 2 };
+      setCompletion({ view, placement });
+    });
+    const stopPrefs = onCompletionPrefs(() => controller.outputParsed());
+    const writeParsed = terminal.onWriteParsed(() => controller.outputParsed());
+    const bufferChange = terminal.buffer.onBufferChange((buffer) => controller.setAlternateScreen(buffer.type === "alternate"));
     terminalRef.current = terminal;
     fitRef.current = fit;
     searchRef.current = search;
 
+    // The key the list took on keydown; its keypress and keyup are dropped too.
+    let swallowed: string | null = null;
     terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type === "keydown") {
+        if (controller.handleKey(event)) {
+          event.preventDefault();
+          swallowed = event.key;
+          return false;
+        }
+      } else if (swallowed !== null && event.key === swallowed) {
+        if (event.type === "keyup") swallowed = null;
+        return false;
+      }
       const shortcut = appShortcut(event);
       if (!shortcut) return true;
       event.preventDefault();
@@ -140,6 +218,7 @@ export function TerminalView({
     for (const type of typingEvents) container.addEventListener(type, markTyping, true);
     const receivers = () => targetsFor(tabKey, (id) => terminalFor(id)?.connected() ?? false);
     terminal.onData((data) => {
+      controller.input(data);
       sessionRef.current?.write(data);
       if (typing) for (const id of receivers()) terminalFor(id)?.write(data);
     });
@@ -223,7 +302,10 @@ export function TerminalView({
     const unregister = registerTerminal(tabKey, {
       send(text, run) {
         terminal.paste(text);
-        if (run) sessionRef.current?.write("\r");
+        if (run) {
+          controller.input("\r");
+          sessionRef.current?.write("\r");
+        }
         terminal.focus();
       },
       write: (data) => sessionRef.current?.write(data),
@@ -258,6 +340,14 @@ export function TerminalView({
     return () => {
       disposed = true;
       unregister();
+      stopView();
+      stopPrefs();
+      writeParsed.dispose();
+      bufferChange.dispose();
+      controller.dispose();
+      controllerRef.current = null;
+      (files as FilesHandle | null)?.close();
+      setCompletion(null);
       for (const type of typingEvents) container.removeEventListener(type, markTyping, true);
       container.removeEventListener("paste", onPaste, true);
       window.clearTimeout(typingTimer);
@@ -301,7 +391,7 @@ export function TerminalView({
   };
 
   return (
-    <div className="relative h-full min-w-0 flex-1 bg-bg">
+    <div ref={wrapperRef} className="relative h-full min-w-0 flex-1 bg-bg">
       {/* Broadcasting reserves a strip below the text for its badge. */}
       <div ref={containerRef} className={`absolute top-2 right-0 left-3 ${broadcast ? "bottom-9" : "bottom-2"}`} />
       {broadcast && <BroadcastBadge scope={broadcast} />}
@@ -313,6 +403,19 @@ export function TerminalView({
             setPendingPaste(null);
             if (all !== null) pasteRef.current(text, all);
             else terminalRef.current?.focus();
+          }}
+        />
+      )}
+
+      {completion?.view.popup && (
+        <CompletionPopup
+          popup={completion.view.popup}
+          placement={completion.placement}
+          onHover={(index) => controllerRef.current?.highlight(index)}
+          onPick={(index) => {
+            const item = completion.view.popup?.items[index];
+            if (item) controllerRef.current?.accept(item);
+            terminalRef.current?.focus();
           }}
         />
       )}

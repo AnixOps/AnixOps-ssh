@@ -1,0 +1,106 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "htop",
+  "description": "Interactive process viewer",
+  "options": [
+    {
+      "name": [
+        "-d",
+        "--delay"
+      ],
+      "description": "Delay between updates in tenths of a second",
+      "args": [
+        {
+          "name": "delay"
+        }
+      ]
+    },
+    {
+      "name": [
+        "-C",
+        "--no-color"
+      ],
+      "description": "Use a monochrome color scheme"
+    },
+    {
+      "name": [
+        "-u",
+        "--user"
+      ],
+      "description": "Show only processes of this user",
+      "args": [
+        {
+          "name": "user"
+        }
+      ]
+    },
+    {
+      "name": [
+        "-p",
+        "--pid"
+      ],
+      "description": "Show only these process IDs",
+      "args": [
+        {
+          "name": "pid[,pid...]"
+        }
+      ]
+    },
+    {
+      "name": [
+        "-s",
+        "--sort-key"
+      ],
+      "description": "Sort by this column",
+      "args": [
+        {
+          "name": "column"
+        }
+      ]
+    },
+    {
+      "name": [
+        "-t",
+        "--tree"
+      ],
+      "description": "Show the tree view"
+    },
+    {
+      "name": [
+        "-M",
+        "--no-mouse"
+      ],
+      "description": "Disable mouse support"
+    },
+    {
+      "name": [
+        "-F",
+        "--filter"
+      ],
+      "description": "Show only commands matching this filter",
+      "args": [
+        {
+          "name": "filter"
+        }
+      ]
+    },
+    {
+      "name": "--readonly",
+      "description": "Disable all actions that change the system"
+    },
+    {
+      "name": [
+        "-h",
+        "--help"
+      ],
+      "description": "Print help and exit"
+    },
+    {
+      "name": [
+        "-V",
+        "--version"
+      ],
+      "description": "Print the version and exit"
+    }
+  ]
+}

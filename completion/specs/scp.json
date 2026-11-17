@@ -1,0 +1,129 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "scp",
+  "description": "Copy files between hosts over SSH",
+  "options": [
+    {
+      "name": "-r",
+      "description": "Copy directories recursively"
+    },
+    {
+      "name": "-P",
+      "description": "Port to connect to",
+      "args": [
+        {
+          "name": "port"
+        }
+      ]
+    },
+    {
+      "name": "-i",
+      "description": "Identity (private key) file",
+      "args": [
+        {
+          "name": "identity_file",
+          "template": "filepaths"
+        }
+      ]
+    },
+    {
+      "name": "-p",
+      "description": "Preserve modification times and modes"
+    },
+    {
+      "name": "-q",
+      "description": "Quiet mode"
+    },
+    {
+      "name": "-v",
+      "description": "Verbose output"
+    },
+    {
+      "name": "-C",
+      "description": "Compress data"
+    },
+    {
+      "name": "-o",
+      "description": "Set an ssh configuration option",
+      "args": [
+        {
+          "name": "option",
+          "suggestions": [
+            "StrictHostKeyChecking=accept-new",
+            "ServerAliveInterval=30",
+            "UserKnownHostsFile=/dev/null",
+            "IdentitiesOnly=yes",
+            "BatchMode=yes",
+            "ConnectTimeout=10",
+            "ForwardAgent=yes",
+            "Compression=yes",
+            "ProxyJump="
+          ]
+        }
+      ],
+      "repeatable": true
+    },
+    {
+      "name": "-F",
+      "description": "Use this ssh configuration file",
+      "args": [
+        {
+          "name": "ssh_config",
+          "template": "filepaths"
+        }
+      ]
+    },
+    {
+      "name": "-J",
+      "description": "Connect through a jump host",
+      "args": [
+        {
+          "name": "destination",
+          "template": "hosts"
+        }
+      ]
+    },
+    {
+      "name": "-l",
+      "description": "Limit bandwidth in Kbit/s",
+      "args": [
+        {
+          "name": "limit"
+        }
+      ]
+    },
+    {
+      "name": "-3",
+      "description": "Copy between two remote hosts through this one"
+    },
+    {
+      "name": "-4",
+      "description": "Use IPv4 only",
+      "exclusiveWith": [
+        "-6"
+      ]
+    },
+    {
+      "name": "-6",
+      "description": "Use IPv6 only",
+      "exclusiveWith": [
+        "-4"
+      ]
+    },
+    {
+      "name": "-B",
+      "description": "Batch mode: never ask for passwords"
+    }
+  ],
+  "args": [
+    {
+      "name": "file",
+      "description": "Local path or [user@]host:path",
+      "variadic": true,
+      "template": [
+        "filepaths",
+        "hosts"
+      ]
+    }
+  ]
+}
