@@ -1,0 +1,40 @@
+[package]
+name = "easyssh-server"
+version.workspace = true
+edition.workspace = true
+# The server is AGPL; the desktop app and every other crate stay MIT.
+license = "AGPL-3.0-only"
+rust-version.workspace = true
+repository.workspace = true
+description = "Self-hosted EasySSH sync server: OPAQUE sign-in, devices, vaults and signed encrypted records"
+
+[lib]
+name = "easyssh_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "easyssh-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+base64.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+easyssh-crypto = { path = "../easyssh-crypto" }
+easyssh-sync = { path = "../easyssh-sync" }
+ed25519-dalek = "3"
+hmac.workspace = true
+opaque-ke = "4"
+rand_core = { version = "0.6", features = ["getrandom"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
