@@ -41,6 +41,15 @@ pub struct Config {
     #[arg(long, env = "EASYSSH_MAX_BODY_BYTES", default_value_t = 2 * 1024 * 1024)]
     pub max_body_bytes: usize,
 
+    /// Largest accepted body of a vault key rotation (it carries every
+    /// record of the vault), in bytes.
+    #[arg(
+        long,
+        env = "EASYSSH_MAX_ROTATE_BODY_BYTES",
+        default_value_t = 64 * 1024 * 1024
+    )]
+    pub max_rotate_body_bytes: usize,
+
     /// Auth requests allowed per client address per minute.
     #[arg(long, env = "EASYSSH_AUTH_RATE_PER_MINUTE", default_value_t = 30)]
     pub auth_rate_per_minute: u32,

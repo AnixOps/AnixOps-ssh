@@ -84,6 +84,7 @@ fn fast() -> SyncOptions {
         interval: Duration::from_secs(3600),
         debounce: Duration::from_secs(3600),
         poll: Duration::from_secs(3600),
+        ..SyncOptions::default()
     }
 }
 
@@ -435,17 +436,29 @@ async fn a_revoked_device_can_no_longer_push() {
             .unwrap_err(),
         "invalid_command"
     );
+    // What B writes before it is revoked stays valid afterwards.
+    b.edit(&id, |h| h["name"] = json!("from B before")).await;
+    assert_eq!(b.sync().await["state"], "idle");
     a.ok(
         "sync.devices.revoke",
         json!({"device_id": status_b["device_id"]}),
     )
     .await;
     let devices = a.ok("sync.devices.list", json!({})).await;
-    assert!(devices["devices"]
+    let revoked: Vec<&Value> = devices["devices"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|d| d["revoked"] == true));
+        .filter(|d| d["revoked"] == true)
+        .collect();
+    assert_eq!(revoked.len(), 1);
+    // The time of the revocation is recorded and shown.
+    let revoked_at = revoked[0]["revoked_at"].as_i64().unwrap();
+    assert!(revoked_at > 1_700_000_000);
+    assert!(revoked[0]["cert_expires_at"].as_i64().unwrap() > revoked_at);
+    let first = a.sync().await;
+    assert_eq!(first["state"], "idle", "{first}");
+    assert_eq!(a.host(&id).await.unwrap()["name"], "from B before");
 
     // B edits and tries to sync: refused, and A never sees the edit.
     b.edit(&id, |h| h["name"] = json!("tampered")).await;
@@ -457,7 +470,7 @@ async fn a_revoked_device_can_no_longer_push() {
         "{code}"
     );
     a.sync().await;
-    assert_eq!(a.host(&id).await.unwrap()["name"], "Keep");
+    assert_eq!(a.host(&id).await.unwrap()["name"], "from B before");
     a.stop().await;
     b.stop().await;
 }
@@ -760,4 +773,236 @@ async fn secrets_are_never_synced() {
     assert_eq!(status["password"], true);
     a.stop().await;
     b.stop().await;
+}
+
+#[tokio::test]
+async fn removing_a_member_replaces_the_vault_key() {
+    use easyssh_sync::account::login;
+    use easyssh_sync::HttpClient;
+    use easyssh_sync::Transport;
+
+    let server = start_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let alice = new_device(&dir, "alice").await;
+    let alice2 = new_device(&dir, "alice2").await;
+    let bob = new_device(&dir, "bob").await;
+    let carol = new_device(&dir, "carol").await;
+    alice.signup(&server.url, "alice").await;
+    bob.signup(&server.url, "bob").await;
+    carol.signup(&server.url, "carol").await;
+    alice2.signin(&server.url, "alice", "alice-phone").await;
+
+    let team = alice
+        .ok("vault.create_shared", json!({"name": "Platform"}))
+        .await;
+    let vault_id = team["id"].as_str().unwrap().to_owned();
+    let mut accounts = Vec::new();
+    for name in ["bob", "carol"] {
+        let lookup = alice
+            .ok("vault.members.lookup", json!({"username": name}))
+            .await;
+        alice
+            .ok(
+                "vault.members.add",
+                json!({"vault_id": vault_id, "username": name, "role": "editor",
+                       "fingerprint": lookup["fingerprint"]}),
+            )
+            .await;
+        accounts.push(lookup["account_id"].clone());
+    }
+    let (bob_account, carol_account) = (accounts[0].clone(), accounts[1].clone());
+
+    let mut ids = Vec::new();
+    for name in ["One", "Two"] {
+        let host = host_json(name);
+        let old = host["id"].as_str().unwrap().to_owned();
+        alice.save(&host).await;
+        let moved = alice
+            .ok("hosts.move_vault", json!({"id": old, "vault_id": vault_id}))
+            .await;
+        ids.push(moved["id"].as_str().unwrap().to_owned());
+    }
+    alice.sync().await;
+    for device in [&bob, &carol, &alice2] {
+        device.sync().await;
+        assert_eq!(device.host(&ids[0]).await.unwrap()["name"], "One");
+    }
+
+    // A second device of the owner has an edit it has not synced yet.
+    alice2
+        .edit(&ids[1], |h| h["name"] = json!("Two (from phone)"))
+        .await;
+
+    // Only an owner can remove; an editor cannot.
+    assert_eq!(
+        carol
+            .call(
+                "vault.members.remove",
+                json!({"vault_id": vault_id, "account_id": bob_account}),
+            )
+            .await
+            .unwrap_err(),
+        "forbidden"
+    );
+
+    // Alice removes Bob; the key is replaced.
+    alice
+        .ok(
+            "vault.members.remove",
+            json!({"vault_id": vault_id, "account_id": bob_account}),
+        )
+        .await;
+    let http = HttpClient::new(&server.url).unwrap();
+    login(&http, "alice", PASS.as_bytes()).await.unwrap();
+    let summary = http.list_vaults().await.unwrap();
+    let team_summary = summary.iter().find(|v| v.vault_id == vault_id).unwrap();
+    assert_eq!(team_summary.key_generation, 2);
+    let page = http.pull(&vault_id, 0, 100).await.unwrap();
+    assert!(page.records.len() >= 3, "two hosts and the vault name");
+    assert!(page.records.iter().all(|r| r.envelope.key_generation == 2));
+    assert_eq!(http.members(&vault_id).await.unwrap().len(), 2);
+
+    // Bob is out: the server does not know him in the vault any more.
+    let bob_http = HttpClient::new(&server.url).unwrap();
+    login(&bob_http, "bob", PASS.as_bytes()).await.unwrap();
+    assert!(bob_http
+        .list_vaults()
+        .await
+        .unwrap()
+        .iter()
+        .all(|v| v.vault_id != vault_id));
+    assert!(bob_http.pull(&vault_id, 0, 10).await.is_err());
+    // His device keeps what it had and gets nothing new.
+    alice
+        .edit(&ids[0], |h| h["name"] = json!("One (after removal)"))
+        .await;
+    alice.sync().await;
+    let status = bob.sync().await;
+    assert_eq!(status["state"], "idle", "{status}");
+    assert_eq!(bob.host(&ids[0]).await.unwrap()["name"], "One");
+
+    // Carol, who remains, reads the re-encrypted records and the new edit,
+    // and her own edits flow back under the new key.
+    let status = carol.sync().await;
+    assert_eq!(status["state"], "idle", "{status}");
+    assert_eq!(
+        carol.host(&ids[0]).await.unwrap()["name"],
+        "One (after removal)"
+    );
+    assert_eq!(carol.host(&ids[1]).await.unwrap()["name"], "Two");
+    carol
+        .edit(&ids[1], |h| h["name"] = json!("Two (carol)"))
+        .await;
+    carol.sync().await;
+    alice.sync().await;
+    assert_eq!(alice.host(&ids[1]).await.unwrap()["name"], "Two (carol)");
+
+    // The owner's other device, which had not synced since before the
+    // rotation, picks up the new key by itself and merges its pending edit.
+    let status = alice2.sync().await;
+    assert_eq!(status["state"], "idle", "{status}");
+    assert_eq!(
+        alice2.host(&ids[0]).await.unwrap()["name"],
+        "One (after removal)"
+    );
+    assert!(alice2.host(&ids[1]).await.is_some());
+
+    // New records after the rotation are under the new key too.
+    let host = host_json("Three");
+    let old = host["id"].as_str().unwrap().to_owned();
+    carol.save(&host).await;
+    let moved = carol
+        .ok("hosts.move_vault", json!({"id": old, "vault_id": vault_id}))
+        .await;
+    carol.sync().await;
+    alice.sync().await;
+    assert_eq!(
+        alice.host(moved["id"].as_str().unwrap()).await.unwrap()["name"],
+        "Three"
+    );
+    let page = http.pull(&vault_id, 0, 100).await.unwrap();
+    assert!(page.records.iter().all(|r| r.envelope.key_generation == 2));
+
+    // Removing Carol rotates again.
+    alice
+        .ok(
+            "vault.members.remove",
+            json!({"vault_id": vault_id, "account_id": carol_account}),
+        )
+        .await;
+    assert_eq!(
+        http.list_vaults()
+            .await
+            .unwrap()
+            .iter()
+            .find(|v| v.vault_id == vault_id)
+            .unwrap()
+            .key_generation,
+        3
+    );
+    // An unknown member is reported.
+    assert_eq!(
+        alice
+            .call(
+                "vault.members.remove",
+                json!({"vault_id": vault_id, "account_id": carol_account}),
+            )
+            .await
+            .unwrap_err(),
+        "not_found"
+    );
+    for device in [alice, alice2, bob, carol] {
+        device.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn the_device_certificate_is_renewed_while_signed_in() {
+    let server = start_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("a");
+    std::fs::create_dir_all(&root).unwrap();
+    // Renew whenever less than ten years are left: every sync does.
+    let options = SyncOptions {
+        renew_before: Duration::from_secs(10 * 365 * 24 * 3600),
+        ..fast()
+    };
+    let a = start_with(&root, "run", Arc::new(MemoryKeyStore::new()), options).await;
+    a.signup(&server.url, "ann").await;
+    let expiry = |devices: &Value| {
+        devices["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["this_device"] == true)
+            .unwrap()["cert_expires_at"]
+            .as_i64()
+            .unwrap()
+    };
+    let first = expiry(&a.ok("sync.devices.list", json!({})).await);
+    let year = 365 * 24 * 3600;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    assert!((now + year - 60..=now + year + 60).contains(&first));
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    a.sync().await;
+    let second = expiry(&a.ok("sync.devices.list", json!({})).await);
+    assert!(second > first, "{second} > {first}");
+    // Still the one device: renewal does not enrol another.
+    assert_eq!(
+        a.ok("sync.devices.list", json!({})).await["devices"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // And it keeps syncing.
+    let host = host_json("Renewed");
+    let id = host["id"].as_str().unwrap().to_owned();
+    a.save(&host).await;
+    assert_eq!(a.sync().await["state"], "idle");
+    assert!(a.host(&id).await.is_some());
+    a.stop().await;
 }

@@ -177,6 +177,13 @@ async fn log_request(request: Request, next: Next) -> Response {
     response
 }
 
+/// Request body limits: for everything, and for key rotation.
+#[derive(Clone, Copy)]
+struct BodyLimits {
+    normal: usize,
+    rotate: usize,
+}
+
 /// Response header carrying the largest request body the server accepts, in
 /// bytes. Clients may refuse locally before sending more.
 pub const MAX_BODY_HEADER: &str = easyssh_sync::http::MAX_BODY_HEADER;
@@ -198,7 +205,18 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 /// `DRAIN_FACTOR` times the limit is read and discarded first, frame by
 /// frame and never stored, which bounds the memory it costs (none) and the
 /// bandwidth (`DRAIN_FACTOR` times the limit) a refused request can use.
-async fn enforce_body_limit(State(max): State<usize>, request: Request, next: Next) -> Response {
+async fn enforce_body_limit(
+    State(limits): State<BodyLimits>,
+    request: Request,
+    next: Next,
+) -> Response {
+    // Key rotation carries every record of a vault and has its own limit; the
+    // announced header stays the normal one.
+    let max = if request.uri().path().ends_with("/rotate") {
+        limits.rotate
+    } else {
+        limits.normal
+    };
     let announced = request
         .headers()
         .get(header::CONTENT_LENGTH)
@@ -217,7 +235,7 @@ async fn enforce_body_limit(State(max): State<usize>, request: Request, next: Ne
         }
         _ => next.run(request).await,
     };
-    if let Ok(value) = header::HeaderValue::from_str(&max.to_string()) {
+    if let Ok(value) = header::HeaderValue::from_str(&limits.normal.to_string()) {
         response.headers_mut().insert(MAX_BODY_HEADER, value);
     }
     response
@@ -245,11 +263,23 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/vaults/{vault_id}/members", get(vaults::members))
         .route(
             "/v1/vaults/{vault_id}/members/{account_id}",
-            put(vaults::put_member).delete(vaults::remove_member),
+            put(vaults::put_member),
+        )
+        .route(
+            "/v1/vaults/{vault_id}/rotate",
+            post(vaults::rotate).layer(DefaultBodyLimit::max(state.config.max_rotate_body_bytes)),
+        )
+        .route(
+            "/v1/vaults/{vault_id}/revoked-devices",
+            get(vaults::revoked_devices),
         )
         .route(
             "/v1/vaults/{vault_id}/records",
             post(records::push).get(records::pull),
+        )
+        .route(
+            "/v1/vaults/{vault_id}/records/batch",
+            post(records::push_batch),
         )
         .route(
             "/v1/vaults/{vault_id}/records/{record_id}/history",
@@ -262,7 +292,10 @@ pub fn router(state: AppState) -> Router {
         .merge(api)
         .layer(DefaultBodyLimit::max(state.config.max_body_bytes))
         .layer(from_fn_with_state(
-            state.config.max_body_bytes,
+            BodyLimits {
+                normal: state.config.max_body_bytes,
+                rotate: state.config.max_rotate_body_bytes,
+            },
             enforce_body_limit,
         ))
         .layer(from_fn(log_request))

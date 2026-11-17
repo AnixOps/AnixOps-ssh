@@ -446,6 +446,21 @@ impl Store {
     }
 
     fn sync_dirty(&self, personal: &str, server_vault: &str) -> Result<Vec<LocalRecord>> {
+        self.sync_listing(personal, server_vault, true)
+    }
+
+    /// Every record of the vault with a local version, for re-encrypting it
+    /// under a new vault key.
+    fn sync_all(&self, personal: &str, server_vault: &str) -> Result<Vec<LocalRecord>> {
+        self.sync_listing(personal, server_vault, false)
+    }
+
+    fn sync_listing(
+        &self,
+        personal: &str,
+        server_vault: &str,
+        only_dirty: bool,
+    ) -> Result<Vec<LocalRecord>> {
         let local_vault = local_vault_id(personal, server_vault);
         let mut out = Vec::new();
         if local_vault != PERSONAL_VAULT_ID {
@@ -454,7 +469,7 @@ impl Store {
                     if let Some(record) =
                         self.sync_get(personal, server_vault, VAULT_META_RECORD)?
                     {
-                        if record.is_dirty() {
+                        if !only_dirty || record.is_dirty() {
                             out.push(record);
                         }
                     }
@@ -483,7 +498,7 @@ impl Store {
                 }
                 let server: Option<BTreeMap<String, u64>> =
                     server.map(|text| serde_json::from_str(&text)).transpose()?;
-                if server.as_ref() == Some(&local) {
+                if only_dirty && server.as_ref() == Some(&local) {
                     continue;
                 }
                 if let Some((version, _)) = self.export_table(table, &id)? {
@@ -1049,6 +1064,10 @@ impl SyncStore for StoreSync {
     fn dirty(&self, vault_id: &str) -> Result<Vec<LocalRecord>> {
         self.store()
             .sync_dirty(&self.personal_server_vault, vault_id)
+    }
+
+    fn all(&self, vault_id: &str) -> Result<Vec<LocalRecord>> {
+        self.store().sync_all(&self.personal_server_vault, vault_id)
     }
 
     fn put(&mut self, record: LocalRecord, history: Vec<Overwritten>) -> Result<()> {

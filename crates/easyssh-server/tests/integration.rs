@@ -1,21 +1,42 @@
 //! End-to-end tests: a real server on a loopback port, real HTTP clients.
 
-use easyssh_crypto::{certify_device, AccountKeyPair, DeviceSigningKey, KdfParams, VaultKey};
+use easyssh_crypto::{
+    certify_device, AccountKeyPair, DeviceSigningKey, KdfParams, VaultKey, CERT_LIFETIME_SECS,
+};
 use easyssh_server::{serve, Config};
 use easyssh_sync::account::{
-    create_vault, enroll_device, login, open_vault, register, share_vault, trust_members, Account,
+    create_vault, enroll_device, login, open_vault, register, renew_device_cert, seal_for_members,
+    share_vault, trust_members, trust_revocations, Account,
 };
 use easyssh_sync::wire::*;
 use easyssh_sync::{
-    AuthError, DeviceIdentity, HttpClient, MemoryStore, SyncEngine, SyncError, Transport, Verifier,
-    VerifyError,
+    seal_record, AuthError, DeviceIdentity, HttpClient, MemoryStore, RecordVersion,
+    RotationFailure, SyncEngine, SyncError, Transport, Verifier, VerifyError,
 };
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
 const PASS: &[u8] = b"correct horse battery staple";
-const ISSUED: i64 = 1_700_000_000;
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+}
+
+/// A certificate valid for the usual lifetime from now.
+fn cert_for(account: &Account, key: &DeviceSigningKey, name: &str) -> easyssh_crypto::DeviceCert {
+    let now = unix_now();
+    certify_device(
+        &account.keys.signing,
+        &key.public(),
+        name,
+        now,
+        now + CERT_LIFETIME_SECS,
+    )
+}
 
 struct TestServer {
     base: String,
@@ -86,7 +107,7 @@ impl Dev {
 
     fn identity(&self, account: &Account) -> DeviceIdentity {
         let key = self.key();
-        let cert = certify_device(&account.keys.signing, &key.public(), self.name, ISSUED);
+        let cert = cert_for(account, &key, self.name);
         DeviceIdentity {
             device_id: device_id_for(&key.public()),
             signing_key: key,
@@ -95,7 +116,7 @@ impl Dev {
     }
 
     async fn enroll(&self, client: &HttpClient, account: &Account) -> DeviceIdentity {
-        enroll_device(client, account, self.name, self.key(), ISSUED)
+        enroll_device(client, account, self.name, self.key(), unix_now())
             .await
             .unwrap()
     }
@@ -116,7 +137,7 @@ fn engine(
         identity,
         Verifier::new(account.keys.signing.public()),
     );
-    e.add_vault_key(vault, key);
+    e.add_vault_key(vault, 1, key);
     e
 }
 
@@ -262,7 +283,8 @@ async fn device_certificate_is_required() {
     // Registering a device with a certificate from another account fails.
     let mallory = AccountKeyPair::generate().unwrap();
     let dev = DeviceSigningKey::generate().unwrap();
-    let bad_cert = certify_device(&mallory.signing, &dev.public(), "bad", 1);
+    let far = unix_now() + CERT_LIFETIME_SECS;
+    let bad_cert = certify_device(&mallory.signing, &dev.public(), "bad", 1, far);
     let err = client
         .register_device(&RegisterDeviceRequest {
             device_public: dev.public().to_vec(),
@@ -274,7 +296,7 @@ async fn device_certificate_is_required() {
     assert_eq!(err.code(), Some(ErrorCode::InvalidSignature));
 
     // A certificate for a different key than the one presented is refused.
-    let good = certify_device(&alice.keys.signing, &dev.public(), "ok", 1);
+    let good = certify_device(&alice.keys.signing, &dev.public(), "ok", 1, far);
     let other = DeviceSigningKey::generate().unwrap();
     let err = client
         .register_device(&RegisterDeviceRequest {
@@ -306,8 +328,8 @@ async fn two_devices_edit_concurrently_and_merge_without_loss() {
     }
     .enroll(&client_b, &alice_b)
     .await;
-    let key_b = open_vault(&client_b, &alice_b, vault).await.unwrap();
-    assert_eq!(key_b, key);
+    let (key_b, generation) = open_vault(&client_b, &alice_b, vault).await.unwrap();
+    assert_eq!((key_b.expose(), generation), (key.expose(), 1));
 
     let mut a = engine(&client_a, &alice, id_a, vault, copy_key(&key));
     let mut b = engine(&client_b, &alice_b, id_b, vault, key_b);
@@ -345,7 +367,7 @@ async fn two_devices_edit_concurrently_and_merge_without_loss() {
     b.sync(vault).await.unwrap();
     let rec = a.store().record(vault, "h1").unwrap().clone();
     let envelope =
-        easyssh_sync::seal_record(&dev_a.identity(&alice), &key, vault, "h1", &rec.version)
+        easyssh_sync::seal_record(&dev_a.identity(&alice), &key, 1, vault, "h1", &rec.version)
             .unwrap();
     let expected = rec
         .server_vector
@@ -453,10 +475,10 @@ async fn sharing_roles_and_membership() {
     assert!(bob_client.list_vaults().await.unwrap().is_empty());
 
     // Share as viewer: the key is sealed to bob; the server cannot open it.
-    share_vault(&alice_client, vault, &key, "bob", Role::Viewer)
+    share_vault(&alice_client, vault, &key, 1, "bob", Role::Viewer)
         .await
         .unwrap();
-    let bob_key = open_vault(&bob_client, &bob, vault).await.unwrap();
+    let (bob_key, _) = open_vault(&bob_client, &bob, vault).await.unwrap();
     assert_eq!(bob_key, key);
 
     // Without trusting alice's account, bob rejects her signed envelope.
@@ -476,7 +498,7 @@ async fn sharing_roles_and_membership() {
         .await
         .unwrap();
     let mut eb = SyncEngine::new(bob_client.clone(), MemoryStore::new(), bob_id, verifier);
-    eb.add_vault_key(vault, bob_key);
+    eb.add_vault_key(vault, 1, bob_key);
     eb.sync(vault).await.unwrap();
     assert_eq!(field(&eb, vault, "h1", "name"), json!("shared host"));
 
@@ -494,6 +516,7 @@ async fn sharing_roles_and_membership() {
             &PutMemberRequest {
                 role: Role::Owner,
                 sealed_key: None,
+                key_generation: None,
             },
         )
         .await
@@ -507,6 +530,7 @@ async fn sharing_roles_and_membership() {
             &PutMemberRequest {
                 role: Role::Viewer,
                 sealed_key: Some(vec![0; 105]),
+                key_generation: Some(1),
             },
         )
         .await
@@ -521,6 +545,7 @@ async fn sharing_roles_and_membership() {
             &PutMemberRequest {
                 role: Role::Editor,
                 sealed_key: None,
+                key_generation: None,
             },
         )
         .await
@@ -537,20 +562,91 @@ async fn sharing_roles_and_membership() {
 
     // The last owner cannot be removed.
     let alice_info = alice_client.lookup_account("alice").await.unwrap();
-    let err = alice_client
-        .remove_member(vault, &alice_info.account_id)
+    let members = alice_client.members(vault).await.unwrap();
+    let only_bob: Vec<MemberInfo> = members
+        .iter()
+        .filter(|m| m.account_id == bob_info.account_id)
+        .cloned()
+        .collect();
+    let err = ea
+        .rotate_vault_key(
+            vault,
+            VaultKey::generate().unwrap(),
+            Some(alice_info.account_id.clone()),
+            seal_for_members(&only_bob, &VaultKey::generate().unwrap()).unwrap(),
+        )
         .await
         .unwrap_err();
-    assert_eq!(err.code(), Some(ErrorCode::Conflict));
+    assert_eq!(transport_code(err), Some(ErrorCode::Conflict));
+    assert_eq!(alice_client.members(vault).await.unwrap().len(), 2);
 
-    // Removing bob locks him out.
-    alice_client
-        .remove_member(vault, &bob_info.account_id)
+    // Members cannot be removed without a rotation: there is no such call.
+    // Removing bob rotates the key; he is locked out and has only the old
+    // generation.
+    let new_key = VaultKey::generate().unwrap();
+    let remaining: Vec<MemberInfo> = members
+        .iter()
+        .filter(|m| m.account_id != bob_info.account_id)
+        .cloned()
+        .collect();
+    let generation = ea
+        .rotate_vault_key(
+            vault,
+            copy_key(&new_key),
+            Some(bob_info.account_id.clone()),
+            seal_for_members(&remaining, &new_key).unwrap(),
+        )
         .await
         .unwrap();
+    assert_eq!(generation, 2);
     let err = bob_client.pull(vault, 0, 10).await.unwrap_err();
     assert_eq!(err.code(), Some(ErrorCode::NotFound));
+    assert!(bob_client.list_vaults().await.unwrap().is_empty());
     assert_eq!(alice_client.members(vault).await.unwrap().len(), 1);
+
+    // Alice's list shows the new generation and the new key; what the server
+    // holds is under it.
+    let summary = alice_client.list_vaults().await.unwrap().remove(0);
+    assert_eq!(summary.key_generation, 2);
+    let (current, generation) = open_vault(&alice_client, &alice, vault).await.unwrap();
+    assert_eq!((current.expose(), generation), (new_key.expose(), 2));
+    let page = alice_client.pull(vault, 0, 100).await.unwrap();
+    assert!(page.records.iter().all(|r| r.envelope.key_generation == 2));
+
+    // Anything still using generation 1 is refused: a device that has not
+    // learned of the rotation yet, or bob's copy of the key.
+    let mut stale = engine(
+        &alice_client,
+        &alice,
+        Dev {
+            seed: 1,
+            name: "alice-laptop",
+        }
+        .identity(&alice),
+        vault,
+        copy_key(&key),
+    );
+    edit(&mut stale, vault, "h2", &[("name", json!("old key"))]);
+    let err = stale.pull(vault).await.unwrap_err();
+    assert!(
+        matches!(err, SyncError::UnknownKeyGeneration { generation: 2, .. }),
+        "{err:?}"
+    );
+    let err = stale.push(vault).await.unwrap_err();
+    assert!(err.is_stale_key(), "{err:?}");
+    assert_eq!(transport_code(err), Some(ErrorCode::StaleKeyGeneration));
+    // ... and a new member cannot be given the old key.
+    let err = share_vault(&alice_client, vault, &key, 1, "carol", Role::Viewer)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, AuthError::Transport(t) if t.code() == Some(ErrorCode::StaleKeyGeneration)),
+        "{err:?}"
+    );
+    share_vault(&alice_client, vault, &new_key, 2, "carol", Role::Viewer)
+        .await
+        .unwrap();
+    assert_eq!(alice_client.members(vault).await.unwrap().len(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -745,4 +841,584 @@ async fn an_oversized_body_gets_a_413_even_while_the_client_is_still_sending() {
     // A body at the limit is not refused for its size.
     let response = raw_post(&server, 64 * 1024).await;
     assert!(!response.starts_with("HTTP/1.1 413"), "{response}");
+}
+
+/// A signed envelope for `record` made outside any engine.
+fn envelope_of(
+    identity: &DeviceIdentity,
+    key: &VaultKey,
+    generation: u32,
+    vault: &str,
+    record: &str,
+    n: u64,
+) -> Envelope {
+    let mut version = RecordVersion::new("hosts");
+    version.edit(&identity.device_id, [("n", json!(n))]);
+    seal_record(identity, key, generation, vault, record, &version).unwrap()
+}
+
+fn push_of(envelope: Envelope) -> PushRequest {
+    PushRequest {
+        envelope,
+        expected: Default::default(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_push_is_all_or_nothing_with_a_report_per_record() {
+    let server = start().await;
+    let (client, alice) = signup(&server, "alice").await;
+    let (bob_client, _bob) = signup(&server, "bob").await;
+    let vault = "v-batch";
+    let key = create_vault(&client, &alice, vault).await.unwrap();
+    let id = Dev {
+        seed: 1,
+        name: "laptop",
+    }
+    .enroll(&client, &alice)
+    .await;
+    let make = |record: &str, n: u64| envelope_of(&id, &key, 1, vault, record, n);
+
+    // A clean batch lands as a whole, with the receive time stamped.
+    let ok = BatchPushRequest {
+        items: vec![
+            push_of(make("a", 1)),
+            push_of(make("b", 2)),
+            push_of(make("c", 3)),
+        ],
+    };
+    let response = client.push_batch(vault, &ok).await.unwrap();
+    assert!(response.committed);
+    assert!(response
+        .results
+        .iter()
+        .all(|r| matches!(r, BatchItemResult::Accepted { .. })));
+    let page = client.pull(vault, 0, 10).await.unwrap();
+    assert_eq!(page.records.len(), 3);
+    assert!(page.records.iter().all(|r| r.envelope.received_at > 0));
+
+    // One compare-and-set conflict (the record exists, the client thought it
+    // did not) keeps the others out too, and says which one it was.
+    let mixed = BatchPushRequest {
+        items: vec![
+            push_of(make("d", 4)),
+            push_of(make("a", 5)),
+            push_of(make("e", 6)),
+        ],
+    };
+    let response = client.push_batch(vault, &mixed).await.unwrap();
+    assert!(!response.committed);
+    assert_eq!(response.results[0], BatchItemResult::NotApplied);
+    assert!(matches!(
+        &response.results[1],
+        BatchItemResult::Conflict {
+            reason: ConflictReason::Cas,
+            current: Some(_)
+        }
+    ));
+    assert_eq!(response.results[2], BatchItemResult::NotApplied);
+    assert_eq!(client.pull(vault, 0, 10).await.unwrap().records.len(), 3);
+
+    // A forged item, a stale key generation and a tampered table are refused
+    // item by item.
+    let mut forged = make("f", 7);
+    forged.signature[0] ^= 1;
+    let mut retabled = make("g", 8);
+    retabled.table = "snippets".into();
+    let old_key = envelope_of(&id, &key, 7, vault, "h", 9);
+    let response = client
+        .push_batch(
+            vault,
+            &BatchPushRequest {
+                items: vec![
+                    push_of(make("i", 10)),
+                    push_of(forged),
+                    push_of(retabled),
+                    push_of(old_key),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!response.committed);
+    let codes: Vec<_> = response
+        .results
+        .iter()
+        .map(|r| match r {
+            BatchItemResult::Rejected { code, .. } => Some(*code),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        codes,
+        vec![
+            None,
+            Some(ErrorCode::InvalidSignature),
+            Some(ErrorCode::InvalidSignature),
+            Some(ErrorCode::StaleKeyGeneration)
+        ]
+    );
+    assert_eq!(client.pull(vault, 0, 10).await.unwrap().records.len(), 3);
+
+    // Shape: empty, duplicated ids, too many.
+    for items in [
+        Vec::new(),
+        vec![push_of(make("x", 1)), push_of(make("x", 2))],
+    ] {
+        let err = client
+            .push_batch(vault, &BatchPushRequest { items })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::BadRequest));
+    }
+
+    // A viewer cannot batch-push; a stranger does not see the vault.
+    share_vault(&client, vault, &key, 1, "bob", Role::Viewer)
+        .await
+        .unwrap();
+    let err = bob_client.push_batch(vault, &ok).await.unwrap_err();
+    assert_eq!(err.code(), Some(ErrorCode::Forbidden));
+    let (carol_client, _carol) = signup(&server, "carol").await;
+    let err = carol_client.push_batch(vault, &ok).await.unwrap_err();
+    assert_eq!(err.code(), Some(ErrorCode::NotFound));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn first_upload_uses_batches_and_the_data_arrives_whole() {
+    let server = start().await;
+    let (client, alice) = signup(&server, "alice").await;
+    let vault = "v-first";
+    let key = create_vault(&client, &alice, vault).await.unwrap();
+    let id = Dev {
+        seed: 1,
+        name: "laptop",
+    }
+    .enroll(&client, &alice)
+    .await;
+    let mut e = engine(&client, &alice, id, vault, copy_key(&key));
+    for i in 0..230 {
+        edit(&mut e, vault, &format!("h{i:03}"), &[("name", json!(i))]);
+    }
+    let report = e.sync(vault).await.unwrap();
+    assert_eq!((report.pushed, report.conflicts), (230, 0));
+    assert_eq!(client.pull(vault, 0, 500).await.unwrap().records.len(), 230);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rotation_is_owner_only_all_or_nothing_and_covers_every_record() {
+    // The rotation body carries the whole vault: it has its own, larger
+    // limit than other requests.
+    let server = start_with(|c| c.max_body_bytes = 300 * 1024).await;
+    let (client, alice) = signup(&server, "alice").await;
+    let (bob_client, _bob) = signup(&server, "bob").await;
+    let vault = "v-rot";
+    let key = create_vault(&client, &alice, vault).await.unwrap();
+    let id = Dev {
+        seed: 1,
+        name: "laptop",
+    }
+    .enroll(&client, &alice)
+    .await;
+    let mut e = engine(&client, &alice, id, vault, copy_key(&key));
+    for i in 0..400 {
+        edit(&mut e, vault, &format!("h{i:03}"), &[("name", json!(i))]);
+    }
+    e.sync(vault).await.unwrap();
+    share_vault(&client, vault, &key, 1, "bob", Role::Editor)
+        .await
+        .unwrap();
+    let members = client.members(vault).await.unwrap();
+    let new_key = VaultKey::generate().unwrap();
+    let sealed = seal_for_members(&members, &new_key).unwrap();
+
+    // A request for another generation, or with the wrong member list, is
+    // reported and changes nothing.
+    let request = RotateRequest {
+        from_generation: 5,
+        remove_member: None,
+        sealed_keys: sealed.clone(),
+        records: Vec::new(),
+    };
+    let response = client.rotate(vault, &request).await.unwrap();
+    assert!(!response.committed);
+    assert_eq!(response.key_generation, 1);
+    let response = client
+        .rotate(
+            vault,
+            &RotateRequest {
+                from_generation: 1,
+                sealed_keys: sealed[..1].to_vec(),
+                ..request.clone()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!response.committed && response.members_changed);
+
+    // Not an owner: refused. Not a member: not found.
+    let err = bob_client
+        .rotate(
+            vault,
+            &RotateRequest {
+                from_generation: 1,
+                ..request.clone()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Some(ErrorCode::Forbidden));
+
+    // Leaving records out is refused and lists them.
+    let response = client
+        .rotate(
+            vault,
+            &RotateRequest {
+                from_generation: 1,
+                ..request.clone()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!response.committed);
+    assert_eq!(response.missing.len(), 400);
+
+    // The engine does it properly, through the larger body limit.
+    e.pull(vault).await.unwrap();
+    let remaining: Vec<MemberInfo> = members
+        .iter()
+        .filter(|m| m.account_id != bob_client_account(&members, "bob"))
+        .cloned()
+        .collect();
+    assert_eq!(remaining.len(), 1);
+    let generation = e
+        .rotate_vault_key(
+            vault,
+            copy_key(&new_key),
+            Some(bob_client_account(&members, "bob")),
+            seal_for_members(&remaining, &new_key).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(generation, 2);
+    let page = client.pull(vault, 0, 500).await.unwrap();
+    assert_eq!(page.records.len(), 400);
+    assert!(page.records.iter().all(|r| r.envelope.key_generation == 2));
+
+    // Bob keeps what he had (his copy of generation 1) and nothing else.
+    assert_eq!(
+        bob_client.pull(vault, 0, 10).await.unwrap_err().code(),
+        Some(ErrorCode::NotFound)
+    );
+    let err = bob_client
+        .rotate(
+            vault,
+            &RotateRequest {
+                from_generation: 2,
+                ..request
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Some(ErrorCode::NotFound));
+
+    // Records written after the rotation use the new key; a second device
+    // signed in as alice picks the new key from the vault list.
+    let (second, alice2) = second_device(&server, "alice").await;
+    let id2 = Dev {
+        seed: 2,
+        name: "phone",
+    }
+    .enroll(&second, &alice2)
+    .await;
+    let (k2, g2) = open_vault(&second, &alice2, vault).await.unwrap();
+    assert_eq!((k2.expose(), g2), (new_key.expose(), 2));
+    let mut e2 = engine(&second, &alice2, id2, vault, copy_key(&key));
+    e2.add_vault_key(vault, 2, k2);
+    let report = e2.sync(vault).await.unwrap();
+    assert_eq!(report.pulled, 400);
+    // The old generation-1 key stays known to it for reading history, but
+    // writes use generation 2.
+    edit(&mut e2, vault, "h000", &[("name", json!("renamed"))]);
+    e2.sync(vault).await.unwrap();
+    let env = client
+        .pull(vault, 0, 500)
+        .await
+        .unwrap()
+        .records
+        .into_iter()
+        .find(|r| r.envelope.record_id == "h000")
+        .unwrap()
+        .envelope;
+    assert_eq!(env.key_generation, 2);
+}
+
+fn bob_client_account(members: &[MemberInfo], name: &str) -> String {
+    members
+        .iter()
+        .find(|m| m.username == name)
+        .unwrap()
+        .account_id
+        .clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rotation_that_races_with_a_push_changes_nothing_and_can_be_retried() {
+    let server = start().await;
+    let (client, alice) = signup(&server, "alice").await;
+    let vault = "v-race";
+    let key = create_vault(&client, &alice, vault).await.unwrap();
+    let id = Dev {
+        seed: 1,
+        name: "laptop",
+    }
+    .enroll(&client, &alice)
+    .await;
+    let (client2, alice2) = second_device(&server, "alice").await;
+    let id2 = Dev {
+        seed: 2,
+        name: "phone",
+    }
+    .enroll(&client2, &alice2)
+    .await;
+    let mut a = engine(&client, &alice, id, vault, copy_key(&key));
+    let mut b = engine(&client2, &alice2, id2, vault, copy_key(&key));
+    edit(&mut a, vault, "one", &[("name", json!("1"))]);
+    edit(&mut a, vault, "two", &[("name", json!("2"))]);
+    a.sync(vault).await.unwrap();
+    b.sync(vault).await.unwrap();
+    edit(&mut b, vault, "two", &[("name", json!("2b"))]);
+    b.sync(vault).await.unwrap();
+
+    let members = client.members(vault).await.unwrap();
+    let new_key = VaultKey::generate().unwrap();
+    let err = a
+        .rotate_vault_key(
+            vault,
+            copy_key(&new_key),
+            None,
+            seal_for_members(&members, &new_key).unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, SyncError::Rotation(RotationFailure::Conflict(ids)) if ids == &["two"]),
+        "{err:?}"
+    );
+    assert_eq!(client.list_vaults().await.unwrap()[0].key_generation, 1);
+    let page = client.pull(vault, 0, 10).await.unwrap();
+    assert!(page.records.iter().all(|r| r.envelope.key_generation == 1));
+
+    a.sync(vault).await.unwrap();
+    let generation = a
+        .rotate_vault_key(
+            vault,
+            copy_key(&new_key),
+            None,
+            seal_for_members(&members, &new_key).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(generation, 2);
+    assert_eq!(field(&a, vault, "two", "name"), json!("2b"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn certificates_expire_and_are_renewed_without_a_new_device() {
+    let server = start().await;
+    let (client, alice) = signup(&server, "alice").await;
+    let vault = "v-expiry";
+    let key = create_vault(&client, &alice, vault).await.unwrap();
+    let dev = Dev {
+        seed: 1,
+        name: "laptop",
+    };
+    let now = unix_now();
+
+    // Already expired: not even registered.
+    let stale = certify_device(
+        &alice.keys.signing,
+        &dev.key().public(),
+        "laptop",
+        1,
+        now - 10,
+    );
+    let err = client
+        .register_device(&RegisterDeviceRequest {
+            device_public: dev.key().public().to_vec(),
+            name: "laptop".into(),
+            cert: stale.to_bytes(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Some(ErrorCode::CertificateExpired));
+
+    // A certificate that runs out within seconds works, then stops working.
+    let short = certify_device(
+        &alice.keys.signing,
+        &dev.key().public(),
+        "laptop",
+        now,
+        now + 2,
+    );
+    client
+        .register_device(&RegisterDeviceRequest {
+            device_public: dev.key().public().to_vec(),
+            name: "laptop".into(),
+            cert: short.to_bytes(),
+        })
+        .await
+        .unwrap();
+    let identity = DeviceIdentity {
+        device_id: device_id_for(&dev.key().public()),
+        signing_key: dev.key(),
+        cert: short,
+    };
+    let mut e = engine(&client, &alice, identity, vault, copy_key(&key));
+    edit(&mut e, vault, "r", &[("name", json!("valid"))]);
+    e.sync(vault).await.unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(3200)).await;
+    edit(&mut e, vault, "r", &[("name", json!("too late"))]);
+    let err = e.sync(vault).await.unwrap_err();
+    assert_eq!(transport_code(err), Some(ErrorCode::CertificateExpired));
+
+    // What it wrote while the certificate was valid is still accepted by
+    // other clients, judged at the time the server received it.
+    let mut reader = engine(
+        &client,
+        &alice,
+        Dev {
+            seed: 2,
+            name: "reader",
+        }
+        .identity(&alice),
+        vault,
+        copy_key(&key),
+    );
+    let report = reader.sync(vault).await.unwrap();
+    assert!(report.rejected.is_empty(), "{report:?}");
+    assert_eq!(field(&reader, vault, "r", "name"), json!("valid"));
+
+    // Signing in renews it: the same device key, a new certificate.
+    let renewed = renew_device_cert(&client, &alice, "laptop", &dev.key().public(), unix_now())
+        .await
+        .unwrap();
+    assert!(renewed.expires_at >= unix_now() + CERT_LIFETIME_SECS - 5);
+    let listed = client.list_devices().await.unwrap();
+    let info = listed
+        .iter()
+        .find(|d| d.device_id == device_id_for(&dev.key().public()))
+        .unwrap();
+    assert_eq!(info.cert_expires_at, renewed.expires_at);
+    assert_eq!(listed.len(), 1, "renewal does not add a device");
+    let identity = DeviceIdentity {
+        device_id: device_id_for(&dev.key().public()),
+        signing_key: dev.key(),
+        cert: renewed,
+    };
+    let mut again = engine(&client, &alice, identity, vault, copy_key(&key));
+    let local = e.store().record(vault, "r").unwrap().clone();
+    again.store_mut().save(local);
+    again.sync(vault).await.unwrap();
+    assert_eq!(
+        client
+            .pull(vault, 0, 10)
+            .await
+            .unwrap()
+            .records
+            .iter()
+            .filter(|r| r.envelope.record_id == "r")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revocation_is_recorded_and_earlier_records_stay_valid_for_everyone() {
+    let server = start().await;
+    let (client_a, alice) = signup(&server, "alice").await;
+    let (client_b, bob) = signup(&server, "bob").await;
+    let vault = "v-rev-time";
+    let key = create_vault(&client_a, &alice, vault).await.unwrap();
+    let id_a = Dev {
+        seed: 1,
+        name: "laptop",
+    }
+    .enroll(&client_a, &alice)
+    .await;
+    share_vault(&client_a, vault, &key, 1, "bob", Role::Editor)
+        .await
+        .unwrap();
+    let (client_p, alice_p) = second_device(&server, "alice").await;
+    let phone = Dev {
+        seed: 2,
+        name: "phone",
+    };
+    let id_p = phone.enroll(&client_p, &alice_p).await;
+    let phone_id = id_p.device_id.clone();
+    let mut ep = engine(&client_p, &alice_p, id_p, vault, copy_key(&key));
+    edit(&mut ep, vault, "from-phone", &[("name", json!("before"))]);
+    ep.sync(vault).await.unwrap();
+
+    let before = unix_now();
+    client_a.revoke_device(&phone_id).await.unwrap();
+    let after = unix_now();
+
+    // The recorded time is visible to the account and to vault members.
+    let listed = client_a.list_devices().await.unwrap();
+    let phone_info = listed.iter().find(|d| d.device_id == phone_id).unwrap();
+    let at = phone_info.revoked_at.expect("revocation time");
+    assert!((before..=after).contains(&at));
+    let revoked = client_b.revoked_devices(vault).await.unwrap();
+    assert_eq!(
+        revoked,
+        vec![RevokedDevice {
+            device_id: phone_id.clone(),
+            revoked_at: at
+        }]
+    );
+    let err = server.client().revoked_devices(vault).await.unwrap_err();
+    assert_eq!(err.code(), Some(ErrorCode::Unauthorized));
+
+    // Bob's client takes the revocation list; what the phone wrote before
+    // revocation (received at or before `at`) is still valid, pulled with its
+    // receive time.
+    let bob_dev = Dev {
+        seed: 3,
+        name: "bob-laptop",
+    };
+    let id_b = bob_dev.enroll(&client_b, &bob).await;
+    let mut verifier = Verifier::new(bob.keys.signing.public());
+    trust_members(&client_b, &mut verifier, vault)
+        .await
+        .unwrap();
+    trust_revocations(&client_b, &mut verifier, vault)
+        .await
+        .unwrap();
+    assert!(verifier.is_revoked(&easyssh_sync::wire::device_public_from_id(&phone_id).unwrap()));
+    let mut eb = SyncEngine::new(client_b.clone(), MemoryStore::new(), id_b, verifier);
+    eb.add_vault_key(vault, 1, copy_key(&key));
+    let report = eb.sync(vault).await.unwrap();
+    assert!(report.rejected.is_empty(), "{report:?}");
+    assert_eq!(field(&eb, vault, "from-phone", "name"), json!("before"));
+    let received = client_b.pull(vault, 0, 10).await.unwrap().records[0]
+        .envelope
+        .received_at;
+    assert!(received <= at, "{received} <= {at}");
+
+    // After the revocation the server refuses the phone's keys, even with a
+    // fresh session; nothing newer from it can exist.
+    let relogin = server.client();
+    let acct = login(&relogin, "alice", PASS).await.unwrap();
+    let mut again = engine(
+        &relogin,
+        &acct,
+        phone.identity(&acct),
+        vault,
+        copy_key(&key),
+    );
+    edit(&mut again, vault, "later", &[("name", json!("after"))]);
+    let err = again.sync(vault).await.unwrap_err();
+    assert_eq!(transport_code(err), Some(ErrorCode::DeviceRevoked));
+    let _ = id_a;
 }

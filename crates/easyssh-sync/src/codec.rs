@@ -25,10 +25,12 @@ impl std::fmt::Debug for DeviceIdentity {
     }
 }
 
-/// Encrypt and sign `version` as an envelope for `record_id` in `vault_id`.
+/// Encrypt and sign `version` as an envelope for `record_id` in `vault_id`,
+/// under `vault_key`, which is generation `key_generation` of the vault key.
 pub fn seal_record(
     identity: &DeviceIdentity,
     vault_key: &VaultKey,
+    key_generation: u32,
     vault_id: &str,
     record_id: &str,
     version: &RecordVersion,
@@ -44,21 +46,20 @@ pub fn seal_record(
         EnvelopeFields {
             record_id: record_id.to_owned(),
             vault_id: vault_id.to_owned(),
+            table: version.table.clone(),
+            key_generation,
             version_vector: version.version_vector.clone(),
             deleted: version.is_deleted(),
             ciphertext,
         },
         &identity.signing_key,
     );
-    Ok(Envelope::from_signed(
-        signed,
-        &version.table,
-        &identity.cert,
-    ))
+    Ok(Envelope::from_signed(signed, &identity.cert))
 }
 
-/// Decrypt an envelope that has already been verified. Checks that the
-/// table and the delete flag in the routing metadata match the ciphertext.
+/// Decrypt an envelope that has already been verified (with the key of the
+/// envelope's generation). Checks that the table and the delete flag in the
+/// signed routing metadata match the ciphertext.
 pub fn open_record(vault_key: &VaultKey, envelope: &Envelope) -> Result<RecordVersion, SyncError> {
     let vector = envelope.vector();
     let aad = Aad {

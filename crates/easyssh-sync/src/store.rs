@@ -42,6 +42,11 @@ pub trait SyncStore {
     /// Every record of the vault that [`LocalRecord::is_dirty`].
     fn dirty(&self, vault_id: &str) -> Result<Vec<LocalRecord>, Self::Error>;
 
+    /// Every record of the vault known locally, dirty or not (used to
+    /// re-encrypt the vault when its key rotates). Records that were never
+    /// edited locally and are unknown to the server may be left out.
+    fn all(&self, vault_id: &str) -> Result<Vec<LocalRecord>, Self::Error>;
+
     /// Store `record` and write `history` (values a merge overwrote) in one
     /// transaction.
     fn put(&mut self, record: LocalRecord, history: Vec<Overwritten>) -> Result<(), Self::Error>;
@@ -90,6 +95,17 @@ impl SyncStore for MemoryStore {
             .records
             .values()
             .filter(|r| r.vault_id == vault_id && r.is_dirty())
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| a.record_id.cmp(&b.record_id));
+        Ok(out)
+    }
+
+    fn all(&self, vault_id: &str) -> Result<Vec<LocalRecord>, Self::Error> {
+        let mut out: Vec<_> = self
+            .records
+            .values()
+            .filter(|r| r.vault_id == vault_id)
             .cloned()
             .collect();
         out.sort_by(|a, b| a.record_id.cmp(&b.record_id));

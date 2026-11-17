@@ -8,8 +8,8 @@ use crate::verify::Verifier;
 use crate::wire::*;
 use easyssh_crypto::{
     certify_device, derive_account_secrets, open_vault_key, seal_vault_key, unwrap_account_keys,
-    wrap_account_keys, AccountKeyPair, DeviceSigningKey, KdfHeader, KdfParams, SealPublicKey,
-    VaultKey,
+    wrap_account_keys, AccountKeyPair, DeviceCert, DeviceSigningKey, KdfHeader, KdfParams,
+    SealPublicKey, VaultKey, CERT_LIFETIME_SECS,
 };
 use ed25519_dalek::VerifyingKey;
 
@@ -98,7 +98,8 @@ pub async fn login(
     })
 }
 
-/// Certify `key` with the account key and register it with the server.
+/// Certify `key` with the account key (valid for [`CERT_LIFETIME_SECS`] from
+/// `issued_at`) and register it with the server.
 pub async fn enroll_device(
     client: &HttpClient,
     account: &Account,
@@ -107,19 +108,40 @@ pub async fn enroll_device(
     issued_at: i64,
 ) -> Result<DeviceIdentity, TransportError> {
     let public = key.public();
-    let cert = certify_device(&account.keys.signing, &public, device_name, issued_at);
-    client
-        .register_device(&RegisterDeviceRequest {
-            device_public: public.to_vec(),
-            name: device_name.to_owned(),
-            cert: cert.to_bytes(),
-        })
-        .await?;
+    let cert = renew_device_cert(client, account, device_name, &public, issued_at).await?;
     Ok(DeviceIdentity {
         device_id: device_id_for(&public),
         signing_key: key,
         cert,
     })
+}
+
+/// Issue a new certificate for an already known device key and register it:
+/// the server replaces the stored one. This is how a device stays valid
+/// past the expiry of its certificate; it needs the account key and a
+/// session, so it happens on sign-in and while a signed-in device syncs.
+pub async fn renew_device_cert(
+    client: &HttpClient,
+    account: &Account,
+    device_name: &str,
+    device_public: &[u8; 32],
+    now: i64,
+) -> Result<DeviceCert, TransportError> {
+    let cert = certify_device(
+        &account.keys.signing,
+        device_public,
+        device_name,
+        now,
+        now + CERT_LIFETIME_SECS,
+    );
+    client
+        .register_device(&RegisterDeviceRequest {
+            device_public: device_public.to_vec(),
+            name: device_name.to_owned(),
+            cert: cert.to_bytes(),
+        })
+        .await?;
+    Ok(cert)
 }
 
 /// Create a vault with a fresh key sealed to the creator; returns the key.
@@ -139,21 +161,47 @@ pub async fn create_vault(
     Ok(key)
 }
 
-/// Fetch and open this account's copy of a vault key.
+/// Fetch and open this account's copy of a vault's current key; also
+/// returns its generation.
 pub async fn open_vault(
     client: &HttpClient,
     account: &Account,
     vault_id: &str,
-) -> Result<VaultKey, AuthError> {
+) -> Result<(VaultKey, u32), AuthError> {
     let vaults = client.list_vaults().await?;
     let vault = vaults
         .iter()
         .find(|v| v.vault_id == vault_id)
         .ok_or(AuthError::BadAccountData("vault is not shared with you"))?;
-    Ok(open_vault_key(&vault.sealed_key, &account.keys.sealing)?)
+    Ok((
+        open_vault_key(&vault.sealed_key, &account.keys.sealing)?,
+        vault.key_generation,
+    ))
 }
 
-/// Owner only: seal `vault_key` to the account `username` and add it with `role`.
+/// Seal `key` to every member in `members` (for a key rotation).
+pub fn seal_for_members(
+    members: &[MemberInfo],
+    key: &VaultKey,
+) -> Result<Vec<MemberKey>, AuthError> {
+    members
+        .iter()
+        .map(|member| {
+            let public: [u8; 32] = member
+                .seal_public
+                .as_slice()
+                .try_into()
+                .map_err(|_| AuthError::BadAccountData("bad public key length"))?;
+            Ok(MemberKey {
+                account_id: member.account_id.clone(),
+                sealed_key: seal_vault_key(key, &SealPublicKey(public))?,
+            })
+        })
+        .collect()
+}
+
+/// Owner only: seal `vault_key` (generation `key_generation`) to the account
+/// `username` and add it with `role`.
 ///
 /// The recipient's public key comes from the server, so a malicious server
 /// could substitute its own; compare account fingerprints out of band for
@@ -162,6 +210,7 @@ pub async fn share_vault(
     client: &HttpClient,
     vault_id: &str,
     vault_key: &VaultKey,
+    key_generation: u32,
     username: &str,
     role: Role,
 ) -> Result<AccountInfo, AuthError> {
@@ -179,6 +228,7 @@ pub async fn share_vault(
             &PutMemberRequest {
                 role,
                 sealed_key: Some(sealed),
+                key_generation: Some(key_generation),
             },
         )
         .await?;
@@ -202,6 +252,21 @@ pub async fn trust_members(
         let key = VerifyingKey::from_bytes(&bytes)
             .map_err(|_| AuthError::BadAccountData("bad signing key"))?;
         verifier.trust_account(key);
+    }
+    Ok(())
+}
+
+/// Tell `verifier` which devices of the vault's members were revoked, and
+/// when, so it refuses what they sent after that.
+pub async fn trust_revocations(
+    client: &HttpClient,
+    verifier: &mut Verifier,
+    vault_id: &str,
+) -> Result<(), AuthError> {
+    for revoked in client.revoked_devices(vault_id).await? {
+        if let Some(public) = device_public_from_id(&revoked.device_id) {
+            verifier.revoke_device(public, revoked.revoked_at);
+        }
     }
     Ok(())
 }

@@ -50,10 +50,12 @@ pub fn device_public_from_id(id: &str) -> Option<[u8; 32]> {
 pub struct Envelope {
     pub record_id: String,
     pub vault_id: String,
-    /// Entity table (`hosts`, `keys`, ...). Not covered by the envelope
-    /// signature (the crypto format predates it), so it is repeated inside
-    /// the ciphertext and clients reject a mismatch.
+    /// Entity table (`hosts`, `keys`, ...). Covered by the signature; it is
+    /// also repeated inside the ciphertext and clients reject a mismatch.
     pub table: String,
+    /// Generation of the vault key the ciphertext is encrypted under
+    /// (signed). The server accepts writes only under the current one.
+    pub key_generation: u32,
     pub version_vector: BTreeMap<String, u64>,
     pub deleted: bool,
     #[serde(with = "b64")]
@@ -67,6 +69,11 @@ pub struct Envelope {
     /// `DeviceCert::to_bytes` of the signer's certificate.
     #[serde(with = "b64")]
     pub cert: Vec<u8>,
+    /// Unix seconds at which the server received this version. Set by the
+    /// server, not signed and ignored on push; 0 when unknown. Clients judge
+    /// device revocation and certificate expiry against it.
+    #[serde(default)]
+    pub received_at: i64,
 }
 
 impl Envelope {
@@ -92,6 +99,8 @@ impl Envelope {
             SignedEnvelope {
                 record_id: self.record_id.clone(),
                 vault_id: self.vault_id.clone(),
+                table: self.table.clone(),
+                key_generation: self.key_generation,
                 version_vector: self.vector(),
                 deleted: self.deleted,
                 ciphertext: self.ciphertext.clone(),
@@ -102,11 +111,12 @@ impl Envelope {
         ))
     }
 
-    pub fn from_signed(signed: SignedEnvelope, table: &str, cert: &DeviceCert) -> Self {
+    pub fn from_signed(signed: SignedEnvelope, cert: &DeviceCert) -> Self {
         Self {
             record_id: signed.record_id,
             vault_id: signed.vault_id,
-            table: table.to_owned(),
+            table: signed.table,
+            key_generation: signed.key_generation,
             version_vector: signed
                 .version_vector
                 .iter()
@@ -117,6 +127,7 @@ impl Envelope {
             signer: signed.signer.to_vec(),
             signature: signed.signature.to_vec(),
             cert: cert.to_bytes(),
+            received_at: 0,
         }
     }
 }
@@ -144,6 +155,8 @@ pub enum ConflictReason {
 /// 200 for `accepted`, 409 for `conflict`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
+// A wire type built once per push; boxing would only add noise.
+#[allow(clippy::large_enum_variant)]
 pub enum PushResponse {
     Accepted {
         seq: u64,
@@ -153,6 +166,95 @@ pub enum PushResponse {
         /// The envelope the server holds; the client merges it and retries.
         current: Option<Envelope>,
     },
+}
+
+/// `POST /v1/vaults/{vault}/records/batch`: several pushes in one
+/// transaction. Every item is checked like a single push (compare-and-set,
+/// signature, certificate, key generation); the batch is applied only if all
+/// of them pass, otherwise nothing is written and each item's outcome is
+/// reported.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchPushRequest {
+    pub items: Vec<PushRequest>,
+}
+
+/// The outcome of one item of a batch or rotation, in request order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
+pub enum BatchItemResult {
+    Accepted {
+        seq: u64,
+    },
+    Conflict {
+        reason: ConflictReason,
+        current: Option<Envelope>,
+    },
+    /// The item itself is not acceptable (bad signature, revoked device,
+    /// wrong key generation, bad shape, ...).
+    Rejected {
+        code: ErrorCode,
+        message: String,
+    },
+    /// The item was fine but not applied because another item failed.
+    NotApplied,
+}
+
+/// 200 when `committed`, 409 when nothing was written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchPushResponse {
+    pub committed: bool,
+    pub results: Vec<BatchItemResult>,
+}
+
+/// The new vault key sealed to one member.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberKey {
+    pub account_id: String,
+    #[serde(with = "b64")]
+    pub sealed_key: Vec<u8>,
+}
+
+/// `POST /v1/vaults/{vault}/rotate` (owners only): replace the vault key.
+///
+/// In one transaction the server checks that `from_generation` is current,
+/// removes `remove_member` if given, checks that `sealed_keys` covers
+/// exactly the remaining members, and accepts one re-encrypted envelope
+/// (key generation `from_generation + 1`) for every record the vault holds.
+/// All or nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RotateRequest {
+    pub from_generation: u32,
+    #[serde(default)]
+    pub remove_member: Option<String>,
+    pub sealed_keys: Vec<MemberKey>,
+    pub records: Vec<PushRequest>,
+}
+
+/// 200 when `committed`, 409 when nothing was written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RotateResponse {
+    pub committed: bool,
+    /// The vault's key generation now (the new one when committed).
+    pub key_generation: u32,
+    /// The membership differs from what `sealed_keys` and `remove_member`
+    /// assumed (somebody was added or removed meanwhile).
+    #[serde(default)]
+    pub members_changed: bool,
+    /// Records the server holds that `records` did not include.
+    #[serde(default)]
+    pub missing: Vec<String>,
+    /// Per record, in request order.
+    #[serde(default)]
+    pub results: Vec<BatchItemResult>,
+}
+
+/// A device of a vault member that was revoked, and when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevokedDevice {
+    pub device_id: String,
+    /// Unix seconds on the server's clock.
+    pub revoked_at: i64,
 }
 
 /// One pulled record with its server sequence number.
@@ -317,6 +419,12 @@ pub struct DeviceInfo {
     pub cert: Vec<u8>,
     pub created_at: i64,
     pub revoked: bool,
+    /// When the server revoked it (unix seconds).
+    #[serde(default)]
+    pub revoked_at: Option<i64>,
+    /// When the registered certificate expires (unix seconds).
+    #[serde(default)]
+    pub cert_expires_at: i64,
 }
 
 // ---- vaults ----------------------------------------------------------------
@@ -365,8 +473,11 @@ pub struct CreateVaultRequest {
 pub struct VaultSummary {
     pub vault_id: String,
     pub role: Role,
+    /// The vault key of generation `key_generation`, sealed to this account.
     #[serde(with = "b64")]
     pub sealed_key: Vec<u8>,
+    /// Current key generation (1 until the first rotation).
+    pub key_generation: u32,
 }
 
 /// `PUT /v1/vaults/{vault}/members/{account}` (owners only)
@@ -377,6 +488,10 @@ pub struct PutMemberRequest {
     /// member is new; optional when only the role changes.
     #[serde(default, with = "opt_b64")]
     pub sealed_key: Option<Vec<u8>>,
+    /// Generation of the key in `sealed_key`; required with it. The server
+    /// refuses a key of an older generation (a rotation happened meanwhile).
+    #[serde(default)]
+    pub key_generation: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -427,6 +542,10 @@ pub enum ErrorCode {
     DeviceNotRegistered,
     DeviceRevoked,
     InvalidSignature,
+    /// The device certificate is past its expiry.
+    CertificateExpired,
+    /// A write used a vault key generation other than the current one.
+    StaleKeyGeneration,
     RegistrationClosed,
     Internal,
 }
@@ -467,12 +586,30 @@ mod tests {
     }
 
     #[test]
+    fn batch_results_use_snake_case_tags() {
+        let json = serde_json::to_string(&BatchItemResult::NotApplied).unwrap();
+        assert_eq!(json, r#"{"status":"not_applied"}"#);
+        let back: BatchItemResult = serde_json::from_str(
+            r#"{"status":"rejected","code":"stale_key_generation","message":"x"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            back,
+            BatchItemResult::Rejected {
+                code: ErrorCode::StaleKeyGeneration,
+                message: "x".into()
+            }
+        );
+    }
+
+    #[test]
     fn member_request_optional_key() {
         let req: PutMemberRequest = serde_json::from_str(r#"{"role":"viewer"}"#).unwrap();
         assert_eq!(req.sealed_key, None);
         let req = PutMemberRequest {
             role: Role::Editor,
             sealed_key: Some(vec![1, 2, 3]),
+            key_generation: Some(2),
         };
         let back: PutMemberRequest =
             serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();

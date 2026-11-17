@@ -134,6 +134,7 @@ fn envelope_vectors() {
         &device.public(),
         "Aiko's laptop",
         1_700_000_000,
+        1_700_000_000 + CERT_LIFETIME_SECS,
     );
     let mut envs = Vec::new();
     let mut verify = Vec::new();
@@ -142,6 +143,8 @@ fn envelope_vectors() {
             EnvelopeFields {
                 record_id: "rec-1".into(),
                 vault_id: "vault-1".into(),
+                table: "hosts".into(),
+                key_generation: 3,
                 version_vector: VersionVector::from_entries([("device-b", 2), ("device-a", 5)]),
                 deleted,
                 ciphertext: ct,
@@ -151,6 +154,8 @@ fn envelope_vectors() {
         envs.push(json!({
             "record_id": env.record_id,
             "vault_id": env.vault_id,
+            "table": env.table,
+            "key_generation": env.key_generation,
             "version_vector": [["device-a", 5], ["device-b", 2]],
             "deleted": env.deleted,
             "ciphertext_hex": h(&env.ciphertext),
@@ -169,6 +174,7 @@ fn envelope_vectors() {
             "cert": {
                 "device_name": cert.device_name,
                 "issued_at": cert.issued_at,
+                "expires_at": cert.expires_at,
                 "bytes_hex": h(&cert.to_bytes()),
             },
             "envelopes": envs,
@@ -187,6 +193,8 @@ fn envelope_vectors() {
         let env = Envelope {
             record_id: e["record_id"].as_str().unwrap().into(),
             vault_id: e["vault_id"].as_str().unwrap().into(),
+            table: e["table"].as_str().unwrap().into(),
+            key_generation: e["key_generation"].as_u64().unwrap() as u32,
             version_vector: VersionVector::from_entries(
                 e["version_vector"]
                     .as_array()
@@ -199,7 +207,7 @@ fn envelope_vectors() {
             signer: unh(e["signer_hex"].as_str().unwrap()),
             signature: unh(e["signature_hex"].as_str().unwrap()),
         };
-        verify_envelope(&env, &cert, &account_pub).unwrap();
+        verify_envelope(&env, &cert, &account_pub, cert.expires_at).unwrap();
     }
     assert_eq!(verify.len(), 2);
 }

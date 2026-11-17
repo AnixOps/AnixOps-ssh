@@ -37,7 +37,13 @@ fn engine_for(
 ) -> Engine {
     let acct = account();
     let key = DeviceSigningKey::from_seed([seed; 32]);
-    let cert = certify_device(&acct.signing, &key.public(), name, 1_700_000_000);
+    let cert = certify_device(
+        &acct.signing,
+        &key.public(),
+        name,
+        1_700_000_000,
+        4_000_000_000,
+    );
     let identity = DeviceIdentity {
         // The stamps in the store use the store's device id, so the sync
         // identity must be the same string.
@@ -51,7 +57,7 @@ fn engine_for(
         identity,
         verifier,
     );
-    engine.add_vault_key(personal, VaultKey::from_bytes([7; 32]));
+    engine.add_vault_key(personal, 1, VaultKey::from_bytes([7; 32]));
     engine
 }
 
@@ -395,7 +401,8 @@ async fn team_vaults_are_separate_and_carry_a_name() {
     let mut b = dev("dev-b", 11, &server);
     let team = uuid::Uuid::new_v4().to_string();
     for d in [&mut a, &mut b] {
-        d.engine.add_vault_key(&team, VaultKey::from_bytes([9; 32]));
+        d.engine
+            .add_vault_key(&team, 1, VaultKey::from_bytes([9; 32]));
     }
     a.store().create_team_vault(&team, "Platform team").unwrap();
     b.store()
@@ -547,4 +554,16 @@ fn sync_store_trait_reads_what_the_store_holds() {
     assert_eq!(got.version, dirty[0].version);
     // Another vault's id does not find it.
     assert!(sync.get("someone-elses", &connection.id).unwrap().is_none());
+
+    // `all` lists every record (what a key rotation re-encrypts), clean ones
+    // included; `dirty` only what still has to go up.
+    let mut sync = StoreSync::new(store.clone(), &personal);
+    let mut clean = got.clone();
+    clean.server_vector = Some(clean.version.version_vector.clone());
+    sync.put(clean, Vec::new()).unwrap();
+    assert!(sync.dirty(&personal).unwrap().is_empty());
+    let all = sync.all(&personal).unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].record_id, connection.id);
+    assert!(sync.all("someone-elses").unwrap().is_empty());
 }
