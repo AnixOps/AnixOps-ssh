@@ -1,0 +1,59 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "rm",
+  "description": "Remove files or directories",
+  "options": [
+    {
+      "name": [
+        "-f",
+        "--force"
+      ],
+      "description": "Ignore missing files and never ask"
+    },
+    {
+      "name": "-i",
+      "description": "Ask before every removal"
+    },
+    {
+      "name": "-I",
+      "description": "Ask once before removing many files"
+    },
+    {
+      "name": [
+        "-r",
+        "-R",
+        "--recursive"
+      ],
+      "description": "Remove directories and their contents"
+    },
+    {
+      "name": [
+        "-d",
+        "--dir"
+      ],
+      "description": "Remove empty directories"
+    },
+    {
+      "name": [
+        "-v",
+        "--verbose"
+      ],
+      "description": "Explain what is being done"
+    },
+    {
+      "name": "--one-file-system",
+      "description": "Stay on the file system of each argument"
+    },
+    {
+      "name": "--no-preserve-root",
+      "description": "Do not treat / specially"
+    }
+  ],
+  "args": [
+    {
+      "name": "file",
+      "variadic": true,
+      "template": "filepaths"
+    }
+  ]
+}
