@@ -1,8 +1,17 @@
 import {
   ArrowLeftRight,
   CornerDownLeft,
+  Columns2,
   FolderOpen,
+  Maximize2,
+  Minimize2,
   Plus,
+  Radio,
+  RadioTower,
+  Rows2,
+  SkipBack,
+  SkipForward,
+  X,
   Search,
   Server,
   SquareCode,
@@ -22,9 +31,28 @@ import {
   type Tunnel,
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
+import { shortcutHint } from "@/lib/shortcuts";
 import { terminalFor } from "@/lib/terminals";
 import { describeTunnel } from "@/lib/tunnels";
 import { cn } from "@/lib/utils";
+
+export type PaneAction =
+  | "split-right"
+  | "split-down"
+  | "close-pane"
+  | "focus-next"
+  | "focus-previous"
+  | "toggle-maximise"
+  | "toggle-broadcast-tab"
+  | "toggle-broadcast-all";
+
+interface PaneEntry {
+  id: string;
+  title: string;
+  icon: LucideIcon;
+  hint: string;
+  action: PaneAction;
+}
 
 interface Item {
   id: string;
@@ -61,6 +89,11 @@ export function CommandPalette({
   onOpenLocal,
   onNewHost,
   onToggleFiles,
+  onPaneAction,
+  paneCount,
+  maximised,
+  tabBroadcast,
+  globalBroadcast,
   onNav,
 }: {
   hosts: Host[];
@@ -71,6 +104,12 @@ export function CommandPalette({
   onOpenLocal: () => void;
   onNewHost: () => void;
   onToggleFiles: () => void;
+  onPaneAction: (action: PaneAction) => void;
+  /** Panes in the active tab; 0 without one. */
+  paneCount: number;
+  maximised: boolean;
+  tabBroadcast: boolean;
+  globalBroadcast: boolean;
   onNav: (nav: NavKey) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -91,6 +130,49 @@ export function CommandPalette({
       { id: "new-host", section: t.paletteActions, title: t.newHost, icon: Plus, run: onNewHost },
       ...(activeHostTab
         ? [{ id: "files", section: t.paletteActions, title: t.toggleFiles, icon: FolderOpen, run: onToggleFiles }]
+        : []),
+      ...(paneCount > 0
+        ? ([
+            { id: "split-right", title: t.splitRight, icon: Columns2, hint: shortcutHint("split-right"), action: "split-right" },
+            { id: "split-down", title: t.splitDown, icon: Rows2, hint: shortcutHint("split-down"), action: "split-down" },
+            ...(paneCount > 1
+              ? [
+                  { id: "close-pane", title: t.closePane, icon: X, hint: shortcutHint("close-tab"), action: "close-pane" },
+                  { id: "focus-next", title: t.focusNextPane, icon: SkipForward, hint: shortcutHint("focus-pane"), action: "focus-next" },
+                  { id: "focus-previous", title: t.focusPreviousPane, icon: SkipBack, hint: shortcutHint("focus-pane"), action: "focus-previous" },
+                  {
+                    id: "maximise",
+                    title: maximised ? t.restorePane : t.maximisePane,
+                    icon: maximised ? Minimize2 : Maximize2,
+                    hint: shortcutHint("toggle-maximise"),
+                    action: "toggle-maximise",
+                  },
+                ]
+              : []),
+            {
+              id: "broadcast-tab",
+              title: t.broadcastTab,
+              icon: Radio,
+              hint: `${tabBroadcast ? t.on : t.off} · ${shortcutHint("toggle-broadcast")}`,
+              action: "toggle-broadcast-tab",
+            },
+            {
+              id: "broadcast-all",
+              title: t.broadcastAll,
+              icon: RadioTower,
+              hint: globalBroadcast ? t.on : t.off,
+              action: "toggle-broadcast-all",
+            },
+          ] as PaneEntry[]).map(
+            (entry): Item => ({
+              id: entry.id,
+              section: t.paletteActions,
+              title: entry.title,
+              subtitle: entry.hint,
+              icon: entry.icon,
+              run: () => onPaneAction(entry.action),
+            }),
+          )
         : []),
       { id: "nav-forwards", section: t.paletteActions, title: t.navForwards, icon: ArrowLeftRight, run: () => onNav("forwards") },
       { id: "nav-snippets", section: t.paletteActions, title: t.navSnippets, icon: SquareCode, run: () => onNav("snippets") },
@@ -127,7 +209,23 @@ export function CommandPalette({
       }),
       ...actions,
     ];
-  }, [hosts, snippets, tunnels, activeKey, activeHostTab, onOpenHost, onOpenLocal, onNewHost, onToggleFiles, onNav]);
+  }, [
+    hosts,
+    snippets,
+    tunnels,
+    activeKey,
+    activeHostTab,
+    paneCount,
+    maximised,
+    tabBroadcast,
+    globalBroadcast,
+    onOpenHost,
+    onOpenLocal,
+    onNewHost,
+    onToggleFiles,
+    onPaneAction,
+    onNav,
+  ]);
 
   const normalized = query.trim().toLowerCase();
   const visible = useMemo(() => {
