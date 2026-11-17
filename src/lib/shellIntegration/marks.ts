@@ -74,6 +74,21 @@ export class PromptMarks<M extends MarkerLike = MarkerLike> {
     mark.marker.dispose();
   }
 
+  /**
+   * The latest prompt that ran a command, and the line where the prompt after
+   * it starts (`null` while it is the last one, so its output runs to the
+   * cursor). Used to hand the last command and its output to the assistant.
+   */
+  lastCommand(): { mark: PromptMark<M>; endLine: number | null } | null {
+    for (let i = this.marks.length - 1; i >= 0; i--) {
+      const mark = this.marks[i];
+      if (mark.command === null || mark.marker.line < 0) continue;
+      const next = this.marks[i + 1];
+      return { mark, endLine: next && next.marker.line >= 0 ? next.marker.line : null };
+    }
+    return null;
+  }
+
   /** The buffer line to scroll to for "previous prompt", or null. */
   previous(viewportTop: number): number | null {
     let found: number | null = null;

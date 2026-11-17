@@ -92,4 +92,28 @@ describe("PromptMarks", () => {
       expect(marks.next(20)).toBeNull();
     });
   });
+
+  it("finds the last command and where the next prompt starts", () => {
+    const { marks } = tracker();
+    expect(marks.lastCommand()).toBeNull();
+    marks.promptStart(new FakeMarker(0));
+    expect(marks.lastCommand()).toBeNull();
+    marks.commandStart("make");
+    // Still running: its output runs to the cursor.
+    expect(marks.lastCommand()?.mark.command).toBe("make");
+    expect(marks.lastCommand()?.endLine).toBeNull();
+    marks.commandEnd(2);
+    const next = marks.promptStart(new FakeMarker(5));
+    // The new prompt has no command yet, so the last command is still make,
+    // and its output ends where that prompt starts.
+    const found = marks.lastCommand();
+    expect(found?.mark.exitCode).toBe(2);
+    expect(found?.endLine).toBe(5);
+    marks.commandStart("ls");
+    expect(marks.lastCommand()?.mark).toBe(next);
+    expect(marks.lastCommand()?.endLine).toBeNull();
+    // A prompt that scrolled out of the buffer is not used.
+    next.marker.dispose();
+    expect(marks.lastCommand()?.mark.command).toBe("make");
+  });
 });
