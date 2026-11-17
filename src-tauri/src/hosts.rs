@@ -1,13 +1,22 @@
 //! Host list commands. The frontend only ever sees display data; launching a
 //! session goes back through `easyssh-core`, which validates every argument.
+//!
+//! With the daemon connected, hosts live there (one source of truth for every
+//! window and process): these commands read and write through `hosts.*`, and
+//! the daemon announces changes with `hosts.changed`. Without a daemon
+//! connection they read and write the host file directly, as before.
 
+use crate::daemon::DaemonState;
 use easyssh_core::security::{validate_alias, validate_connection};
 use easyssh_core::{
     scan_default_ssh_config, AppConfig, ConfigStore, Connection, ConnectionTarget,
     ExternalTerminal, Group, OpenSsh, SshInvocation,
 };
+use easysshd::link::{Link, LinkError};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashSet;
+use tauri::State;
 
 /// Hosts discovered in `~/.ssh/config` have no saved record, so their id is
 /// derived from the alias instead.
@@ -209,10 +218,60 @@ pub(crate) fn save_config(config: &AppConfig) -> Result<(), String> {
     store.save(config).map_err(|error| error.to_string())
 }
 
-/// Creates or updates a host and returns its id.
-#[tauri::command]
-pub fn host_save(input: HostInput) -> Result<String, String> {
-    let mut config = load_config()?;
+/// The daemon cannot be reached right now: use the host file instead.
+fn daemon_down(error: &LinkError) -> bool {
+    matches!(error.code.as_str(), "unavailable" | "disconnected")
+}
+
+/// The hosts to work on, and the daemon link they came from. Through the
+/// daemon only connections and groups exist (the rest of the configuration is
+/// not the daemon's to hand out); without it, the whole configuration.
+async fn working_config(daemon: &DaemonState) -> Result<(AppConfig, Option<Link>), String> {
+    if let Some(link) = daemon.link() {
+        match link.request("hosts.list", json!({})).await {
+            Ok(value) => {
+                let mut config = AppConfig::new();
+                config.connections = serde_json::from_value(value["connections"].clone())
+                    .map_err(|error| error.to_string())?;
+                config.groups = serde_json::from_value(value["groups"].clone())
+                    .map_err(|error| error.to_string())?;
+                return Ok((config, Some(link)));
+            }
+            Err(error) if daemon_down(&error) => {}
+            Err(error) => return Err(error.message),
+        }
+    }
+    Ok((load_config()?, None))
+}
+
+/// Stores one changed connection (and a group created for it).
+async fn commit(
+    link: Option<Link>,
+    config: &AppConfig,
+    connection: &Connection,
+    new_group: Option<&Group>,
+) -> Result<(), String> {
+    let Some(link) = link else {
+        return save_config(config);
+    };
+    let mut payload = json!({ "connection": connection });
+    if let Some(group) = new_group {
+        payload["group"] = json!(group);
+    }
+    link.request("hosts.save", payload)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.message)
+}
+
+/// The edit applied to `config`: the stored connection and a group created
+/// for it, if any.
+struct Upsert {
+    connection: Connection,
+    new_group: Option<Group>,
+}
+
+fn upsert(config: &mut AppConfig, input: &HostInput) -> Result<Upsert, String> {
     let index = input.id.as_deref().and_then(|id| {
         config
             .connections
@@ -223,20 +282,39 @@ pub fn host_save(input: HostInput) -> Result<String, String> {
         Some(index) => config.connections[index].clone(),
         None => Connection::alias(input.name.trim(), "new"),
     };
-    let group_id = group_for(&mut config, input.group.as_deref());
-    apply(&mut connection, &input, group_id)?;
+    let known_groups = config.groups.len();
+    let group_id = group_for(config, input.group.as_deref());
+    let new_group = config.groups.get(known_groups).cloned();
+    apply(&mut connection, input, group_id)?;
     connection.updated_at = chrono::Utc::now();
-    let id = connection.id.clone();
     match index {
-        Some(index) => config.connections[index] = connection,
-        None => config.connections.push(connection),
+        Some(index) => config.connections[index] = connection.clone(),
+        None => config.connections.push(connection.clone()),
     }
-    save_config(&config)?;
-    Ok(id)
+    Ok(Upsert {
+        connection,
+        new_group,
+    })
+}
+
+/// Creates or updates a host and returns its id.
+#[tauri::command]
+pub async fn host_save(daemon: State<'_, DaemonState>, input: HostInput) -> Result<String, String> {
+    let (mut config, link) = working_config(&daemon).await?;
+    let saved = upsert(&mut config, &input)?;
+    commit(link, &config, &saved.connection, saved.new_group.as_ref()).await?;
+    Ok(saved.connection.id)
 }
 
 #[tauri::command]
-pub fn host_delete(id: String) -> Result<(), String> {
+pub async fn host_delete(daemon: State<'_, DaemonState>, id: String) -> Result<(), String> {
+    if let Some(link) = daemon.link() {
+        match link.request("hosts.delete", json!({ "id": id })).await {
+            Ok(_) => return Ok(()),
+            Err(error) if daemon_down(&error) => {}
+            Err(error) => return Err(error.message),
+        }
+    }
     let mut config = load_config()?;
     config.connections.retain(|connection| connection.id != id);
     config.recent_connection_ids.retain(|recent| *recent != id);
@@ -244,15 +322,20 @@ pub fn host_delete(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn host_set_favorite(id: String, favorite: bool) -> Result<(), String> {
-    let mut config = load_config()?;
+pub async fn host_set_favorite(
+    daemon: State<'_, DaemonState>,
+    id: String,
+    favorite: bool,
+) -> Result<(), String> {
+    let (mut config, link) = working_config(&daemon).await?;
     let connection = config
         .connections
         .iter_mut()
         .find(|connection| connection.id == id)
         .ok_or("only saved hosts can be favorites")?;
     connection.favorite = favorite;
-    save_config(&config)
+    let connection = connection.clone();
+    commit(link, &config, &connection, None).await
 }
 
 fn display_target(target: &ConnectionTarget) -> String {
@@ -322,8 +405,8 @@ fn snapshot(config: &AppConfig, ssh_config_aliases: &[String]) -> Vec<HostView> 
 }
 
 #[tauri::command]
-pub fn load_hosts() -> Result<HostsSnapshot, String> {
-    let config = load_config()?;
+pub async fn load_hosts(daemon: State<'_, DaemonState>) -> Result<HostsSnapshot, String> {
+    let (config, _) = working_config(&daemon).await?;
     let discovery = scan_default_ssh_config();
     Ok(HostsSnapshot {
         hosts: snapshot(&config, &discovery.aliases),

@@ -57,7 +57,12 @@ export interface HostsSnapshot {
   warnings: string[];
 }
 
-export type SessionEvent = { kind: "data"; data: string } | { kind: "exit"; code: number | null };
+export type SessionEvent =
+  | { kind: "data"; data: string }
+  | { kind: "exit"; code: number | null }
+  /** The connection to the background daemon dropped; output resumes after "resumed". */
+  | { kind: "reconnecting" }
+  | { kind: "resumed" };
 
 export interface SessionHandle {
   /** The daemon's id for the session, kept so a layout can reattach to it. */
@@ -86,6 +91,13 @@ export const isTauri = "__TAURI_INTERNALS__" in window;
 export async function loadHosts(): Promise<HostsSnapshot> {
   if (!isTauri) return previewSnapshot();
   return invoke<HostsSnapshot>("load_hosts");
+}
+
+/** Subscribes to host list changes made anywhere (another window, the daemon); returns the unsubscribe function. */
+export function onHostsChanged(handler: () => void): () => void {
+  if (!isTauri) return () => {};
+  const stop = listen("hosts-changed", () => handler());
+  return () => void stop.then((unlisten) => unlisten());
 }
 
 export async function saveHost(input: HostInput): Promise<string> {
@@ -268,6 +280,13 @@ export function onAskpass(handler: (prompt: AskpassPrompt) => void): () => void 
     return () => {};
   }
   const stop = listen<AskpassPrompt>("askpass", (event) => handler(event.payload));
+  return () => void stop.then((unlisten) => unlisten());
+}
+
+/** Subscribes to prompts that another window answered or that timed out; returns the unsubscribe function. */
+export function onAskpassResolved(handler: (id: number) => void): () => void {
+  if (!isTauri) return () => {};
+  const stop = listen<{ id: number }>("askpass-resolved", (event) => handler(event.payload.id));
   return () => void stop.then((unlisten) => unlisten());
 }
 

@@ -34,6 +34,7 @@ fn parse_args() -> Result<Options, String> {
     Ok(Options {
         runtime_dir: dir.unwrap_or_else(default_runtime_dir),
         config,
+        build_version: None,
     })
 }
 

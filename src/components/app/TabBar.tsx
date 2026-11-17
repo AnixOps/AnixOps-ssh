@@ -180,6 +180,15 @@ function TabIcon({ tab }: { tab: Tab }) {
       />
     );
   }
+  if (tab.status.state === "reconnecting") {
+    return (
+      <LoaderCircle
+        className={cn(icon, "animate-spin text-label-3 motion-reduce:animate-none")}
+        strokeWidth={1.5}
+        aria-label={t.reconnecting}
+      />
+    );
+  }
   if (tab.status.state === "exited") {
     return <Unplug className={cn(icon, "text-label-3")} strokeWidth={1.5} aria-label={t.sessionEnded} />;
   }

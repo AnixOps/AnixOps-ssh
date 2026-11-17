@@ -320,20 +320,38 @@ export interface Event {
   seq: number;
 }
 /**
- * Command `proto.hello` payload. Reply: ProtoHelloResult.
+ * Command `proto.hello` payload. Reply: ProtoHelloResult, or the error `schema_mismatch`.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "ProtoHelloParams".
  */
 export interface ProtoHelloParams {
-  schema_version: SchemaVersion;
+  /**
+   * The protocol schema version the client speaks. A daemon that speaks another version answers with the `schema_mismatch` error.
+   */
+  schema_version: number;
+  /**
+   * Build version of the client application. The app compares the daemon's `app_version` with its own and asks a daemon from another build to drain (`daemon.shutdown_when_idle`).
+   */
+  app_version?: string;
 }
 /**
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "ProtoHelloResult".
  */
 export interface ProtoHelloResult {
-  schema_version: SchemaVersion;
+  /**
+   * The protocol schema version the daemon speaks.
+   */
+  schema_version: number;
+  /**
+   * Build version of the daemon (the application executable it runs from).
+   */
+  app_version?: string;
+  /**
+   * True once the daemon was asked to exit when its sessions end; it refuses new sessions.
+   */
+  draining?: boolean;
 }
 /**
  * Command `hosts.list` payload. Reply: HostsListResult.
@@ -358,6 +376,16 @@ export interface HostsListResult {
  */
 export interface HostsSaveParams {
   connection: Connection;
+  group?: Group1;
+}
+/**
+ * Rust: domain::Group. `parent_id` has serde(default), so it is optional.
+ */
+export interface Group1 {
+  id: string;
+  name: string;
+  color: string | null;
+  parent_id?: string | null;
 }
 /**
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -385,6 +413,10 @@ export interface SessionOpenParams {
   host_id: string | null;
   cols: number;
   rows: number;
+  /**
+   * The client's current SSH_AUTH_SOCK, so the session uses the agent of the user's current login. Must be an absolute path to a socket owned by the daemon's user; otherwise it is ignored. Ignored on Windows.
+   */
+  ssh_auth_sock?: string;
 }
 /**
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -567,4 +599,37 @@ export interface AskpassPromptEvent {
   host: string;
   prompt: string;
   confirm: boolean;
+}
+/**
+ * Command `daemon.shutdown_when_idle` payload. The daemon refuses new sessions (error `draining`) and exits once no session is running, even if clients stay connected. Reply: DaemonShutdownWhenIdleResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "DaemonShutdownWhenIdleParams".
+ */
+export interface DaemonShutdownWhenIdleParams {}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "DaemonShutdownWhenIdleResult".
+ */
+export interface DaemonShutdownWhenIdleResult {
+  /**
+   * Sessions still running; the daemon exits when this reaches 0.
+   */
+  running_sessions: number;
+}
+/**
+ * Event `hosts.changed` payload. Sent to every connected client after `hosts.save` or `hosts.delete`; clients refresh their host list.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostsChangedEvent".
+ */
+export interface HostsChangedEvent {}
+/**
+ * Event `askpass.resolved` payload. The prompt `id` was answered, cancelled or timed out; clients close any dialog for it.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "AskpassResolvedEvent".
+ */
+export interface AskpassResolvedEvent {
+  id: number;
 }

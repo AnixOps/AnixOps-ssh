@@ -14,7 +14,9 @@ that fails `validate_command` is answered with a `ProtoError` (`invalid_command`
 or `unknown_command` for an unknown kind) and the connection stays open.
 
 - `proto.hello`, `hosts.list|save|delete` (the same `connections.json` as the
-  v1 app, same validation).
+  v1 app, same validation). Every successful `hosts.save` or `hosts.delete`
+  broadcasts a `hosts.changed` event to all connected clients, so each window
+  refreshes its list. `hosts.save` may carry a `group` to create with the host.
 - `session.open|write|resize|close`: a PTY running the system `ssh` exactly as
   v1 builds it (or the local shell for a null host). `session.list`,
   `session.attach {session_id, from_seq?}` and `session.detach` add reattach.
@@ -29,14 +31,76 @@ or `unknown_command` for an unknown kind) and the connection stays open.
   `SSH_ASKPASS` helper (the app executable in helper mode) talks to a
   loopback listener guarded by a random token; the daemon forwards prompts to
   every attached client. Answers are held in memory only until handed to the
-  helper, and are never stored or logged.
+  helper, and are never stored or logged. When a prompt is answered,
+  cancelled or times out, every client gets `askpass.resolved {id}` and closes
+  its dialog.
 - A client that stops reading (4096 queued frames) is disconnected rather than
   buffered without bound; it can reconnect and replay with `from_seq`.
-- The daemon exits after 10 minutes with no clients and no running sessions.
+- The daemon exits after 10 minutes with no clients and no running sessions,
+  or as soon as no session runs once it was asked to drain
+  (`daemon.shutdown_when_idle`).
 
 `link` (the app side: request/reply, per-session sinks, ordered fire-and-forget
-`post`) and `launch` (connect, or start detached and retry) are toolkit-free so
-the Tauri layer stays thin.
+`post`), `launch` (connect, or start detached and retry) and `supervisor`
+(below) are toolkit-free so the Tauri layer stays thin.
+
+## Reconnecting
+
+The app's `Supervisor` owns the `Link`. When the connection drops it retries
+after 0.5 s, 1 s, 2 s, ... up to 10 s, starting the daemon again if none runs
+(`launch::connect_or_spawn_with`). Every session the app is attached to is
+tracked with the offset after the last byte its consumer saw; on reconnect the
+supervisor sends `session.attach {from_seq}` for each, so output printed
+meanwhile is replayed exactly once, with no gap and no duplicate (unless the
+1 MiB buffer wrapped, which `SessionAttachResult.truncated` reports). Sinks see
+`SessionMsg::Reconnecting`, then `Resumed`. A daemon that restarted knows none
+of the sessions (their processes died with it): their sinks get `Exit` and the
+tab shows the session as ended. While reconnecting, the app uses its
+in-process paths for hosts and new sessions.
+
+## Versions
+
+`proto.hello` carries the client's `schema_version` and its `app_version`
+(build); the reply carries the daemon's own and whether it is `draining`.
+
+- **Schema mismatch.** A daemon answers a client that speaks another schema
+  with the error `schema_mismatch` naming both versions and does nothing else.
+  If the client is *newer* the daemon is the stale one: it also drains, so it
+  exits once its sessions end and the next app start brings up a matching
+  daemon. (A daemon cannot serve two schemas, and the schema changes only for
+  breaking changes.)
+- **Build mismatch** (same schema, other app build, for example after an
+  update while sessions were running). The app sends `daemon.shutdown_when_idle`
+  to the old daemon. The old daemon refuses new sessions (`draining`) and
+  exits as soon as no session is running, even if clients stay connected.
+  With no sessions running it is gone within a moment and the app starts the
+  matching daemon at once. With sessions running, the app stays attached to
+  the old daemon for those, opens new sessions in-process meanwhile, and its
+  reconnect loop starts the matching daemon when the old one has left. There
+  is deliberately no second daemon beside the old one: both would need the
+  same runtime directory, instance lock and secret.
+- A daemon older than this protocol (no `daemon.shutdown_when_idle`) is simply
+  used as it is until it exits when idle.
+
+## Agent environment
+
+`session.open` may carry the client's current `ssh_auth_sock`. The daemon
+outlives logins, so its own `SSH_AUTH_SOCK` can name an agent that is gone.
+The value is applied to the session's environment only when it is an absolute
+path to a socket owned by the daemon's user (symlinks are followed); otherwise
+it is ignored with a log line and the session starts with the daemon's own
+environment. The app's `Link` sends its own `SSH_AUTH_SOCK` on Unix. Windows
+sends and applies nothing: the OpenSSH agent is a fixed named pipe.
+
+## Log
+
+`easysshd.log` in the runtime directory (owner-only), rotated at 1 MiB, three
+files kept (`easysshd.log`, `.1`, `.2`). It records start and stop, why the
+daemon stopped, client connections, the kind of each command with the session
+id it names (not `session.write` or `session.resize`), session exits with their
+exit codes, error codes and ignored `ssh_auth_sock` values. It never records
+payloads, terminal input or output, askpass prompts or answers, host names or
+error messages that could quote what a client sent. Every entry is one line.
 
 ## Threat model
 

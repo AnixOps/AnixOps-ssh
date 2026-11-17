@@ -20,6 +20,7 @@ import {
   isTauri,
   listSessions,
   loadHosts,
+  onHostsChanged,
   setFavorite,
   sshStatus,
   type Host,
@@ -116,6 +117,8 @@ export function App() {
   }, []);
 
   useEffect(reload, [reload]);
+  // Hosts saved or deleted from another window refresh this list too.
+  useEffect(() => onHostsChanged(reload), [reload]);
 
   const toggleFavorite = useCallback(
     (host: Host) => {

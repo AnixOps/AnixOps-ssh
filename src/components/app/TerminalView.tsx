@@ -3,7 +3,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ChevronDown, ChevronUp, RotateCw, SquareArrowOutUpRight, Unplug, X } from "lucide-react";
+import { ChevronDown, ChevronUp, LoaderCircle, RotateCw, SquareArrowOutUpRight, Unplug, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,8 @@ import { terminalFont, terminalTheme } from "@/lib/terminalTheme";
 export type SessionStatus =
   | { state: "connecting" }
   | { state: "connected" }
+  /** The connection to the background daemon dropped; the session is re-attached when it is back. */
+  | { state: "reconnecting" }
   | { state: "exited"; code: number | null; error?: string };
 
 export function TerminalView({
@@ -174,6 +176,13 @@ export function TerminalView({
         if (event.kind === "data") {
           terminal.write(event.data);
           if (!connected) {
+            connected = true;
+            report({ state: "connected" });
+          }
+        } else if (event.kind === "reconnecting") {
+          if (!exited) report({ state: "reconnecting" });
+        } else if (event.kind === "resumed") {
+          if (!exited) {
             connected = true;
             report({ state: "connected" });
           }
@@ -338,6 +347,26 @@ export function TerminalView({
             <X />
           </IconButton>
         </motion.div>
+      )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+      {status.state === "reconnecting" && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-6 flex justify-center px-4">
+          <motion.div
+            role="status"
+            initial={{ opacity: 0, y: 12, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1, transition: enter }}
+            exit={{ opacity: 0, y: 8, transition: leave }}
+            className="flex items-center gap-2 rounded-md bg-bg-elevated px-3 py-2 shadow-3"
+          >
+            <LoaderCircle
+              className="size-4 shrink-0 animate-spin text-label-2 motion-reduce:animate-none"
+              strokeWidth={1.5}
+            />
+            <p className="text-callout font-medium text-label-1">{t.reconnecting}</p>
+          </motion.div>
+        </div>
       )}
       </AnimatePresence>
 
