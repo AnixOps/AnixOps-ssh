@@ -1,7 +1,7 @@
 # AnixOps Design (vendored)
 
 Copied from [AnixOps/AnixOps-design](https://github.com/AnixOps/AnixOps-design)
-version 1.0.2 (commit ef1ba01). Do not edit these files: change `tokens.json`
+version 1.2.0 (commit 5ce77c2). Do not edit these files: change `tokens.json`
 upstream, regenerate, and copy again.
 
 | File | Upstream path |
