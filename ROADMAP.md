@@ -4,7 +4,7 @@ Goal: an open-source, local-first SSH client that matches the best
 commercial clients on everyday use and beats them on trust. Every version
 ships a downloadable build.
 
-The v2 direction (proposed 2026-11-17, waiting for approval) is described in
+The v2 direction (approved 2026-11-17, shipped in 2.0) is described in
 [docs/architecture-v2.md](docs/architecture-v2.md).
 
 ## Done
@@ -17,6 +17,7 @@ The v2 direction (proposed 2026-11-17, waiting for approval) is described in
 | v0.8 | Productivity | Host editor, snippets, port forwarding, command palette |
 | v1.0 | Polish | Settings, SSH environment check, export, import and Git sync, user guide |
 | v1.0.1 | Motion | Motion in the macOS and Linear style; browser preview site |
+| v2.0 | v2 architecture | Background service, built-in russh engine (default) with OpenSSH fallback, SQLite store and importers, encrypted vault with Windows Hello and Touch ID, end-to-end encrypted sync and team vaults, splits, shell integration, completion, AI with your own key, encrypted session logs, serial ports, AnixOps Design 1.2.0 |
 
 ## What drives the work
 
