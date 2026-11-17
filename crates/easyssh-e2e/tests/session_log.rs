@@ -6,6 +6,9 @@
 //! containers (see e2e/README.md).
 #![cfg(unix)]
 
+#[macro_use]
+mod support;
+
 use easyssh_core::{ConfigStore, Connection};
 use easyssh_crypto::{KdfParams, MemoryKeyStore};
 use easyssh_e2e::E2e;
@@ -18,6 +21,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use support::{set_engine, Client, EngineKind};
 
 struct NoPrompts;
 
@@ -246,8 +250,12 @@ fn have_sh() -> bool {
         .unwrap_or(false)
 }
 
+/// A host for the local tests. They stand in for `ssh` with a local shell,
+/// which only the OpenSSH engine runs, so the host says so.
 fn named(name: &str) -> Connection {
-    Connection::alias(name, "fake")
+    let mut connection = Connection::alias(name, "fake");
+    connection.engine = Some(easyssh_core::EnginePreference::Openssh);
+    connection
 }
 
 #[tokio::test]
@@ -441,14 +449,13 @@ async fn daemon_start_deletes_logs_past_the_retention() {
 
 // --------------------------------------------------------------- containers
 
-#[tokio::test]
-#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
-async fn container_echo_marker_is_found_in_the_decrypted_log() {
+/// On both engines: the recorder sits on the byte stream of the session,
+/// whichever engine produced it.
+async fn container_echo_marker_is_found_in_the_decrypted_log(engine: EngineKind) {
     let e2e = E2e::new();
     let running = start_daemon(e2e.dir.path(), test_vault()).await;
-    let link = Link::connect(&running.runtime, Arc::new(NoPrompts))
-        .await
-        .expect("connect");
+    set_engine(&running.config, engine);
+    let (client, link) = Client::connect(&running.runtime).await;
     let host = e2e.alias("e2e-target");
     running.set_log_settings(&LogSettings {
         hosts: [(host.id.clone(), true)].into(),
@@ -467,6 +474,9 @@ async fn container_echo_marker_is_found_in_the_decrypted_log() {
         String::from_utf8_lossy(&log.data)
     );
     assert!(files_containing(e2e.dir.path(), "LOGMARKER-4").is_empty());
+    client.detach();
     drop(link);
     running.finish().await;
 }
+
+both_engines!(container_echo_marker_is_found_in_the_decrypted_log);

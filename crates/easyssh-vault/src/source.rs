@@ -4,7 +4,7 @@
 use crate::prompt::{Binding, SecretKind};
 use crate::vault::{Vault, VaultError};
 use easyssh_crypto::SecretText;
-use easyssh_store::{SecretChange, SecretsUpdate, Store, StoredSecrets};
+use easyssh_store::{SecretChange, SecretFlags, SecretsUpdate, Store, StoredSecrets};
 use std::sync::{Arc, Mutex};
 
 /// Saved secrets by host id.
@@ -18,6 +18,9 @@ pub trait SecretSource: Send + Sync {
     /// The host's saved secrets. `Err(VaultError::Locked)` when the user
     /// has to unlock the vault first; an empty value when nothing is saved.
     fn host_secrets(&self, host_id: &str) -> Result<StoredSecrets, VaultError>;
+
+    /// Which secrets the host has saved, without opening the vault.
+    fn secret_flags(&self, host_id: &str) -> Result<SecretFlags, VaultError>;
 }
 
 /// What the askpass bridge may do with the vault.
@@ -94,6 +97,11 @@ impl VaultSecrets {
 impl SecretSource for VaultSecrets {
     fn host_secrets(&self, host_id: &str) -> Result<StoredSecrets, VaultError> {
         self.with_store(|store| self.vault.host_secrets(store, host_id))?
+    }
+
+    fn secret_flags(&self, host_id: &str) -> Result<SecretFlags, VaultError> {
+        self.with_store(|store| store.host_secret_flags(host_id))?
+            .map_err(|e| VaultError::Store(e.to_string()))
     }
 }
 

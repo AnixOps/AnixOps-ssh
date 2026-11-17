@@ -17,10 +17,12 @@ pub mod tunnels;
 
 use crate::askpass::Hub;
 use easyssh_ssh::{
-    AgentSource, ConnectParams, Error as SshError, Session, ShellHandle, ShellOptions,
+    AgentSource, ConnectParams, Error as SshError, MemoryIdentity, Session, ShellHandle,
+    ShellOptions,
 };
+use easyssh_store::Store;
 use interact::{Broadcast, DaemonInteraction, HostKeyPrompts, SavedPassword};
-use known_hosts::LayeredKnownHosts;
+use known_hosts::{migrate_app_file, LayeredKnownHosts, StoreKnownHosts};
 use plan::{HostSpec, RusshPlan};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -35,10 +37,12 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// Where the host keys live.
+/// Where the host keys live besides the store.
 #[derive(Debug, Clone)]
 pub struct KnownHostsPaths {
-    /// The app-owned file new keys are written to.
+    /// The file the engine kept host keys in before they moved into the
+    /// store. Entries in it are imported once and the file is renamed. It
+    /// is also where keys go when the engine has no store (tests).
     pub app: PathBuf,
     /// The user's OpenSSH file, read only. `None` to ignore it.
     pub user: Option<PathBuf>,
@@ -50,6 +54,7 @@ pub fn error_code(error: &SshError) -> &'static str {
     match error {
         SshError::Unsupported(_) => "unsupported",
         SshError::Cancelled(_) => "cancelled",
+        SshError::Locked(_) => "vault_locked",
         SshError::AuthFailed { .. } => "auth_failed",
         SshError::HostKeyRejected { .. } => "hostkey_rejected",
         SshError::HostKeyMismatch { .. } => "hostkey_changed",
@@ -60,11 +65,47 @@ pub fn error_code(error: &SshError) -> &'static str {
     }
 }
 
+fn vault_error(error: easyssh_vault::VaultError) -> SshError {
+    match error {
+        easyssh_vault::VaultError::Locked => {
+            SshError::Locked("the vault is locked; unlock it to use the saved key".into())
+        }
+        other => SshError::Protocol(format!("cannot read the saved key: {other}")),
+    }
+}
+
+/// The private key (and passphrase) saved for `host_id`, ready to be handed
+/// to the engine from memory. Nothing saved: `None`. Saved but the vault is
+/// locked: [`SshError::Locked`], which the daemon reports as `vault_locked`.
+fn saved_identity(
+    secrets: &dyn easyssh_vault::SecretSource,
+    host_id: &str,
+    label: &str,
+) -> Result<Option<MemoryIdentity>, SshError> {
+    if !secrets
+        .secret_flags(host_id)
+        .map_err(vault_error)?
+        .private_key
+    {
+        return Ok(None);
+    }
+    let saved = secrets.host_secrets(host_id).map_err(vault_error)?;
+    Ok(saved.private_key.map(|key| {
+        MemoryIdentity::new(
+            format!("saved key of {label}"),
+            key.expose(),
+            saved.passphrase.map(|p| p.expose().to_owned()),
+        )
+    }))
+}
+
 pub struct Engine {
     pub(crate) registry: registry::Registry<Session, SharedError>,
     hub: Arc<Hub>,
     hostkeys: Arc<HostKeyPrompts>,
     paths: Mutex<KnownHostsPaths>,
+    /// Host keys live here (they sync with the vault).
+    store: Mutex<Option<Arc<Mutex<Store>>>>,
     secrets: Mutex<Option<Arc<dyn easyssh_vault::SecretSource>>>,
     pub(crate) files: files::Files,
     pub(crate) tunnels: tunnels::Tunnels,
@@ -82,6 +123,7 @@ impl Engine {
             hostkeys: HostKeyPrompts::new(broadcast),
             hub,
             paths: Mutex::new(paths),
+            store: Mutex::new(None),
             secrets: Mutex::new(None),
             files: files::Files::default(),
             tunnels: tunnels::Tunnels::default(),
@@ -93,8 +135,27 @@ impl Engine {
         *lock(&self.secrets) = Some(secrets);
     }
 
+    /// Keeps host keys in the app database from now on, and imports what
+    /// the old app-owned file holds (once). A file that cannot be imported
+    /// stays where it is and is tried again at the next start; host keys
+    /// are not lost either way. Returns how many entries were imported.
+    pub fn set_store(&self, store: Arc<Mutex<Store>>) -> std::io::Result<usize> {
+        *lock(&self.store) = Some(store);
+        self.migrate_known_hosts()
+    }
+
     pub fn set_known_hosts(&self, paths: KnownHostsPaths) {
         *lock(&self.paths) = paths;
+        let _ = self.migrate_known_hosts();
+    }
+
+    fn migrate_known_hosts(&self) -> std::io::Result<usize> {
+        let Some(store) = lock(&self.store).clone() else {
+            return Ok(0);
+        };
+        let file = lock(&self.paths).app.clone();
+        let store = lock(&store);
+        migrate_app_file(&store, &file)
     }
 
     pub fn set_linger(&self, linger: Duration) {
@@ -107,8 +168,13 @@ impl Engine {
 
     fn params(&self, spec: &HostSpec, agent: Option<&PathBuf>) -> ConnectParams {
         let paths = lock(&self.paths).clone();
-        let known: Arc<dyn easyssh_ssh::KnownHosts> =
-            Arc::new(LayeredKnownHosts::new(paths.app, paths.user));
+        let known: Arc<dyn easyssh_ssh::KnownHosts> = match lock(&self.store).clone() {
+            Some(store) => Arc::new(LayeredKnownHosts::with_primary(
+                Arc::new(StoreKnownHosts::new(store)),
+                paths.user,
+            )),
+            None => Arc::new(LayeredKnownHosts::new(paths.app, paths.user)),
+        };
         let mut params =
             ConnectParams::new(spec.host.clone(), spec.port, spec.user.clone()).known_hosts(known);
         params.agent = match (spec.agent, agent) {
@@ -129,17 +195,27 @@ impl Engine {
         params
     }
 
+    /// The host's saved private key. `Locked` when one is saved but the
+    /// vault is locked (the caller unlocks it and retries, as for OpenSSH).
+    fn saved_identity(&self, plan: &RusshPlan) -> Result<Option<MemoryIdentity>, SshError> {
+        let Some(secrets) = lock(&self.secrets).clone() else {
+            return Ok(None);
+        };
+        saved_identity(&*secrets, &plan.key.host_id, &plan.target.label)
+    }
+
     async fn connect(
         &self,
         plan: &RusshPlan,
         agent: Option<&PathBuf>,
     ) -> Result<Session, SharedError> {
         let hops: Vec<ConnectParams> = plan.hops.iter().map(|h| self.params(h, agent)).collect();
-        let target = self.params(&plan.target, agent);
-        // TODO: a private key (and its passphrase) saved in the vault should
-        // be offered to the built-in engine from memory too; that needs an
-        // in-memory identity in `ConnectParams`. Until then OpenSSH is the
-        // only engine that uses saved keys; passwords work here.
+        let mut target = self.params(&plan.target, agent);
+        // A private key (and its passphrase) saved for the host goes to the
+        // engine from memory; it is never written to a file.
+        if let Some(identity) = self.saved_identity(plan).map_err(Arc::new)? {
+            target = target.memory_identity(identity);
+        }
         let saved_password = lock(&self.secrets).clone().map(|secrets| SavedPassword {
             account: format!("{}@{}", plan.target.user, plan.target.host),
             secrets,
@@ -210,5 +286,86 @@ impl Engine {
         self.tunnels.stop_all().await;
         self.files.stop_all();
         self.registry.close_all().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use easyssh_crypto::SecretText;
+    use easyssh_store::{SecretFlags, StoredSecrets};
+    use easyssh_vault::{SecretSource, VaultError};
+
+    struct Saved {
+        key: Option<&'static str>,
+        passphrase: Option<&'static str>,
+        locked: bool,
+    }
+
+    impl SecretSource for Saved {
+        fn host_secrets(&self, _: &str) -> Result<StoredSecrets, VaultError> {
+            if self.locked {
+                return Err(VaultError::Locked);
+            }
+            Ok(StoredSecrets {
+                private_key: self.key.map(SecretText::new),
+                passphrase: self.passphrase.map(SecretText::new),
+                ..Default::default()
+            })
+        }
+
+        fn secret_flags(&self, _: &str) -> Result<SecretFlags, VaultError> {
+            Ok(SecretFlags {
+                private_key: self.key.is_some(),
+                passphrase: self.passphrase.is_some(),
+                password: false,
+            })
+        }
+    }
+
+    #[test]
+    fn a_host_without_a_saved_key_offers_none() {
+        let none = Saved {
+            key: None,
+            passphrase: None,
+            locked: false,
+        };
+        assert!(saved_identity(&none, "h", "web").unwrap().is_none());
+        // A locked vault does not matter when there is no key to read.
+        let locked_without_key = Saved {
+            key: None,
+            passphrase: None,
+            locked: true,
+        };
+        assert!(saved_identity(&locked_without_key, "h", "web")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn a_saved_key_and_passphrase_become_an_in_memory_identity() {
+        let saved = Saved {
+            key: Some("-----BEGIN OPENSSH PRIVATE KEY-----\nsecret-body\n"),
+            passphrase: Some("hunter2"),
+            locked: false,
+        };
+        let identity = saved_identity(&saved, "h", "web").unwrap().unwrap();
+        assert_eq!(identity.label, "saved key of web");
+        // What reaches logs and error reports shows neither value.
+        let shown = format!("{identity:?}");
+        assert!(!shown.contains("secret-body"), "{shown}");
+        assert!(!shown.contains("hunter2"), "{shown}");
+    }
+
+    #[test]
+    fn a_locked_vault_with_a_saved_key_reports_vault_locked() {
+        let saved = Saved {
+            key: Some("key"),
+            passphrase: None,
+            locked: true,
+        };
+        let error = saved_identity(&saved, "h", "web").unwrap_err();
+        assert!(matches!(error, SshError::Locked(_)), "{error:?}");
+        assert_eq!(error_code(&error), "vault_locked");
     }
 }
