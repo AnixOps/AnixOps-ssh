@@ -709,3 +709,40 @@ async fn oversized_requests_are_refused() {
     let err = e.sync(vault).await.unwrap_err();
     assert_eq!(transport_code(err), Some(ErrorCode::TooLarge));
 }
+
+/// POST `len` bytes of JSON-ish body to the server over a bare socket and
+/// return the whole response. The write must complete: an oversized body is
+/// read and discarded before the server answers.
+async fn raw_post(server: &TestServer, len: usize) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let addr = server.base.trim_start_matches("http://");
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let head = format!(
+        "POST /v1/auth/login/start HTTP/1.1\r\nhost: {addr}\r\n\
+         content-type: application/json\r\ncontent-length: {len}\r\n\
+         connection: close\r\n\r\n"
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+    stream
+        .write_all(&vec![b'x'; len])
+        .await
+        .expect("the server reads the oversized body instead of resetting");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    response
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_oversized_body_gets_a_413_even_while_the_client_is_still_sending() {
+    let server = start_with(|c| c.max_body_bytes = 64 * 1024).await;
+    // Several times the limit, but within the part the server reads through.
+    for _ in 0..5 {
+        let response = raw_post(&server, 200 * 1024).await;
+        assert!(response.starts_with("HTTP/1.1 413"), "{response}");
+        assert!(response.contains("\"too_large\""), "{response}");
+        assert!(response.contains("x-easyssh-max-body: 65536"), "{response}");
+    }
+    // A body at the limit is not refused for its size.
+    let response = raw_post(&server, 64 * 1024).await;
+    assert!(!response.starts_with("HTTP/1.1 413"), "{response}");
+}
