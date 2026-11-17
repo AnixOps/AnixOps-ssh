@@ -440,9 +440,11 @@ async fn hosts_roundtrip_through_the_config_store() {
         .unwrap();
     assert_eq!(saved["id"], connection.id.as_str());
 
-    // Same file as the v1 app: readable through the core store.
-    let store = ConfigStore::at(s.dir.path().join("connections.json"));
-    assert_eq!(store.load().unwrap().connections.len(), 1);
+    // Stored in the SQLite database (the v1 JSON is not written), which a
+    // second process can open while the daemon runs.
+    assert!(!s.dir.path().join("connections.json").exists());
+    let other = easyssh_store::open_app_store(&s.dir.path().join("connections.json")).unwrap();
+    assert_eq!(other.store.list_hosts().unwrap().len(), 1);
 
     let list = c.call("hosts.list", json!({})).await.unwrap();
     proto::validate("HostsListResult", &list).unwrap();

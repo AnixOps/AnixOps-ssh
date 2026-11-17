@@ -7,8 +7,9 @@ use crate::log::Logger;
 use crate::server::{BoxFuture, Outbox, Service};
 use crate::terminal::{SpawnOptions, TermSession, DEFAULT_SCROLLBACK};
 use easyssh_core::security::{validate_alias, validate_connection};
-use easyssh_core::{AppConfig, ConfigStore, Connection, OpenSsh, SshInvocation};
+use easyssh_core::{ConfigStore, Connection, Group, OpenSsh, SshInvocation};
 use easyssh_proto as proto;
+use easyssh_store::{open_app_store, Store, StoreError};
 use portable_pty::CommandBuilder;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -29,7 +30,9 @@ const NIL_UUID: &str = "00000000-0000-0000-0000-000000000000";
 
 #[derive(Clone)]
 pub struct DaemonConfig {
-    /// Where hosts live. Defaults to the file the v1 app uses.
+    /// The v1 configuration file. Hosts, groups and settings live in the
+    /// SQLite database beside it (`easyssh.db`); this file is only migrated
+    /// from, on first start, and kept as a backup.
     pub config_store: ConfigStore,
     /// Program for `session.open` with a null `host_id`; the user's default
     /// shell when `None`.
@@ -70,8 +73,9 @@ type Clients = Arc<Mutex<HashMap<u64, Outbox>>>;
 
 pub struct Daemon {
     cfg: DaemonConfig,
-    /// Serialises read-modify-write of the host file.
-    store_lock: Mutex<()>,
+    /// The app database. One connection, used one command at a time; other
+    /// processes (the app's in-process fallback) open their own.
+    store: Mutex<Store>,
     sessions: Mutex<HashMap<String, Arc<TermSession>>>,
     clients: Clients,
     askpass: Arc<Hub>,
@@ -149,9 +153,24 @@ impl Daemon {
             "daemon created, build {build_version}, schema {}",
             proto::SCHEMA_VERSION
         ));
+        let opened = open_app_store(cfg.config_store.path())
+            .map_err(|e| std::io::Error::other(format!("cannot open the database: {e}")))?;
+        match (&opened.migration, &opened.migration_error) {
+            (Some(report), _) => log.info(&format!(
+                "migrated the v1 configuration: {} hosts, {} groups, {} snippets, {} tunnels",
+                report.hosts.imported,
+                report.groups.imported,
+                report.snippets.imported,
+                report.tunnels.imported
+            )),
+            (None, Some(error)) => {
+                log.error(&format!("the v1 configuration was not migrated: {error}"))
+            }
+            (None, None) => {}
+        }
         Ok(Arc::new(Daemon {
             cfg,
-            store_lock: Mutex::new(()),
+            store: Mutex::new(opened.store),
             sessions: Mutex::new(HashMap::new()),
             clients,
             askpass,
@@ -358,8 +377,20 @@ impl Daemon {
                 ok(json!({"running_sessions": self.running_sessions()}))
             }
             "hosts.list" => {
-                let config = self.load_config()?;
-                ok(json!({"connections": config.connections, "groups": config.groups}))
+                let store = lock(&self.store);
+                let connections: Vec<Connection> = store
+                    .list_hosts()
+                    .map_err(store_failure)?
+                    .into_iter()
+                    .map(|record| record.item.connection)
+                    .collect();
+                let groups: Vec<Group> = store
+                    .list_groups()
+                    .map_err(store_failure)?
+                    .into_iter()
+                    .map(|record| record.item)
+                    .collect();
+                ok(json!({"connections": connections, "groups": groups}))
             }
             "hosts.save" => {
                 let p: proto::HostsSaveParams = parse(payload)?;
@@ -371,6 +402,49 @@ impl Daemon {
                 let p: proto::HostsDeleteParams = parse(payload)?;
                 self.delete_host(&p.id)?;
                 self.broadcast("hosts.changed", json!({}));
+                ok(Value::Null)
+            }
+            "known_hosts.list" => {
+                let _: proto::KnownHostsListParams = parse(payload)?;
+                let entries: Vec<Value> = lock(&self.store)
+                    .list_known_hosts()
+                    .map_err(store_failure)?
+                    .iter()
+                    .map(|record| record.item.summary_json())
+                    .collect();
+                ok(json!({"entries": entries}))
+            }
+            "known_hosts.import" => {
+                let p: proto::KnownHostsImportParams = parse(payload)?;
+                let path = PathBuf::from(&p.path);
+                let size = std::fs::metadata(&path)
+                    .map_err(|e| fail("io_error", format!("cannot read {}: {e}", p.path)))?
+                    .len();
+                if size > MAX_KNOWN_HOSTS_BYTES {
+                    return Err(fail(
+                        "invalid_command",
+                        format!("{} is larger than {MAX_KNOWN_HOSTS_BYTES} bytes", p.path),
+                    ));
+                }
+                let report = lock(&self.store)
+                    .import_known_hosts_file(&path)
+                    .map_err(store_failure)?;
+                let skipped: Vec<Value> = report
+                    .skipped
+                    .iter()
+                    .map(|s| json!({"line": s.line, "reason": s.reason}))
+                    .collect();
+                ok(json!({
+                    "imported": report.imported,
+                    "duplicates": report.duplicates,
+                    "skipped": skipped,
+                }))
+            }
+            "known_hosts.remove" => {
+                let p: proto::KnownHostsRemoveParams = parse(payload)?;
+                lock(&self.store)
+                    .soft_delete_known_host(&p.id)
+                    .map_err(store_failure)?;
                 ok(Value::Null)
             }
             "session.open" => {
@@ -453,7 +527,10 @@ impl Daemon {
             }
             None => None,
         };
-        let store = self.cfg.config_store.clone();
+        let connection = match p.host_id.as_deref() {
+            Some(host_id) => Some(self.resolve_host(host_id)?),
+            None => None,
+        };
         let shell = self.cfg.local_shell.clone();
         let host_id = p.host_id.clone();
         let id = uuid::Uuid::new_v4().simple().to_string();
@@ -465,12 +542,8 @@ impl Daemon {
             exit_log.info(&format!("session {sid} ended, exit code {code:?}"));
         });
         let session = tokio::task::spawn_blocking(move || {
-            let (command, shell_integration) = command_for(
-                &store,
-                shell.as_deref(),
-                host_id.as_deref(),
-                agent_sock.as_deref(),
-            )?;
+            let (command, shell_integration) =
+                command_for(shell.as_deref(), connection, agent_sock.as_deref())?;
             TermSession::spawn(
                 spawn_id,
                 host_id,
@@ -498,11 +571,17 @@ impl Daemon {
         Ok(Outcome::Replied)
     }
 
-    fn load_config(&self) -> Result<AppConfig, Failure> {
-        self.cfg
-            .config_store
-            .load()
-            .map_err(|e| fail("config_error", e.to_string()))
+    /// A saved host, or the connection derived from a `~/.ssh/config` alias,
+    /// exactly as the v1 app resolves ids.
+    fn resolve_host(&self, host_id: &str) -> Result<Connection, Failure> {
+        if let Some(alias) = host_id.strip_prefix(SSH_CONFIG_ID_PREFIX) {
+            return Ok(Connection::alias(alias, alias));
+        }
+        lock(&self.store)
+            .get_host(host_id)
+            .map_err(store_failure)?
+            .map(|record| record.item.connection)
+            .ok_or_else(|| fail("unknown_host", format!("unknown host: {host_id}")))
     }
 
     fn save_host(&self, p: proto::HostsSaveParams) -> Result<String, Failure> {
@@ -515,39 +594,37 @@ impl Daemon {
             validate_alias(jump).map_err(|e| fail("invalid_host", e.to_string()))?;
         }
         connection.updated_at = chrono::Utc::now();
-        let _guard = lock(&self.store_lock);
-        let mut config = self.load_config()?;
+        let group: Option<Group> = p
+            .group
+            .map(|group| {
+                serde_json::to_value(&group)
+                    .and_then(serde_json::from_value)
+                    .map_err(|e| fail("invalid_command", e.to_string()))
+            })
+            .transpose()?;
         let id = connection.id.clone();
-        if let Some(group) = p.group {
-            if !config.groups.iter().any(|g| g.id == group.id) {
-                let value = serde_json::to_value(&group)
-                    .map_err(|e| fail("invalid_command", e.to_string()))?;
-                config.groups.push(
-                    serde_json::from_value(value)
-                        .map_err(|e| fail("invalid_command", e.to_string()))?,
-                );
-            }
-        }
-        match config.connections.iter().position(|c| c.id == id) {
-            Some(index) => config.connections[index] = connection,
-            None => config.connections.push(connection),
-        }
-        self.cfg
-            .config_store
-            .save(&config)
-            .map_err(|e| fail("config_error", e.to_string()))?;
+        lock(&self.store)
+            .save_host(&connection, group.as_ref())
+            .map_err(store_failure)?;
         Ok(id)
     }
 
     fn delete_host(&self, id: &str) -> Result<(), Failure> {
-        let _guard = lock(&self.store_lock);
-        let mut config = self.load_config()?;
-        config.connections.retain(|c| c.id != id);
-        config.recent_connection_ids.retain(|recent| recent != id);
-        self.cfg
-            .config_store
-            .save(&config)
-            .map_err(|e| fail("config_error", e.to_string()))
+        lock(&self.store)
+            .remove_host(id)
+            .map(|_| ())
+            .map_err(store_failure)
+    }
+}
+
+/// Upper bound for a `known_hosts` file the daemon agrees to import.
+const MAX_KNOWN_HOSTS_BYTES: u64 = 16 * 1024 * 1024;
+
+fn store_failure(error: StoreError) -> Failure {
+    match &error {
+        StoreError::Invalid(_) => fail("invalid_host", error.to_string()),
+        StoreError::Io(_) => fail("io_error", error.to_string()),
+        _ => fail("store_error", error.to_string()),
     }
 }
 
@@ -574,35 +651,16 @@ impl Service for Daemon {
     }
 }
 
-/// Resolves a host id into a saved or derived connection, exactly as the v1
-/// app does.
-fn resolve(config: &AppConfig, host_id: &str) -> Result<Connection, Failure> {
-    if let Some(alias) = host_id.strip_prefix(SSH_CONFIG_ID_PREFIX) {
-        return Ok(Connection::alias(alias, alias));
-    }
-    config
-        .connections
-        .iter()
-        .find(|connection| connection.id == host_id)
-        .cloned()
-        .ok_or_else(|| fail("unknown_host", format!("unknown host: {host_id}")))
-}
-
 /// The command a session runs: the system `ssh` for a host (validated by
 /// `easyssh-core`), or a local shell.
 fn command_for(
-    store: &ConfigStore,
     shell: Option<&std::path::Path>,
-    host_id: Option<&str>,
+    connection: Option<Connection>,
     agent_sock: Option<&Path>,
 ) -> Result<(CommandBuilder, bool), Failure> {
     let mut shell_integration = false;
-    let mut command = match host_id {
-        Some(host_id) => {
-            let config = store
-                .load()
-                .map_err(|e| fail("config_error", e.to_string()))?;
-            let connection = resolve(&config, host_id)?;
+    let mut command = match connection {
+        Some(connection) => {
             shell_integration = connection.shell_integration;
             let invocation = SshInvocation::for_connection(&OpenSsh, &connection)
                 .map_err(|e| fail("invalid_host", e.to_string()))?;

@@ -16,6 +16,7 @@ travels is somebody else's concern.
     else v1 writes is required, nullable fields included.
   - Envelopes: `Command`, `Event`, `Reply`, `ProtoError`, `SchemaVersion`.
   - Commands and events: `proto.hello`, `hosts.list|save|delete`,
+    `known_hosts.list|import|remove`,
     `session.open|write|resize|close|list|attach|detach`,
     `askpass.reply|endpoint`, `daemon.shutdown_when_idle`; events
     `session.output` (optional per-session byte offset `seq`), `session.exit`,

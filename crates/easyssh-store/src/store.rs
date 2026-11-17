@@ -126,10 +126,19 @@ impl Store {
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         // Check before anything below writes to the file.
-        migrations::refuse_newer(&conn)?;
-        conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
+        retry_busy(|| migrations::refuse_newer(&conn))?;
+        // Switching to WAL needs the file to itself for a moment, and SQLite
+        // does not always call the busy handler for it (several processes
+        // opening a new database together, notably on Windows), so retry.
+        retry_busy(|| {
+            let mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+            if !mode.eq_ignore_ascii_case("wal") {
+                conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
+            }
+            Ok(())
+        })?;
         conn.pragma_update(None, "synchronous", "FULL")?;
-        migrations::apply(&conn)?;
+        retry_busy(|| migrations::apply(&conn))?;
         Ok(Self {
             conn,
             cipher,
@@ -700,5 +709,24 @@ impl Store {
         }
         self.vault_id = vault_id.to_owned();
         Ok(())
+    }
+}
+
+/// Runs `step` again for up to 15 seconds while another process holds the
+/// database ("database is locked" that the busy timeout did not wait out).
+fn retry_busy<T>(mut step: impl FnMut() -> Result<T>) -> Result<T> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        match step() {
+            Err(StoreError::Sqlite(rusqlite::Error::SqliteFailure(error, _)))
+                if matches!(
+                    error.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            other => return other,
+        }
     }
 }

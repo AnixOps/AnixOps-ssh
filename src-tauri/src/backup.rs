@@ -2,7 +2,7 @@
 //! file never contains passwords, keys or remote commands (see core sync.rs);
 //! Git authentication stays with the system git.
 
-use crate::hosts::{load_config, save_config};
+use crate::hosts::{load_config, open_store};
 use easyssh_core::sync::{GitSync, ImportSummary, SyncFile};
 use easyssh_core::AppConfig;
 use serde::Serialize;
@@ -31,7 +31,11 @@ pub fn config_import(path: String) -> Result<ImportSummary, String> {
     let file = SyncFile::parse(&bytes).map_err(|error| error.to_string())?;
     let mut config = load_config()?;
     let summary = file.merge_into(&mut config);
-    save_config(&config)?;
+    // A merge only adds and updates, so it only upserts: whatever another
+    // process saved since the load is kept.
+    open_store()?
+        .upsert_records(&config)
+        .map_err(|error| error.to_string())?;
     Ok(summary)
 }
 
@@ -84,32 +88,51 @@ pub async fn sync_setup(
             GitSync::init(Path::new(&path), remote.as_deref(), &branch)
                 .map_err(|error| error.to_string())?;
         }
-        let mut config = load_config()?;
-        config.sync.repository_path = Some(path);
-        config.sync.remote_url = remote;
-        config.sync.branch = Some(branch);
-        config.sync.last_error = None;
-        save_config(&config)
+        let store = open_store()?;
+        let mut sync = load_config()?.sync;
+        sync.repository_path = Some(path);
+        sync.remote_url = remote;
+        sync.branch = Some(branch);
+        sync.last_error = None;
+        store
+            .save_sync_preferences(&sync)
+            .map_err(|error| error.to_string())
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
 /// Records the outcome of a push or pull so the panel can show it.
-fn run_sync<T>(action: fn(&mut AppConfig) -> Result<T, String>) -> Result<T, String> {
+///
+/// `replaces` says whether the outcome replaced hosts, groups, snippets and
+/// tunnels with the repository's (a pull that found something): then the
+/// store is replaced explicitly with `replace_all`. The sync settings are
+/// always saved on their own.
+fn run_sync<T>(
+    replaces: fn(&T) -> bool,
+    action: fn(&mut AppConfig) -> Result<T, String>,
+) -> Result<T, String> {
     let mut config = load_config()?;
     let result = action(&mut config);
     if let Err(error) = &result {
         config.sync.last_error = Some(error.clone());
     }
-    save_config(&config)?;
+    let store = open_store()?;
+    let stored = |error: easyssh_store::StoreError| error.to_string();
+    if result.as_ref().is_ok_and(replaces) {
+        store.replace_all(&config).map_err(stored)?;
+    }
+    store.save_sync_preferences(&config.sync).map_err(stored)?;
     result
 }
 
 #[tauri::command]
 pub async fn sync_push() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(|| {
-        run_sync(|config| GitSync::push(config).map_err(|error| error.to_string()))
+        run_sync(
+            |_| false,
+            |config| GitSync::push(config).map_err(|error| error.to_string()),
+        )
     })
     .await
     .map_err(|error| error.to_string())?
@@ -120,7 +143,10 @@ pub async fn sync_push() -> Result<(), String> {
 #[tauri::command]
 pub async fn sync_pull() -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        run_sync(|config| GitSync::pull(config).map_err(|error| error.to_string()))
+        run_sync(
+            |found| *found,
+            |config| GitSync::pull(config).map_err(|error| error.to_string()),
+        )
     })
     .await
     .map_err(|error| error.to_string())?

@@ -1,7 +1,7 @@
 //! Saved command snippets. They are plain text that the frontend pastes into
 //! a terminal; nothing here runs them.
 
-use crate::hosts::{load_config, save_config};
+use crate::hosts::{load_config, open_store};
 use easyssh_core::CommandSnippet;
 
 const MAX_NAME: usize = 100;
@@ -16,25 +16,19 @@ pub fn snippets_list() -> Result<Vec<CommandSnippet>, String> {
 #[tauri::command]
 pub fn snippet_save(id: Option<String>, name: String, content: String) -> Result<String, String> {
     let snippet = validated(id, &name, &content)?;
-    let mut config = load_config()?;
-    let id = snippet.id.clone();
-    match config
-        .snippets
-        .iter_mut()
-        .find(|existing| existing.id == id)
-    {
-        Some(existing) => *existing = snippet,
-        None => config.snippets.push(snippet),
-    }
-    save_config(&config)?;
-    Ok(id)
+    // Only this snippet is written: a host saved elsewhere meanwhile is safe.
+    open_store()?
+        .save_snippet(&snippet)
+        .map_err(|error| error.to_string())?;
+    Ok(snippet.id)
 }
 
 #[tauri::command]
 pub fn snippet_delete(id: String) -> Result<(), String> {
-    let mut config = load_config()?;
-    config.snippets.retain(|snippet| snippet.id != id);
-    save_config(&config)
+    open_store()?
+        .remove_snippet(&id)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 fn validated(id: Option<String>, name: &str, content: &str) -> Result<CommandSnippet, String> {

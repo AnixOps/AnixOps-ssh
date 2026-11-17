@@ -4,7 +4,15 @@ import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { previewCancel, previewFiles, previewTransfer } from "./previewFiles";
-import { previewDeleteHost, previewSaveHost, previewSetFavorite, previewSnapshot } from "./preview";
+import {
+  previewDeleteHost,
+  previewImportKnownHosts,
+  previewKnownHosts,
+  previewRemoveKnownHost,
+  previewSaveHost,
+  previewSetFavorite,
+  previewSnapshot,
+} from "./preview";
 import { previewSession } from "./previewSession";
 import { UNAVAILABLE, type PendingReports, type TelemetryStatus } from "./telemetry";
 
@@ -116,6 +124,43 @@ export async function deleteHost(id: string): Promise<void> {
 export async function setFavorite(id: string, favorite: boolean): Promise<void> {
   if (!isTauri) return previewSetFavorite(id, favorite);
   await invoke("host_set_favorite", { id, favorite });
+}
+
+/** A host key the app trusts. Only the fingerprint is shown, never the key. */
+export interface KnownHost {
+  id: string;
+  /** A name, `[host]:port`, a comma list, or a hash digest when `hashed`. */
+  host: string;
+  port: number;
+  hashed: boolean;
+  /** `@cert-authority` or `@revoked`. */
+  marker: string | null;
+  keyType: string;
+  fingerprint: string;
+  comment: string | null;
+  addedAt: string;
+}
+
+export interface KnownHostsImport {
+  imported: number;
+  duplicates: number;
+  skipped: { line: number; reason: string }[];
+}
+
+export async function listKnownHosts(): Promise<KnownHost[]> {
+  if (!isTauri) return previewKnownHosts();
+  return invoke<KnownHost[]>("known_hosts_list");
+}
+
+/** Imports the user's `~/.ssh/known_hosts` (the backend finds the file). */
+export async function importKnownHosts(): Promise<KnownHostsImport> {
+  if (!isTauri) return previewImportKnownHosts();
+  return invoke<KnownHostsImport>("known_hosts_import");
+}
+
+export async function removeKnownHost(id: string): Promise<void> {
+  if (!isTauri) return previewRemoveKnownHost(id);
+  await invoke("known_hosts_remove", { id });
 }
 
 /** Host colours are stored as chart token names so they follow the theme;

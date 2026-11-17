@@ -1,5 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { BackupSync } from "@/components/app/BackupSync";
+import { KnownHosts } from "@/components/app/KnownHosts";
 import { CircleAlert, CircleCheck, Eye, EyeOff, Minus, Plus, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
@@ -181,6 +182,10 @@ export function SettingsPanel({
 
         <Group title={t.backupSync}>
           <BackupSync onChanged={onDataChanged} />
+        </Group>
+
+        <Group title={t.knownHosts}>
+          <KnownHosts />
         </Group>
 
         <Group title={t.about}>

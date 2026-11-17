@@ -1008,6 +1008,161 @@
       "additionalProperties": false,
       "description": "Command `hosts.delete` payload. Reply: null."
     },
+    "KnownHostEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string",
+          "description": "The host pattern as stored: a name, `[host]:port`, a comma list, or a `|1|salt|hash` digest when `hashed`."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "hashed": {
+          "type": "boolean"
+        },
+        "marker": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`@cert-authority` or `@revoked`."
+        },
+        "key_type": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string",
+          "description": "`SHA256:...`, as `ssh-keygen -l` prints it."
+        },
+        "comment": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "added_at": {
+          "type": "string",
+          "description": "RFC 3339 timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "host",
+        "port",
+        "hashed",
+        "marker",
+        "key_type",
+        "fingerprint",
+        "comment",
+        "added_at"
+      ],
+      "additionalProperties": false,
+      "description": "A stored known_hosts entry. The key itself is not sent, only its fingerprint."
+    },
+    "KnownHostsListParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `known_hosts.list` payload. Reply: KnownHostsListResult."
+    },
+    "KnownHostsListResult": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KnownHostEntry"
+          }
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    "KnownHostsImportParams": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path of an OpenSSH known_hosts file, read by the daemon. The client picks it (normally `~/.ssh/known_hosts`)."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "description": "Command `known_hosts.import` payload. Reply: KnownHostsImportResult."
+    },
+    "KnownHostsImportResult": {
+      "type": "object",
+      "properties": {
+        "imported": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duplicates": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Lines already stored."
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "line": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "line",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Lines that could not be read."
+        }
+      },
+      "required": [
+        "imported",
+        "duplicates",
+        "skipped"
+      ],
+      "additionalProperties": false
+    },
+    "KnownHostsRemoveParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `known_hosts.remove` payload. Reply: null. Removing an unknown id is not an error."
+    },
     "SessionOpenParams": {
       "type": "object",
       "properties": {
