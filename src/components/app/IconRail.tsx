@@ -1,9 +1,8 @@
 import { ArrowLeftRight, Server, Settings, SquareCode, Users, type LucideIcon } from "lucide-react";
-import { motion } from "motion/react";
 import mark from "@/assets/mark.svg";
 import { Tooltip } from "@/components/ui/tooltip";
 import { t } from "@/lib/i18n";
-import { slide } from "@/lib/motion";
+import { shortcutHint, type ShortcutId } from "@/lib/shortcutTable";
 import { cn } from "@/lib/utils";
 
 export type NavKey = "hosts" | "forwards" | "snippets" | "team" | "settings";
@@ -21,7 +20,7 @@ export function IconRail({ active, onChange }: { active: NavKey; onChange: (key:
       aria-label="AnixOps SSH"
       className="material-sidebar flex w-16 shrink-0 flex-col items-center gap-1 border-r py-3"
     >
-      <img src={mark} alt="AnixOps" className="mb-3 size-8" draggable={false} />
+      <img src={mark} alt="AnixOps SSH" className="mb-3 size-8" draggable={false} />
       {primary.map((item) => (
         <RailButton key={item.key} item={item} active={active === item.key} onChange={onChange} />
       ))}
@@ -45,22 +44,20 @@ function RailButton({
   onChange: (key: NavKey) => void;
 }) {
   const Icon = item.icon;
+  const hint = shortcutHint(item.key === "settings" ? "settings" : (`go-${item.key}` as ShortcutId));
   return (
-    <Tooltip label={item.label} side="right">
+    <Tooltip label={hint ? `${item.label} (${hint})` : item.label} side="right">
       <button
         type="button"
         aria-label={item.label}
         aria-current={active ? "page" : undefined}
         onClick={() => onChange(item.key)}
         className={cn(
-          "relative flex size-10 items-center justify-center rounded-sm transition-[color,background-color,transform] duration-micro ease-standard active:scale-95",
-          active ? "text-(--accent)" : "text-label-2 hover:bg-fill-1 hover:text-label-1",
+          "flex size-10 items-center justify-center rounded-sm transition-colors duration-micro ease-standard",
+          active ? "bg-accent-soft text-(--accent)" : "text-label-2 hover:bg-fill-1 hover:text-label-1",
         )}
       >
-        {active && (
-          <motion.span layoutId="rail-active" transition={slide} className="absolute inset-0 rounded-sm bg-accent-soft" />
-        )}
-        <Icon className="relative size-5" strokeWidth={1.5} />
+        <Icon className="size-5" strokeWidth={1.5} />
       </button>
     </Tooltip>
   );

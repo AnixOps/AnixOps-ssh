@@ -2,14 +2,17 @@ import { ClipboardPaste, CornerDownLeft, Pencil, Plus, Radio, SquareCode, Trash2
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
+import { Notice, Textarea } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Menu } from "@/components/ui/menu";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
 import { deleteSnippet, loadSnippets, saveSnippet, type Snippet } from "@/lib/backend";
 import { t } from "@/lib/i18n";
-import { appear, reflow } from "@/lib/motion";
+import { appear } from "@/lib/motion";
 import { targetsFor, toggleGlobalBroadcast, useBroadcast } from "@/lib/broadcast";
 import { terminalFor } from "@/lib/terminals";
-import { cn } from "@/lib/utils";
 
 type Draft = { id: string | null; name: string; content: string };
 
@@ -22,7 +25,7 @@ export function SnippetsPanel({ activeKey }: { activeKey: string | null }) {
   // The same switch as "all panes in all tabs" in the tab bar.
   const broadcast = useBroadcast().global;
   const [error, setError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const reload = useCallback(() => {
     loadSnippets()
@@ -56,10 +59,11 @@ export function SnippetsPanel({ activeKey }: { activeKey: string | null }) {
     }
   };
 
-  const remove = async (id: string) => {
-    setConfirming(null);
+  const remove = async (snippet: Snippet) => {
+    const title = t.snippetDeleteTitle.replace("{name}", snippet.name);
+    if (!(await confirm({ title, body: t.snippetDeleteBody, verb: t.delete }))) return;
     try {
-      await deleteSnippet(id);
+      await deleteSnippet(snippet.id);
       reload();
     } catch (reason) {
       setError(String(reason));
@@ -94,7 +98,7 @@ export function SnippetsPanel({ activeKey }: { activeKey: string | null }) {
         </Tooltip>
       </div>
 
-      {error && <p className="mx-3 mb-2 rounded-sm bg-danger-soft px-3 py-2 text-caption font-normal text-danger">{error}</p>}
+      {error && <Notice className="mx-3 mb-2">{error}</Notice>}
 
       <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-3">
         <AnimatePresence initial={false}>
@@ -102,52 +106,41 @@ export function SnippetsPanel({ activeKey }: { activeKey: string | null }) {
         {snippets.length === 0 && !draft && (
           <div key="empty" className="px-3 pt-10 text-center">
             <SquareCode className="mx-auto mb-3 size-12 text-label-3" strokeWidth={1.5} />
-            <p className="text-callout font-semibold text-label-1">{t.noSnippets}</p>
-            <p className="mt-1 text-caption font-normal text-label-2">{t.noSnippetsHint}</p>
+            <p className="text-callout font-medium text-label-1">{t.noSnippets}</p>
+            <p className="mt-1 text-callout text-label-2">{t.noSnippetsHint}</p>
           </div>
         )}
         {visible.map((snippet) =>
           draft?.id === snippet.id ? null : (
             <motion.div
               key={snippet.id}
-              layout="position"
-              transition={reflow}
               {...appear}
               className="group relative rounded-sm px-2 py-2 hover:bg-fill-1"
             >
               <button
                 type="button"
                 onClick={() => send(snippet, true)}
-                className="block w-full pr-14 text-left"
+                className="block w-full pr-16 text-left"
                 aria-label={`${t.runSnippet}: ${snippet.name}`}
               >
                 <span className="block truncate text-callout font-medium text-label-1">{snippet.name}</span>
-                <code className="mt-0.5 line-clamp-2 font-mono text-caption font-normal break-words text-label-2">
+                <code className="mt-0.5 line-clamp-2 font-mono text-callout break-words text-label-2">
                   {snippet.content}
                 </code>
               </button>
-              {confirming === snippet.id ? (
-                <div className="mt-2 flex gap-1">
-                  <Button variant="destructive" size="sm" className="h-6 px-2" onClick={() => void remove(snippet.id)}>
-                    {t.confirmDelete}
-                  </Button>
-                  <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => setConfirming(null)}>
-                    {t.cancel}
-                  </Button>
-                </div>
-              ) : (
-                <span className="absolute top-1.5 right-1.5 flex opacity-0 group-hover:opacity-100 focus-within:opacity-100">
-                  <SmallButton label={t.pasteSnippet} onClick={() => send(snippet, false)}>
-                    <ClipboardPaste />
-                  </SmallButton>
-                  <SmallButton label={t.edit} onClick={() => setDraft({ ...snippet })}>
-                    <Pencil />
-                  </SmallButton>
-                  <SmallButton label={t.delete} onClick={() => setConfirming(snippet.id)}>
-                    <Trash2 />
-                  </SmallButton>
-                </span>
-              )}
+              <span className="absolute top-1.5 right-1.5 flex opacity-0 transition-opacity duration-micro group-focus-within:opacity-100 group-hover:opacity-100">
+                <SmallButton label={t.pasteSnippet} onClick={() => send(snippet, false)}>
+                  <ClipboardPaste />
+                </SmallButton>
+                <Menu
+                  label={t.more}
+                  items={[
+                    { key: "edit", label: t.edit, icon: <Pencil />, onSelect: () => setDraft({ ...snippet }) },
+                    "separator",
+                    { key: "delete", label: t.delete, icon: <Trash2 />, danger: true, onSelect: () => void remove(snippet) },
+                  ]}
+                />
+              </span>
             </motion.div>
           ),
         )}
@@ -155,22 +148,13 @@ export function SnippetsPanel({ activeKey }: { activeKey: string | null }) {
       </div>
 
       <div className="border-t px-3 py-2.5">
-        <button
-          type="button"
-          role="switch"
-          aria-checked={broadcast}
-          onClick={toggleGlobalBroadcast}
-          className={cn(
-            "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-callout transition-colors duration-micro",
-            broadcast ? "bg-accent-soft text-(--accent)" : "text-label-2 hover:bg-fill-1 hover:text-label-1",
-          )}
-        >
-          <Radio className="size-4" strokeWidth={1.5} />
-          <span className="flex-1 text-left">{t.broadcastAll}</span>
-          <span className="text-caption font-normal">{broadcast ? t.on : t.off}</span>
-        </button>
-        <p className="mt-1.5 flex items-center gap-1 px-2 text-caption font-normal text-label-3">
-          <CornerDownLeft className="size-3.5" strokeWidth={1.5} />
+        <div className="flex items-center gap-2 px-2 py-1 text-callout text-label-1">
+          <Radio className="size-4 shrink-0 text-label-2" strokeWidth={1.5} />
+          <span className="min-w-0 flex-1">{t.broadcastAll}</span>
+          <Switch on={broadcast} label={t.broadcastAll} onClick={toggleGlobalBroadcast} />
+        </div>
+        <p className="mt-1.5 flex items-center gap-1 px-2 text-callout text-label-3">
+          <CornerDownLeft className="size-4 shrink-0" strokeWidth={1.5} />
           {t.snippetHint}
         </p>
       </div>
@@ -198,7 +182,12 @@ function DraftEditor({
         event.preventDefault();
         onSave();
       }}
-      onKeyDown={(event) => event.key === "Escape" && onCancel()}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          onCancel();
+        }
+      }}
     >
       <Input
         autoFocus
@@ -208,7 +197,7 @@ function DraftEditor({
         aria-label={t.snippetName}
         className="h-8"
       />
-      <textarea
+      <Textarea
         value={draft.content}
         onChange={(event) => onChange({ ...draft, content: event.target.value })}
         onKeyDown={(event) => {
@@ -218,10 +207,10 @@ function DraftEditor({
         aria-label={t.snippetCommand}
         rows={4}
         spellCheck={false}
-        className="w-full resize-y rounded-sm bg-fill-1 px-3 py-2 font-mono text-caption font-normal text-label-1 outline-none focus-visible:ring-2 focus-visible:ring-(--accent)"
+        className="resize-y font-mono"
       />
       <div className="flex justify-end gap-1.5">
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+        <Button type="button" variant="quiet" size="sm" onClick={onCancel}>
           {t.cancel}
         </Button>
         <Button type="submit" variant="primary" size="sm">
@@ -235,7 +224,7 @@ function DraftEditor({
 function SmallButton({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
   return (
     <Tooltip label={label}>
-      <Button variant="ghost" size="icon-sm" aria-label={label} onClick={onClick}>
+      <Button variant="quiet" size="icon-sm" aria-label={label} onClick={onClick}>
         {children}
       </Button>
     </Tooltip>

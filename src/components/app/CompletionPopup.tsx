@@ -75,7 +75,7 @@ export function CompletionPopup({
         })}
       </div>
       {item?.description && (
-        <p className="border-t px-3 py-1.5 text-caption font-normal text-label-2">{item.description}</p>
+        <p className="border-t px-3 py-1.5 text-callout text-label-2">{item.description}</p>
       )}
     </div>
   );

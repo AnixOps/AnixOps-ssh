@@ -8,6 +8,8 @@ import { VaultSettings } from "@/components/app/VaultSettings";
 import { CircleAlert, CircleCheck, Eye, EyeOff, Minus, Plus, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
+import { SettingsRow, SettingsGroup } from "@/components/ui/settings";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -63,10 +65,10 @@ export function SettingsPanel({
     <aside className="material-sidebar flex w-72 shrink-0 flex-col border-r">
       <h2 className="px-4 pt-4 pb-2 text-title-3">{t.navSettings}</h2>
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-4">
-        {error && <p className="rounded-sm bg-danger-soft px-3 py-2 text-caption font-normal text-danger">{error}</p>}
+        {error && <p className="rounded-sm bg-danger-soft px-3 py-2 text-callout text-danger">{error}</p>}
 
-        <Group title={t.appearance}>
-          <Row label={t.theme}>
+        <SettingsGroup title={t.appearance}>
+          <SettingsRow label={t.theme}>
             <Segmented
               size="sm"
               value={current.theme}
@@ -74,23 +76,23 @@ export function SettingsPanel({
               label={t.theme}
               options={themes}
             />
-          </Row>
-          <Row label={t.language}>
-            <select
+          </SettingsRow>
+          <SettingsRow label={t.language}>
+            <Select
               aria-label={t.language}
               value={current.locale}
               onChange={(event) => update({ locale: event.target.value as LocaleSetting })}
-              className="h-7 rounded-xs bg-fill-1 px-2 text-callout text-label-1 outline-none focus-visible:ring-2 focus-visible:ring-(--accent)"
+              className="h-7 w-auto"
             >
               <option value="system">{t.languageSystem}</option>
               <option value="zh_cn">简体中文</option>
               <option value="en">English</option>
-            </select>
-          </Row>
-        </Group>
+            </Select>
+          </SettingsRow>
+        </SettingsGroup>
 
-        <Group title={t.terminal}>
-          <Row label={t.fontSize}>
+        <SettingsGroup title={t.terminal}>
+          <SettingsRow label={t.fontSize}>
             <div className="flex items-center gap-1">
               <Stepper
                 label={`${t.fontSize} −`}
@@ -108,41 +110,41 @@ export function SettingsPanel({
                 <Plus />
               </Stepper>
             </div>
-          </Row>
-          <Row label={t.scrollback}>
-            <select
+          </SettingsRow>
+          <SettingsRow label={t.scrollback}>
+            <Select
               aria-label={t.scrollback}
               value={current.terminalScrollback}
               onChange={(event) => update({ terminalScrollback: Number(event.target.value) })}
-              className="h-7 rounded-xs bg-fill-1 px-2 text-callout text-label-1 outline-none focus-visible:ring-2 focus-visible:ring-(--accent)"
+              className="h-7 w-auto"
             >
               {SCROLLBACK.map((lines) => (
                 <option key={lines} value={lines}>
                   {lines.toLocaleString()} {t.lines}
                 </option>
               ))}
-            </select>
-          </Row>
-        </Group>
+            </Select>
+          </SettingsRow>
+        </SettingsGroup>
 
-        <Group title={t.completion}>
-          <Row label={t.completionEnabled} hint={t.completionHint}>
+        <SettingsGroup title={t.completion}>
+          <SettingsRow label={t.completionEnabled} hint={t.completionHint}>
             <Switch on={prefs.enabled} label={t.completionEnabled} onClick={() => updateCompletionPrefs({ enabled: !prefs.enabled })} />
-          </Row>
-          <Row label={t.rememberHistory} hint={t.rememberHistoryHint}>
+          </SettingsRow>
+          <SettingsRow label={t.rememberHistory} hint={t.rememberHistoryHint}>
             <Switch
               on={prefs.rememberHistory}
               label={t.rememberHistory}
               onClick={() => updateCompletionPrefs({ rememberHistory: !prefs.rememberHistory })}
             />
-          </Row>
-        </Group>
+          </SettingsRow>
+        </SettingsGroup>
 
-        <Group
+        <SettingsGroup
           title={t.sshEnvironment}
           action={
             <Tooltip label={t.recheck}>
-              <Button variant="ghost" size="icon-sm" aria-label={t.recheck} onClick={onRecheck}>
+              <Button variant="quiet" size="icon-sm" aria-label={t.recheck} onClick={onRecheck}>
                 <RotateCw />
               </Button>
             </Tooltip>
@@ -172,44 +174,44 @@ export function SettingsPanel({
           {status && status.agentKeys.length > 0 && (
             <div className="space-y-1 px-3 py-2">
               {status.agentKeys.map((key) => (
-                <p key={key} className="selectable truncate font-mono text-caption font-normal text-label-3" title={key}>
+                <p key={key} className="selectable truncate font-mono text-callout text-label-3" title={key}>
                   {key}
                 </p>
               ))}
             </div>
           )}
-        </Group>
+        </SettingsGroup>
 
-        <Group title={t.security}>
+        <SettingsGroup title={t.security}>
           <VaultSettings />
-        </Group>
+        </SettingsGroup>
 
-        <Group title={t.aiTitle}>
+        <SettingsGroup title={t.aiTitle}>
           <AiSettings />
-        </Group>
+        </SettingsGroup>
 
-        <Group title={t.logsTitle}>
+        <SettingsGroup title={t.logsTitle}>
           <SessionLogs />
-        </Group>
+        </SettingsGroup>
 
-        <Group title={t.privacy}>
+        <SettingsGroup title={t.privacy}>
           <PrivacySection current={current} update={update} />
-        </Group>
+        </SettingsGroup>
 
-        <Group title={t.syncTitle}>
+        <SettingsGroup title={t.syncTitle}>
           <SyncSettings />
-        </Group>
+        </SettingsGroup>
 
-        <Group title={t.backupSync}>
+        <SettingsGroup title={t.backupSync}>
           <BackupSync onChanged={onDataChanged} />
-        </Group>
+        </SettingsGroup>
 
-        <Group title={t.knownHosts}>
+        <SettingsGroup title={t.knownHosts}>
           <KnownHosts />
-        </Group>
+        </SettingsGroup>
 
-        <Group title={t.advanced}>
-          <Row label={t.sshEngineLabel} hint={current.sshEngine === "russh" ? t.sshEngineRusshHint : t.sshEngineOpensshHint}>
+        <SettingsGroup title={t.advanced}>
+          <SettingsRow label={t.sshEngineLabel} hint={current.sshEngine === "russh" ? t.sshEngineRusshHint : t.sshEngineOpensshHint}>
             <Segmented
               size="sm"
               value={current.sshEngine}
@@ -220,53 +222,27 @@ export function SettingsPanel({
                 { value: "openssh", label: t.engineOpenssh },
               ]}
             />
-          </Row>
-        </Group>
+          </SettingsRow>
+        </SettingsGroup>
 
-        <Group title={t.about}>
-          <Row label="AnixOps SSH">
+        <SettingsGroup title={t.about}>
+          <SettingsRow label="AnixOps SSH">
             <span className="text-callout text-label-2">
               {t.version} {version}
             </span>
-          </Row>
-        </Group>
+          </SettingsRow>
+        </SettingsGroup>
       </div>
     </aside>
   );
 }
 
-function Group({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
-  return (
-    <section>
-      <div className="flex h-7 items-center px-1">
-        <h3 className="flex-1 text-caption text-label-2">{title}</h3>
-        {action}
-      </div>
-      <div className="divide-y divide-separator overflow-hidden rounded-md bg-bg-elevated shadow-1 ring-1 ring-separator">
-        {children}
-      </div>
-    </section>
-  );
-}
-
-function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return (
-    <div className="flex min-h-11 items-center gap-3 px-3 py-1.5">
-      <div className="min-w-0 flex-1">
-        <p className={cn("text-callout text-label-1", !hint && "truncate")}>{label}</p>
-        {hint && <p className="text-caption font-normal text-label-2">{hint}</p>}
-      </div>
-      {children}
-    </div>
-  );
-}
-
 function StatusRow({ label, value, ok, warn = false }: { label: string; value: string; ok: boolean; warn?: boolean }) {
   return (
-    <Row label={label}>
+    <SettingsRow label={label}>
       <span
         className={cn(
-          "flex min-w-0 items-center gap-1.5 text-caption font-normal",
+          "flex min-w-0 items-center gap-1.5 text-callout",
           ok ? "text-label-2" : warn ? "text-warning" : "text-danger",
         )}
       >
@@ -277,7 +253,7 @@ function StatusRow({ label, value, ok, warn = false }: { label: string; value: s
         )}
         <span className="truncate">{value}</span>
       </span>
-    </Row>
+    </SettingsRow>
   );
 }
 
@@ -333,25 +309,25 @@ function PrivacySection({ current, update }: { current: Settings; update: (patch
   };
 
   if (view.nothingCollected && status) {
-    return <p className="px-3 py-2 text-caption font-normal text-label-2">{t.telemetryUnavailable}</p>;
+    return <p className="px-3 py-2 text-callout text-label-2">{t.telemetryUnavailable}</p>;
   }
 
   return (
     <>
-      <Row label={t.crashReports} hint={t.crashReportsHint}>
+      <SettingsRow label={t.crashReports} hint={t.crashReportsHint}>
         <Switch
           on={view.crashOn}
           label={t.crashReports}
           onClick={() => update({ crashReports: !view.crashOn })}
         />
-      </Row>
-      <Row label={t.usageStats} hint={view.usageAvailable ? t.usageStatsHint : t.usageUnavailable}>
+      </SettingsRow>
+      <SettingsRow label={t.usageStats} hint={view.usageAvailable ? t.usageStatsHint : t.usageUnavailable}>
         <Switch
           on={view.usageOn}
           label={t.usageStats}
           onClick={() => view.usageAvailable && update({ usageStats: !view.usageOn })}
         />
-      </Row>
+      </SettingsRow>
       <div className="space-y-2 px-3 py-2">
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" size="sm" onClick={toggleView}>
@@ -364,15 +340,15 @@ function PrivacySection({ current, update }: { current: Settings; update: (patch
           </Button>
         </div>
         {status && status.pending > 0 && (
-          <p className="text-caption font-normal text-label-2">
+          <p className="text-callout text-label-2">
             {status.pending} {t.pendingCount}
           </p>
         )}
-        {notice && <p className="text-caption font-normal text-label-2">{notice}</p>}
+        {notice && <p className="text-callout text-label-2">{notice}</p>}
         {pending !== null && (
           <pre
             aria-label={t.viewPending}
-            className="selectable max-h-48 overflow-auto rounded-xs bg-fill-1 p-2 font-mono text-caption font-normal whitespace-pre-wrap break-all text-label-2"
+            className="selectable max-h-48 overflow-auto rounded-xs bg-fill-1 p-2 font-mono text-callout whitespace-pre-wrap break-all text-label-2"
           >
             {pending}
           </pre>

@@ -2,6 +2,7 @@ import { Fingerprint, LockKeyhole } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Overlay } from "@/components/ui/overlay";
 import { vaultStatus, vaultUnlock, vaultUnlockWith, type UnlockMethod } from "@/lib/backend";
@@ -87,9 +88,7 @@ export function VaultUnlockDialog() {
             className="mt-5"
           />
           {error && (
-            <p role="alert" className="mt-2 text-caption font-normal text-danger">
-              {error}
-            </p>
+            <Notice className="mt-2">{error}</Notice>
           )}
           {methods.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">

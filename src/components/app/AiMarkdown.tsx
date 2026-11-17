@@ -66,7 +66,7 @@ function renderInline(parts: Inline[]): ReactNode {
         return <Fragment key={index}>{part.v}</Fragment>;
       case "code":
         return (
-          <code key={index} className="rounded-xs bg-fill-1 px-1 font-mono text-caption">
+          <code key={index} className="rounded-xs bg-fill-1 px-1 font-mono text-callout">
             {part.v}
           </code>
         );
@@ -115,14 +115,14 @@ function CodeBlock({
   return (
     <div className="overflow-hidden rounded-sm bg-fill-1 ring-1 ring-separator">
       <div className="flex h-7 items-center gap-1 px-2">
-        <span className="flex-1 truncate font-mono text-caption text-label-3">{lang}</span>
+        <span className="flex-1 truncate font-mono text-callout text-label-3">{lang}</span>
         <Tooltip label={t.askAiCopy}>
-          <Button variant="ghost" size="icon-sm" aria-label={t.askAiCopy} onClick={copy}>
+          <Button variant="quiet" size="icon-sm" aria-label={t.askAiCopy} onClick={copy}>
             {copied ? <Check /> : <Copy />}
           </Button>
         </Tooltip>
       </div>
-      <pre className="selectable overflow-x-auto px-3 pb-2 font-mono text-caption font-normal whitespace-pre text-label-1">
+      <pre className="selectable overflow-x-auto px-3 pb-2 font-mono text-callout whitespace-pre text-label-1">
         {code}
       </pre>
       {onInsert && !open && (

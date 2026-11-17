@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 
 /** An on/off switch; `label` is its accessible name. */
-export function Switch({ on, label, onClick }: { on: boolean; label: string; onClick: () => void }) {
+export function Switch({ on, label, onClick, disabled }: { on: boolean; label: string; onClick: () => void; disabled?: boolean }) {
   return (
     <button
       type="button"
@@ -9,8 +9,9 @@ export function Switch({ on, label, onClick }: { on: boolean; label: string; onC
       aria-checked={on}
       aria-label={label}
       onClick={onClick}
+      disabled={disabled}
       className={cn(
-        "relative h-6 w-10 shrink-0 rounded-pill transition-colors duration-toggle ease-standard",
+        "relative h-6 w-10 shrink-0 rounded-pill disabled:opacity-40 transition-colors duration-toggle ease-standard",
         on ? "bg-accent-fill" : "bg-fill-3",
       )}
     >

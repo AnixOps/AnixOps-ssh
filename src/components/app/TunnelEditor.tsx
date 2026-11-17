@@ -85,7 +85,7 @@ export function TunnelEditor({
 
         <Field label={t.tunnelType} group>
           <Segmented value={kind} onChange={setKind} label={t.tunnelType} options={kinds} />
-          <p className="mt-1.5 text-caption font-normal text-label-3">
+          <p className="mt-1.5 text-callout text-label-3">
             {kinds.find((option) => option.value === kind)?.hint}
           </p>
         </Field>
@@ -111,7 +111,7 @@ export function TunnelEditor({
         )}
 
         {input.bindPort > 0 && (
-          <p className="rounded-sm bg-fill-1 px-3 py-2 font-mono text-caption font-normal text-label-2">
+          <p className="rounded-sm bg-fill-1 px-3 py-2 font-mono text-callout text-label-2">
             {describeTunnel(input)}
           </p>
         )}
@@ -151,7 +151,7 @@ function Field({
   const Element = group ? "div" : "label";
   return (
     <Element className="block">
-      <span className="mb-1.5 flex items-baseline gap-2 text-caption text-label-2">
+      <span className="mb-1.5 flex items-baseline gap-2 text-callout text-label-2">
         {label}
         {hint && <span className="font-normal text-label-3">{hint}</span>}
       </span>

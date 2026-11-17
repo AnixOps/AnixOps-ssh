@@ -1,9 +1,13 @@
-import { CircleAlert, FileUp, RefreshCw, Star, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { FileUp, RefreshCw, Star, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { HostHistory, HostVault } from "@/components/app/HostSync";
 import { SecretField } from "@/components/app/SecretField";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
+import { Field, Notice, Textarea } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Menu } from "@/components/ui/menu";
+import { Select } from "@/components/ui/select";
 import { Overlay } from "@/components/ui/overlay";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
@@ -71,7 +75,7 @@ export function HostEditor({
   const [color, setColor] = useState<string | null>(host?.color ?? null);
   const [favorite, setFavorite] = useState(host?.favorite ?? false);
   const [error, setError] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
   const firstRef = useRef<HTMLInputElement>(null);
   const keyFileRef = useRef<HTMLInputElement>(null);
@@ -181,6 +185,8 @@ export function HostEditor({
 
   const remove = async () => {
     if (!host) return;
+    const title = t.hostDeleteTitle.replace("{name}", host.name);
+    if (!(await confirm({ title, body: t.hostDeleteBody, verb: t.delete }))) return;
     setBusy(true);
     try {
       await deleteHost(host.id);
@@ -200,9 +206,18 @@ export function HostEditor({
       onSubmit={() => void submit()}
       className="flex max-h-full max-w-lg flex-col"
     >
-        <h2 id="host-editor-title" className="px-6 pt-6 text-title-3">
-          {title}
-        </h2>
+        <div className="flex items-center gap-2 px-6 pt-6">
+          <h2 id="host-editor-title" className="min-w-0 flex-1 truncate text-title-3">
+            {title}
+          </h2>
+          {saved && (
+            <Menu
+              label={t.more}
+              items={[{ key: "delete", label: t.delete, icon: <Trash2 />, danger: true, onSelect: () => void remove() }]}
+              disabled={busy}
+            />
+          )}
+        </div>
 
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 pt-5 pb-2">
           <Field label={t.hostName}>
@@ -293,16 +308,15 @@ export function HostEditor({
             </Field>
 
             <Field label={t.hostEngine} hint={t.optional}>
-              <select
+              <Select
                 aria-label={t.hostEngine}
                 value={fields.engine ?? "auto"}
                 onChange={(event) => set("engine", event.target.value as EnginePreference)}
-                className="h-9 w-full rounded-sm bg-fill-1 px-3 text-callout text-label-1 outline-none focus-visible:ring-2 focus-visible:ring-(--accent)"
               >
                 <option value="auto">{t.engineAuto}</option>
                 <option value="russh">{t.engineBuiltin}</option>
                 <option value="openssh">{t.engineOpenssh}</option>
-              </select>
+              </Select>
             </Field>
             </>
           )}
@@ -324,29 +338,24 @@ export function HostEditor({
           <Field label={t.color} group>
             <div className="flex items-center gap-2">
               <Swatch selected={color === null} label={t.noColor} onClick={() => setColor(null)} />
-              {COLORS.map((token) => (
-                <Swatch key={token} color={token} selected={color === token} label={token} onClick={() => setColor(token)} />
+              {COLORS.map((token, index) => (
+                <Swatch key={token} color={token} selected={color === token} label={`${t.color} ${index + 1}`} onClick={() => setColor(token)} />
               ))}
-              <button
-                type="button"
-                role="switch"
-                aria-checked={favorite}
-                onClick={() => setFavorite(!favorite)}
-                className={cn(
-                  "ml-auto flex h-7 items-center gap-1.5 rounded-pill px-3 text-callout transition-colors duration-micro",
-                  favorite ? "bg-accent-soft text-(--accent)" : "bg-fill-1 text-label-2 hover:text-label-1",
-                )}
-              >
-                <Star className={cn("size-4", favorite && "fill-current")} strokeWidth={1.5} />
-                {t.favorite}
-              </button>
             </div>
           </Field>
 
+          <div className="flex items-center justify-between gap-4">
+            <p className="flex items-center gap-2 text-callout text-label-2">
+              <Star className="size-4" strokeWidth={1.5} />
+              {t.favorite}
+            </p>
+            <Switch on={favorite} label={t.favorite} onClick={() => setFavorite(!favorite)} />
+          </div>
+
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <p className="text-caption text-label-2">{t.shellIntegration}</p>
-              <p className="mt-0.5 text-caption font-normal text-label-3">{t.shellIntegrationHint}</p>
+              <p className="text-callout text-label-1">{t.shellIntegration}</p>
+              <p className="mt-0.5 text-callout text-label-3">{t.shellIntegrationHint}</p>
             </div>
             <Switch
               on={fields.shellIntegration}
@@ -358,10 +367,10 @@ export function HostEditor({
           {!serialOn && (
             <section aria-labelledby="host-editor-credentials" className="space-y-3 rounded-md bg-fill-1 p-3">
               <div>
-                <h3 id="host-editor-credentials" className="text-caption text-label-2">
+                <h3 id="host-editor-credentials" className="text-callout text-label-2">
                   {t.savedCredentials}
                 </h3>
-                <p className="mt-0.5 text-caption font-normal text-label-3">{t.credentialsHint}</p>
+                <p className="mt-0.5 text-callout text-label-3">{t.credentialsHint}</p>
               </div>
               <Field label={t.savePassword} hint={t.optional} group>
                 <SecretField
@@ -402,7 +411,7 @@ export function HostEditor({
                         <FileUp />
                         {t.keyImport}
                       </Button>
-                      <span className="text-caption font-normal text-label-3">{keyNote ?? t.keyImportHint}</span>
+                      <span className="text-callout text-label-3">{keyNote ?? t.keyImportHint}</span>
                     </div>
                   }
                 />
@@ -421,12 +430,7 @@ export function HostEditor({
           )}
 
           <Field label={t.notes} hint={t.optional}>
-            <textarea
-              value={fields.notes}
-              onChange={(event) => set("notes", event.target.value)}
-              rows={3}
-              className="w-full resize-none rounded-sm bg-fill-1 px-3 py-2 text-callout text-label-1 outline-none focus-visible:ring-2 focus-visible:ring-(--accent)"
-            />
+            <Textarea value={fields.notes} onChange={(event) => set("notes", event.target.value)} rows={3} />
           </Field>
 
           {saved && host && <HostVault hostId={host.id} onMoved={onDone} />}
@@ -446,29 +450,13 @@ export function HostEditor({
           </Field>
 
           {error && (
-            <p role="alert" className="flex items-start gap-2 rounded-sm bg-danger-soft px-3 py-2 text-callout text-danger">
-              <CircleAlert className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
-              <span>
-                {t.saveFailed}: {error}
-              </span>
-            </p>
+            <Notice>
+              {t.saveFailed}: {error}
+            </Notice>
           )}
         </div>
 
-        <div className="flex items-center gap-2 px-6 pt-4 pb-6">
-          {saved &&
-            (confirmDelete ? (
-              <Button type="button" variant="destructive" onClick={() => void remove()} disabled={busy}>
-                <Trash2 />
-                {t.confirmDelete}
-              </Button>
-            ) : (
-              <Button type="button" variant="ghost" onClick={() => setConfirmDelete(true)} disabled={busy}>
-                <Trash2 />
-                {t.delete}
-              </Button>
-            ))}
-          <div className="flex-1" />
+        <div className="flex items-center justify-end gap-2 px-6 pt-4 pb-6">
           <Button type="button" variant="secondary" onClick={onCancel}>
             {t.cancel}
           </Button>
@@ -477,31 +465,6 @@ export function HostEditor({
           </Button>
         </div>
     </Overlay>
-  );
-}
-
-/** A labelled form row; `group` renders a div for button groups, which a
- *  label element would otherwise click when its text is clicked. */
-function Field({
-  label,
-  hint,
-  group = false,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  group?: boolean;
-  children: ReactNode;
-}) {
-  const Element = group ? "div" : "label";
-  return (
-    <Element className="block">
-      <span className="mb-1.5 flex items-baseline gap-2 text-caption text-label-2">
-        {label}
-        {hint && <span className="font-normal text-label-3">{hint}</span>}
-      </span>
-      {children}
-    </Element>
   );
 }
 
@@ -523,7 +486,7 @@ function Swatch({
       aria-pressed={selected}
       onClick={onClick}
       className={cn(
-        "flex size-6 items-center justify-center rounded-full ring-offset-2 ring-offset-(--bg-elevated) transition-shadow duration-micro",
+        "flex size-7 items-center justify-center rounded-full ring-offset-2 ring-offset-(--bg-elevated) transition-shadow duration-micro",
         selected ? "ring-2 ring-(--accent)" : "ring-1 ring-separator",
         !color && "bg-fill-1",
       )}
@@ -531,9 +494,6 @@ function Swatch({
     />
   );
 }
-
-const selectClass =
-  "h-9 w-full rounded-sm bg-fill-1 px-3 text-callout text-label-1 outline-none focus-visible:ring-2 focus-visible:ring-(--accent)";
 
 /** The settings of a serial port: which one, how fast, and the line format. */
 function SerialForm({
@@ -572,7 +532,7 @@ function SerialForm({
           </Tooltip>
         </div>
         {ports !== null && ports.length === 0 && (
-          <p className="mt-1.5 text-caption font-normal text-label-3">{t.serialNoPorts}</p>
+          <p className="mt-1.5 text-callout text-label-3">{t.serialNoPorts}</p>
         )}
         {ports !== null && ports.length > 0 && (
           <ul className="mt-1.5 flex flex-wrap gap-1.5" aria-label={t.serialPort}>
@@ -584,7 +544,7 @@ function SerialForm({
                   aria-pressed={serial.port === port.path}
                   title={port.description ?? port.path}
                   className={cn(
-                    "rounded-pill px-2.5 py-0.5 font-mono text-caption font-normal transition-colors duration-micro",
+                    "h-8 rounded-pill px-3 font-mono text-callout transition-colors duration-micro",
                     serial.port === port.path ? "bg-accent-soft text-(--accent)" : "bg-fill-1 text-label-2 hover:text-label-1",
                   )}
                 >
@@ -613,51 +573,47 @@ function SerialForm({
           </datalist>
         </Field>
         <Field label={t.serialDataBits}>
-          <select
+          <Select
             value={serial.dataBits}
             onChange={(event) => set("dataBits", Number(event.target.value))}
-            className={selectClass}
           >
             {[8, 7, 6, 5].map((bits) => (
               <option key={bits} value={bits}>
                 {bits}
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
         <Field label={t.serialParity}>
-          <select
+          <Select
             value={serial.parity}
             onChange={(event) => set("parity", event.target.value as SerialParity)}
-            className={selectClass}
           >
             <option value="none">{t.serialParityNone}</option>
             <option value="even">{t.serialParityEven}</option>
             <option value="odd">{t.serialParityOdd}</option>
-          </select>
+          </Select>
         </Field>
         <Field label={t.serialStopBits}>
-          <select
+          <Select
             value={serial.stopBits}
             onChange={(event) => set("stopBits", Number(event.target.value))}
-            className={selectClass}
           >
             <option value={1}>1</option>
             <option value={2}>2</option>
-          </select>
+          </Select>
         </Field>
       </div>
       <Field label={t.serialFlow}>
-        <select
+        <Select
           value={serial.flowControl}
           onChange={(event) => set("flowControl", event.target.value as SerialFlowControl)}
-          className={selectClass}
         >
           <option value="none">{t.serialFlowNone}</option>
           <option value="hardware">{t.serialFlowHardware}</option>
           <option value="software">{t.serialFlowSoftware}</option>
-        </select>
-        <p className="mt-1.5 text-caption font-normal text-label-3">{t.serialHint}</p>
+        </Select>
+        <p className="mt-1.5 text-callout text-label-3">{t.serialHint}</p>
       </Field>
     </>
   );

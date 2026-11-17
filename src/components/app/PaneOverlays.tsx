@@ -56,14 +56,15 @@ export function PasteConfirm({
         <p className="min-w-0 flex-1 text-callout font-medium text-label-1">
           {t.pasteConfirmTitle.replace("{n}", String(count + 1))}
         </p>
-        <Button variant="primary" size="sm" autoFocus onClick={() => onChoose(true)}>
-          {t.pasteConfirmAll}
+        {/* Cancel has the initial focus: sending a newline to several shells is hard to take back (D6). */}
+        <Button variant="secondary" size="sm" autoFocus onClick={() => onChoose(null)}>
+          {t.cancel}
         </Button>
         <Button variant="secondary" size="sm" onClick={() => onChoose(false)}>
           {t.pasteConfirmHere}
         </Button>
-        <Button variant="ghost" size="sm" onClick={() => onChoose(null)}>
-          {t.cancel}
+        <Button variant="primary" size="sm" onClick={() => onChoose(true)}>
+          {t.pasteConfirmAll}
         </Button>
       </motion.div>
     </div>

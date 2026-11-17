@@ -1,6 +1,14 @@
-/* App shortcuts must not collide with the shell: Ctrl+W, Ctrl+K and Ctrl+T
-   all mean something in bash and vim. So the app uses Cmd on macOS and
-   Ctrl+Shift elsewhere, like most terminal apps. */
+/* App shortcuts (guidelines/keyboard.md). Reserved AnixOps shortcuts use Mod
+   (Ctrl, or Cmd on macOS): Mod+K palette, Mod+/ shortcut list, Mod+, settings,
+   Mod+1..4 pages, Mod+I import, Mod+N new host, Mod+F find.
+
+   A terminal needs plain Ctrl keys (Ctrl+K, Ctrl+W, Ctrl+N mean something in
+   bash and vim), so on Windows and Linux the reserved shortcuts work with plain
+   Ctrl everywhere except while the terminal has the focus, where the same
+   commands use Ctrl+Shift (K22: never Ctrl+Alt). Terminal commands (tabs,
+   splits, broadcast) use Ctrl+Shift always. macOS has no such conflict and uses
+   Cmd. The table below is the one place shortcuts are written down (K9): the
+   shortcut list, tooltips, menus and the palette read it. */
 
 export const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -21,7 +29,15 @@ export type AppShortcut =
   | "toggle-broadcast"
   | "toggle-maximise"
   | "prev-prompt"
-  | "next-prompt";
+  | "next-prompt"
+  | "shortcut-list"
+  | "settings"
+  | "go-hosts"
+  | "go-forwards"
+  | "go-snippets"
+  | "go-team"
+  | "import"
+  | "new-host";
 
 const letters: Record<string, AppShortcut> = {
   k: "search-hosts",
@@ -40,6 +56,13 @@ const arrows: Record<string, AppShortcut> = {
   ArrowDown: "focus-down",
 };
 
+const pages: Record<string, AppShortcut> = {
+  Digit1: "go-hosts",
+  Digit2: "go-forwards",
+  Digit3: "go-snippets",
+  Digit4: "go-team",
+};
+
 export interface KeyInput {
   key: string;
   code?: string;
@@ -49,9 +72,9 @@ export interface KeyInput {
   metaKey: boolean;
 }
 
-/** The shortcut a key press means on the given platform, if any.
+/** The terminal commands: Ctrl+Shift+key on Windows and Linux, Cmd+key on macOS.
  *
- *  Windows and Linux: Ctrl+Shift+key; Alt added for "split down".
+ *  Windows and Linux: Ctrl+Shift+key; "split down" is Ctrl+Shift+O (K22 rules out Ctrl+Alt).
  *  macOS: Cmd+key; Cmd+Shift+D splits down, Cmd+Option+Arrow moves focus,
  *  Cmd+Shift+B toggles broadcast. Prompt jumps: Ctrl+Shift+PageUp/PageDown, or
  *  Cmd+Up/Down on macOS. */
@@ -76,8 +99,9 @@ export function resolveShortcut(input: KeyInput, mac: boolean): AppShortcut | nu
     return shortcut === "copy" || shortcut === "paste" ? null : shortcut;
   }
   if (!input.ctrlKey || !shiftKey || input.metaKey) return null;
-  if (isD) return altKey ? "split-down" : "split-right";
-  if (altKey) return null;
+  if (altKey) return null; // K22: Ctrl+Alt is AltGr on many layouts
+  if (isD) return "split-right";
+  if (letter === "o" || input.code === "KeyO") return "split-down";
   if (arrows[input.key]) return arrows[input.key];
   // Ctrl+Shift+Arrow already moves pane focus, so prompts use the page keys.
   if (input.key === "PageUp") return "prev-prompt";
@@ -87,28 +111,49 @@ export function resolveShortcut(input: KeyInput, mac: boolean): AppShortcut | nu
   return letters[letter] ?? null;
 }
 
+/** The reserved app-wide shortcuts of keyboard.md section 3. Shortcuts follow the
+ *  character on the key where there is one; digits and punctuation also match
+ *  `code`, so they work on every layout (K8). */
+export function resolveGlobalShortcut(input: KeyInput, mac: boolean, inTerminal: boolean): AppShortcut | null {
+  const { shiftKey, altKey } = input;
+  if (altKey) return null;
+  const letter = input.key.toLowerCase();
+  const slash = input.key === "/" || input.key === "?" || input.code === "Slash";
+  const comma = input.key === "," || input.key === "<" || input.code === "Comma";
+  const page = input.code ? pages[input.code] : undefined;
+  if (mac) {
+    if (!input.metaKey || input.ctrlKey || shiftKey) return null;
+    if (slash) return "shortcut-list";
+    if (comma) return "settings";
+    if (page) return page;
+    if (letter === "i") return "import";
+    if (letter === "n") return "new-host";
+    return null;
+  }
+  if (input.metaKey) return null;
+  // Plain Ctrl outside the terminal, Ctrl+Shift inside it.
+  if (!input.ctrlKey || shiftKey !== inTerminal) return null;
+  if (letter === "k") return "search-hosts";
+  if (slash) return "shortcut-list";
+  if (comma) return "settings";
+  if (page) return page;
+  if (letter === "i") return "import";
+  if (letter === "n") return "new-host";
+  if (letter === "f") return "find";
+  return null;
+}
+
+/** Whether the event comes from inside a terminal, where plain Ctrl belongs to the shell. */
+export function inTerminal(event: Pick<Event, "target">): boolean {
+  return event.target instanceof Element && event.target.closest(".xterm") !== null;
+}
+
 export function appShortcut(event: KeyboardEvent): AppShortcut | null {
   if (event.type !== "keydown") return null;
-  return resolveShortcut(event, isMac);
+  return resolveShortcut(event, isMac) ?? resolveGlobalShortcut(event, isMac, inTerminal(event));
 }
 
 /** Display form for a letter shortcut (Ctrl+Shift+W or ⌘W). */
 export function shortcutLabel(key: string): string {
   return isMac ? `⌘${key.toUpperCase()}` : `Ctrl+Shift+${key.toUpperCase()}`;
-}
-
-const labels: Partial<Record<AppShortcut, { pc: string; mac: string }>> = {
-  "split-right": { pc: "Ctrl+Shift+D", mac: "⌘D" },
-  "split-down": { pc: "Ctrl+Shift+Alt+D", mac: "⌘⇧D" },
-  "toggle-broadcast": { pc: "Ctrl+Shift+B", mac: "⌘⇧B" },
-  "toggle-maximise": { pc: "Ctrl+Shift+Enter", mac: "⌘⇧↵" },
-  "close-tab": { pc: "Ctrl+Shift+W", mac: "⌘W" },
-  "prev-prompt": { pc: "Ctrl+Shift+PageUp", mac: "⌘↑" },
-  "next-prompt": { pc: "Ctrl+Shift+PageDown", mac: "⌘↓" },
-};
-
-export function shortcutHint(shortcut: AppShortcut | "focus-pane"): string {
-  if (shortcut === "focus-pane") return isMac ? "⌘⌥←↑↓→" : "Ctrl+Shift+←↑↓→";
-  const label = labels[shortcut];
-  return label ? (isMac ? label.mac : label.pc) : "";
 }
