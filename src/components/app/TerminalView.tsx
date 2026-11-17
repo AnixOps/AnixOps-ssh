@@ -22,6 +22,7 @@ import {
   type FilesHandle,
   type SessionEvent,
   type SessionHandle,
+  type SshEngine,
 } from "@/lib/backend";
 import { CompletionController, type ViewState } from "@/lib/completion/controller";
 import { completionPrefs, commandHistory, onCompletionPrefs } from "@/lib/completion/prefs";
@@ -35,9 +36,15 @@ import { appShortcut } from "@/lib/shortcuts";
 import { registerTerminal, terminalFor } from "@/lib/terminals";
 import { terminalFont, terminalTheme } from "@/lib/terminalTheme";
 
+/** The SSH engine a session runs on, and why. */
+export interface EngineInfo {
+  engine: SshEngine;
+  reason: string | null;
+}
+
 export type SessionStatus =
   | { state: "connecting" }
-  | { state: "connected" }
+  | { state: "connected"; engine?: EngineInfo }
   /** The connection to the background daemon dropped; the session is re-attached when it is back. */
   | { state: "reconnecting" }
   | { state: "exited"; code: number | null; error?: string };
@@ -250,20 +257,22 @@ export function TerminalView({
       report({ state: "connecting" });
       let connected = false;
       let exited = false;
+      // Known once the session is open; the first output may come sooner.
+      let engine: EngineInfo | undefined;
       const onEvent = (event: SessionEvent) => {
         if (disposed) return;
         if (event.kind === "data") {
           terminal.write(event.data);
           if (!connected) {
             connected = true;
-            report({ state: "connected" });
+            report({ state: "connected", engine });
           }
         } else if (event.kind === "reconnecting") {
           if (!exited) report({ state: "reconnecting" });
         } else if (event.kind === "resumed") {
           if (!exited) {
             connected = true;
-            report({ state: "connected" });
+            report({ state: "connected", engine });
           }
         } else {
           exited = true;
@@ -285,12 +294,16 @@ export function TerminalView({
           } else if (!exited) {
             sessionRef.current = session;
             onSession?.(tabKey, session.id);
+            if (session.engine) {
+              engine = { engine: session.engine, reason: session.engineReason ?? null };
+              if (connected) report({ state: "connected", engine });
+            }
             if (attaching) {
               // The replay was produced for whatever size the session had.
               session.resize(terminal.cols, terminal.rows);
               if (!connected) {
                 connected = true;
-                report({ state: "connected" });
+                report({ state: "connected", engine });
               }
             }
           }

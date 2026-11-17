@@ -76,6 +76,21 @@ export function SettingsPanel({
           </Row>
         </Group>
 
+        <Group title={t.sshEngine}>
+          <Row label={t.sshEngineLabel} hint={current.sshEngine === "russh" ? t.sshEngineRusshHint : t.sshEngineOpensshHint}>
+            <Segmented
+              size="sm"
+              value={current.sshEngine}
+              onChange={(sshEngine) => update({ sshEngine })}
+              label={t.sshEngineLabel}
+              options={[
+                { value: "openssh", label: t.engineOpenssh },
+                { value: "russh", label: t.engineBuiltin },
+              ]}
+            />
+          </Row>
+        </Group>
+
         <Group title={t.terminal}>
           <Row label={t.fontSize}>
             <div className="flex items-center gap-1">

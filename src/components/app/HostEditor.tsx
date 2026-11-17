@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Overlay } from "@/components/ui/overlay";
 import { Segmented } from "@/components/ui/segmented";
-import { deleteHost, hostColor, saveHost, type Group, type Host, type HostFields } from "@/lib/backend";
+import { deleteHost, hostColor, saveHost, type EnginePreference, type Group, type Host, type HostFields } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -159,6 +159,19 @@ export function HostEditor({
               className="font-mono"
               spellCheck={false}
             />
+          </Field>
+
+          <Field label={t.hostEngine} hint={t.optional}>
+            <select
+              aria-label={t.hostEngine}
+              value={fields.engine ?? "auto"}
+              onChange={(event) => set("engine", event.target.value as EnginePreference)}
+              className="h-9 w-full rounded-sm bg-fill-1 px-3 text-callout text-label-1 outline-none focus-visible:ring-2 focus-visible:ring-(--accent)"
+            >
+              <option value="auto">{t.engineAuto}</option>
+              <option value="russh">{t.engineBuiltin}</option>
+              <option value="openssh">{t.engineOpenssh}</option>
+            </select>
           </Field>
 
           <div className="grid grid-cols-2 gap-3">

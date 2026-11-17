@@ -10,7 +10,7 @@ use crate::daemon::DaemonState;
 use easyssh_core::security::{validate_alias, validate_connection};
 use easyssh_core::{
     scan_default_ssh_config, AppConfig, ConfigStore, Connection, ConnectionTarget,
-    ExternalTerminal, Group, OpenSsh, SshInvocation,
+    EnginePreference, ExternalTerminal, Group, OpenSsh, SshInvocation,
 };
 use easysshd::link::{Link, LinkError};
 use serde::{Deserialize, Serialize};
@@ -58,6 +58,9 @@ pub struct HostFields {
     pub port: u16,
     pub proxy_jump: Option<String>,
     pub notes: String,
+    /// Per-host engine override; `None` follows the global setting.
+    #[serde(default)]
+    pub engine: Option<EnginePreference>,
 }
 
 #[derive(Debug, Serialize)]
@@ -119,6 +122,7 @@ fn fields_of(connection: &Connection) -> HostFields {
     let mut fields = HostFields {
         proxy_jump: connection.proxy_jump.clone(),
         notes: connection.notes.clone(),
+        engine: connection.engine,
         port: 22,
         ..HostFields::default()
     };
@@ -206,6 +210,9 @@ fn apply(
     connection.color = trimmed(input.color.as_deref());
     connection.proxy_jump = trimmed(fields.proxy_jump.as_deref());
     connection.notes = fields.notes.trim().to_owned();
+    connection.engine = fields
+        .engine
+        .filter(|engine| *engine != EnginePreference::Auto);
     validate_connection(connection).map_err(|error| error.to_string())?;
     if let Some(jump) = &connection.proxy_jump {
         validate_alias(jump).map_err(|error| error.to_string())?;

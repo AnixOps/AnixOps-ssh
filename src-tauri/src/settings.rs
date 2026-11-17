@@ -1,7 +1,7 @@
 //! App settings and a check of the local OpenSSH setup.
 
 use crate::hosts::{load_config, save_config};
-use easyssh_core::{scan_default_ssh_config, Locale, OpenSsh, Theme};
+use easyssh_core::{scan_default_ssh_config, Locale, OpenSsh, SshEngine, Theme};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -11,6 +11,9 @@ pub struct Settings {
     locale: Locale,
     terminal_font_size: f32,
     terminal_scrollback: usize,
+    /// `openssh` (default) or `russh`.
+    #[serde(default)]
+    ssh_engine: SshEngine,
 }
 
 #[tauri::command]
@@ -21,6 +24,7 @@ pub fn settings_get() -> Result<Settings, String> {
         locale: config.locale,
         terminal_font_size: config.terminal.font_size,
         terminal_scrollback: config.terminal.scrollback_lines,
+        ssh_engine: config.ssh_engine.unwrap_or_default(),
     })
 }
 
@@ -37,6 +41,11 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     config.locale = settings.locale;
     config.terminal.font_size = settings.terminal_font_size;
     config.terminal.scrollback_lines = settings.terminal_scrollback;
+    // Absent means openssh, so an unchanged default stays out of the file.
+    config.ssh_engine = match settings.ssh_engine {
+        SshEngine::Openssh if config.ssh_engine.is_none() => None,
+        engine => Some(engine),
+    };
     save_config(&config)
 }
 

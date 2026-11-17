@@ -85,6 +85,9 @@ export function TabBar({
               >
                 <TabIcon tab={tab} />
                 <span className="truncate">{tab.title}</span>
+                {tab.hostId !== null && tab.status.state === "connected" && tab.status.engine && (
+                  <EngineBadge engine={tab.status.engine.engine} reason={tab.status.engine.reason} />
+                )}
                 {scopeOf(broadcast, tab.key) && (
                   <Radio className="size-3.5 shrink-0 text-warning" strokeWidth={1.5} aria-label={t.broadcastingTab} />
                 )}
@@ -165,6 +168,22 @@ export function TabBar({
         </Tooltip>
       )}
     </div>
+  );
+}
+
+/** Which SSH engine runs the tab, with the reason on hover. */
+function EngineBadge({ engine, reason }: { engine: "openssh" | "russh"; reason: string | null }) {
+  const name = engine === "russh" ? t.engineBuiltin : t.engineOpenssh;
+  return (
+    <Tooltip label={reason ? `${name}: ${reason}` : name}>
+      <span
+        role="img"
+        aria-label={`${t.sshEngineLabel}: ${name}`}
+        className="shrink-0 rounded-xs bg-fill-1 px-1 text-caption font-normal text-label-2"
+      >
+        {engine === "russh" ? t.engineBadgeBuiltin : t.engineBadgeOpenssh}
+      </span>
+    </Tooltip>
   );
 }
 

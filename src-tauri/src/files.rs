@@ -1,28 +1,146 @@
 //! File pane commands: browsing through a long-lived `sftp` per pane, and
 //! transfers in their own `sftp` processes so each can be cancelled.
 
+use crate::daemon::{self, DaemonState};
 use crate::{askpass, hosts};
-use easyssh_core::sftp::{self, RemoteFile, SftpSession};
+use easyssh_core::sftp::{self, RemoteFile, RemoteFileKind, SftpSession};
 use easyssh_core::{OpenSsh, OpenSshError};
 use serde::Serialize;
-use std::collections::HashMap;
+use serde_json::json;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{ipc::Channel, AppHandle, State};
+use tauri::{ipc::Channel, AppHandle, Manager, State};
 
 struct RunningTransfer {
     child: Mutex<Child>,
     cancelled: AtomicBool,
 }
 
+/// Transfers the daemon runs (built-in engine): where their events go.
+#[derive(Default)]
+struct RemoteTransfers {
+    channels: HashMap<String, (Channel<TransferEvent>, String)>,
+    /// Events that arrived before the transfer was registered.
+    early: HashMap<String, Vec<TransferEvent>>,
+}
+
 #[derive(Default)]
 pub struct Files {
     sessions: Mutex<HashMap<String, Arc<Mutex<SftpSession>>>>,
     transfers: Mutex<HashMap<String, Arc<RunningTransfer>>>,
+    /// File sessions that live in the daemon.
+    remote_sessions: Mutex<HashSet<String>>,
+    remote_transfers: Mutex<RemoteTransfers>,
+}
+
+impl Files {
+    fn is_remote(&self, id: &str) -> bool {
+        self.remote_sessions
+            .lock()
+            .map(|sessions| sessions.contains(id))
+            .unwrap_or(false)
+    }
+}
+
+fn is_final(event: &TransferEvent) -> bool {
+    !matches!(event, TransferEvent::Progress { .. })
+}
+
+/// Delivers a daemon transfer event to the pane that started it.
+pub fn remote_event(app: &AppHandle, transfer_id: &str, event: TransferEvent) {
+    let files = app.state::<Files>();
+    let Ok(mut transfers) = files.remote_transfers.lock() else {
+        return;
+    };
+    let target = transfers
+        .channels
+        .get(transfer_id)
+        .map(|(channel, sftp_id)| (channel.clone(), sftp_id.clone()));
+    let Some((channel, sftp_id)) = target else {
+        // The start reply has not been handled yet.
+        transfers
+            .early
+            .entry(transfer_id.to_owned())
+            .or_default()
+            .push(event);
+        return;
+    };
+    let _ = channel.send(event.clone());
+    if is_final(&event) {
+        transfers.channels.remove(transfer_id);
+        drop(transfers);
+        close_remote(app, &sftp_id);
+    }
+}
+
+/// The transfer's own file session is no longer needed.
+fn close_remote(app: &AppHandle, sftp_id: &str) {
+    let files = app.state::<Files>();
+    if let Ok(mut sessions) = files.remote_sessions.lock() {
+        sessions.remove(sftp_id);
+    }
+    if let Some(link) = app.state::<DaemonState>().link() {
+        let _ = link.post("sftp.close", json!({ "sftp_id": sftp_id }));
+    }
+}
+
+fn daemon_link(daemon: &DaemonState) -> Result<easysshd::link::Link, String> {
+    daemon
+        .link()
+        .ok_or_else(|| "the connection to the session daemon was lost".to_owned())
+}
+
+/// `ls -l` style permissions from an SFTP entry.
+fn mode_string(kind: RemoteFileKind, permissions: Option<u32>) -> String {
+    let mut text = String::from(match kind {
+        RemoteFileKind::Directory => 'd',
+        RemoteFileKind::File => '-',
+        RemoteFileKind::Symlink => 'l',
+        RemoteFileKind::Other => '?',
+    });
+    let bits = permissions.unwrap_or(0);
+    for (index, symbol) in "rwxrwxrwx".chars().enumerate() {
+        text.push(if bits & (1 << (8 - index)) != 0 {
+            symbol
+        } else {
+            '-'
+        });
+    }
+    text
+}
+
+/// A daemon `SftpEntry` as the file pane lists it.
+fn remote_file(entry: &serde_json::Value) -> RemoteFile {
+    let kind = match entry["kind"].as_str() {
+        Some("dir") => RemoteFileKind::Directory,
+        Some("file") => RemoteFileKind::File,
+        Some("symlink") => RemoteFileKind::Symlink,
+        _ => RemoteFileKind::Other,
+    };
+    let modified = entry["modified"]
+        .as_i64()
+        .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+        .map(|time| {
+            let local = time.with_timezone(&chrono::Local);
+            if (chrono::Utc::now() - time).num_days().abs() < 180 {
+                local.format("%b %e %H:%M").to_string()
+            } else {
+                local.format("%b %e  %Y").to_string()
+            }
+        })
+        .unwrap_or_default();
+    RemoteFile {
+        name: entry["name"].as_str().unwrap_or_default().to_owned(),
+        kind,
+        size: entry["size"].as_u64().unwrap_or(0),
+        modified,
+        permissions: mode_string(kind, entry["permissions"].as_u64().map(|p| p as u32)),
+    }
 }
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -75,8 +193,30 @@ pub struct OpenedFiles {
 pub async fn sftp_open(
     app: AppHandle,
     files: State<'_, Files>,
+    daemon: State<'_, DaemonState>,
     host_id: String,
 ) -> Result<OpenedFiles, String> {
+    // Hosts on the built-in engine browse through the daemon, on the
+    // connection the terminal already has.
+    if let Some(link) = daemon::russh_link(&daemon, &host_id).await {
+        match link
+            .request("sftp.open", json!({ "host_id": host_id }))
+            .await
+        {
+            Ok(answer) => {
+                let id = answer["sftp_id"].as_str().unwrap_or_default().to_owned();
+                let home = answer["home"].as_str().unwrap_or("/").to_owned();
+                files
+                    .remote_sessions
+                    .lock()
+                    .map_err(lock_error)?
+                    .insert(id.clone());
+                return Ok(OpenedFiles { id, home });
+            }
+            Err(error) if daemon::use_openssh(&error) => {}
+            Err(error) => return Err(error.message),
+        }
+    }
     let connection = hosts::connection(&host_id)?;
     let env = askpass::env_for(&app, &connection.name)?;
     let session = blocking(move || {
@@ -96,39 +236,99 @@ pub async fn sftp_open(
 #[tauri::command]
 pub async fn sftp_list(
     files: State<'_, Files>,
+    daemon: State<'_, DaemonState>,
     id: String,
     path: String,
 ) -> Result<Vec<RemoteFile>, String> {
+    if files.is_remote(&id) {
+        let answer = daemon_link(&daemon)?
+            .request("sftp.list", json!({ "sftp_id": id, "path": path }))
+            .await
+            .map_err(|error| error.message)?;
+        return Ok(answer["entries"]
+            .as_array()
+            .map(|entries| entries.iter().map(remote_file).collect())
+            .unwrap_or_default());
+    }
     on_session(&files, &id, move |session| session.list(&path)).await
 }
 
 #[tauri::command]
-pub async fn sftp_mkdir(files: State<'_, Files>, id: String, path: String) -> Result<(), String> {
+pub async fn sftp_mkdir(
+    files: State<'_, Files>,
+    daemon: State<'_, DaemonState>,
+    id: String,
+    path: String,
+) -> Result<(), String> {
+    if files.is_remote(&id) {
+        return daemon_link(&daemon)?
+            .request("sftp.mkdir", json!({ "sftp_id": id, "path": path }))
+            .await
+            .map(|_| ())
+            .map_err(|error| error.message);
+    }
     on_session(&files, &id, move |session| session.mkdir(&path)).await
 }
 
 #[tauri::command]
 pub async fn sftp_remove(
     files: State<'_, Files>,
+    daemon: State<'_, DaemonState>,
     id: String,
     path: String,
     directory: bool,
 ) -> Result<(), String> {
+    if files.is_remote(&id) {
+        return daemon_link(&daemon)?
+            .request(
+                "sftp.remove",
+                json!({ "sftp_id": id, "path": path, "directory": directory }),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| error.message);
+    }
     on_session(&files, &id, move |session| session.remove(&path, directory)).await
 }
 
 #[tauri::command]
 pub async fn sftp_rename(
     files: State<'_, Files>,
+    daemon: State<'_, DaemonState>,
     id: String,
     from: String,
     to: String,
 ) -> Result<(), String> {
+    if files.is_remote(&id) {
+        return daemon_link(&daemon)?
+            .request(
+                "sftp.rename",
+                json!({ "sftp_id": id, "from": from, "to": to }),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| error.message);
+    }
     on_session(&files, &id, move |session| session.rename(&from, &to)).await
 }
 
 #[tauri::command]
-pub fn sftp_close(files: State<'_, Files>, id: String) -> Result<(), String> {
+pub fn sftp_close(
+    files: State<'_, Files>,
+    daemon: State<'_, DaemonState>,
+    id: String,
+) -> Result<(), String> {
+    if files
+        .remote_sessions
+        .lock()
+        .map_err(lock_error)?
+        .remove(&id)
+    {
+        if let Some(link) = daemon.link() {
+            let _ = link.post("sftp.close", json!({ "sftp_id": id }));
+        }
+        return Ok(());
+    }
     files.sessions.lock().map_err(lock_error)?.remove(&id);
     Ok(())
 }
@@ -153,16 +353,17 @@ pub struct StartedTransfer {
 /// Uploads `local` into the remote directory `remote`, or downloads the
 /// remote path `remote` into the user's Downloads folder.
 #[tauri::command]
-pub fn transfer_start(
+#[allow(clippy::too_many_arguments)]
+pub async fn transfer_start(
     app: AppHandle,
     files: State<'_, Files>,
+    daemon: State<'_, DaemonState>,
     host_id: String,
     upload: bool,
     remote: String,
     local: Option<String>,
     events: Channel<TransferEvent>,
 ) -> Result<StartedTransfer, String> {
-    let connection = hosts::connection(&host_id)?;
     let (local, remote) = if upload {
         let local = PathBuf::from(local.ok_or("no local file was given")?);
         let name = local
@@ -178,6 +379,59 @@ pub fn transfer_start(
             .ok_or("the remote path has no file name")?;
         (unique_download_path(&safe_file_name(name))?, remote)
     };
+    if let Some(link) = daemon::russh_link(&daemon, &host_id).await {
+        // A file session of its own on the shared connection, closed when
+        // the transfer ends.
+        match link
+            .request("sftp.open", json!({ "host_id": host_id }))
+            .await
+        {
+            Ok(opened) => {
+                let sftp_id = opened["sftp_id"].as_str().unwrap_or_default().to_owned();
+                let started = link
+                    .request(
+                        "transfer.start",
+                        json!({
+                            "sftp_id": sftp_id,
+                            "direction": if upload { "upload" } else { "download" },
+                            "local_path": local.to_string_lossy(),
+                            "remote_path": remote,
+                            "recursive": true,
+                        }),
+                    )
+                    .await;
+                let started = match started {
+                    Ok(started) => started,
+                    Err(error) => {
+                        let _ = link.post("sftp.close", json!({ "sftp_id": sftp_id }));
+                        return Err(error.message);
+                    }
+                };
+                let id = started["transfer_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                let early = {
+                    let mut transfers = files.remote_transfers.lock().map_err(lock_error)?;
+                    transfers
+                        .channels
+                        .insert(id.clone(), (events.clone(), sftp_id.clone()));
+                    transfers.early.remove(&id).unwrap_or_default()
+                };
+                for event in early {
+                    remote_event(&app, &id, event);
+                }
+                return Ok(StartedTransfer {
+                    id,
+                    local: local.to_string_lossy().into_owned(),
+                    remote,
+                });
+            }
+            Err(error) if daemon::use_openssh(&error) => {}
+            Err(error) => return Err(error.message),
+        }
+    }
+    let connection = hosts::connection(&host_id)?;
     let env = askpass::env_for(&app, &connection.name)?;
     let mut child = sftp::spawn_transfer(&OpenSsh, &connection, upload, &local, &remote, &env)
         .map_err(|error| error.to_string())?;
@@ -269,7 +523,23 @@ fn watch(
 }
 
 #[tauri::command]
-pub fn transfer_cancel(files: State<'_, Files>, id: String) -> Result<(), String> {
+pub fn transfer_cancel(
+    files: State<'_, Files>,
+    daemon: State<'_, DaemonState>,
+    id: String,
+) -> Result<(), String> {
+    let remote = files
+        .remote_transfers
+        .lock()
+        .map_err(lock_error)?
+        .channels
+        .contains_key(&id);
+    if remote {
+        if let Some(link) = daemon.link() {
+            let _ = link.post("transfer.cancel", json!({ "transfer_id": id }));
+        }
+        return Ok(());
+    }
     let transfer = files.transfers.lock().map_err(lock_error)?.remove(&id);
     if let Some(transfer) = transfer {
         transfer.cancelled.store(true, Ordering::Relaxed);
@@ -333,7 +603,26 @@ fn unique_download_path(name: &str) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::safe_file_name;
+    use super::{mode_string, remote_file, safe_file_name, RemoteFileKind};
+
+    #[test]
+    fn daemon_entries_look_like_ls_listings() {
+        assert_eq!(
+            mode_string(RemoteFileKind::Directory, Some(0o755)),
+            "drwxr-xr-x"
+        );
+        assert_eq!(mode_string(RemoteFileKind::File, Some(0o640)), "-rw-r-----");
+        assert_eq!(mode_string(RemoteFileKind::File, None), "----------");
+        let file = remote_file(&serde_json::json!({
+            "name": "a.txt", "kind": "file", "size": 12,
+            "modified": 1_700_000_000, "permissions": 420
+        }));
+        assert_eq!(file.name, "a.txt");
+        assert_eq!(file.kind, RemoteFileKind::File);
+        assert_eq!(file.size, 12);
+        assert_eq!(file.permissions, "-rw-r--r--");
+        assert!(!file.modified.is_empty());
+    }
 
     #[test]
     fn remote_names_cannot_escape_the_downloads_folder() {

@@ -66,7 +66,8 @@ fn main() {
             files::sftp_close,
             files::transfer_start,
             files::transfer_cancel,
-            askpass::askpass_reply
+            askpass::askpass_reply,
+            daemon::hostkey_reply
         ])
         .setup(|app| {
             daemon::start(app.handle());
@@ -78,6 +79,7 @@ fn main() {
             // Background ssh processes do not end with the window on their own.
             if let tauri::RunEvent::Exit = event {
                 app.state::<tunnels::Tunnels>().stop_all();
+                tunnels::stop_remote(app);
             }
         });
 }

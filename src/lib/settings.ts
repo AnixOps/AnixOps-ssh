@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { isTauri } from "./backend";
+import { isTauri, type SshEngine } from "./backend";
 import { readMirror, writeMirror, type LocaleSetting, type ThemeSetting } from "./prefsMirror";
 
 export interface Settings {
@@ -7,10 +7,12 @@ export interface Settings {
   locale: LocaleSetting;
   terminalFontSize: number;
   terminalScrollback: number;
+  /** The SSH engine for hosts that follow the global setting. */
+  sshEngine: SshEngine;
 }
 
 const mirror = readMirror();
-let current: Settings = { ...mirror, terminalFontSize: 13, terminalScrollback: 10000 };
+let current: Settings = { ...mirror, terminalFontSize: 13, terminalScrollback: 10000, sshEngine: "openssh" };
 const listeners = new Set<(settings: Settings) => void>();
 
 /** `data-theme` overrides the system choice; none follows the system. */

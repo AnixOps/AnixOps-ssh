@@ -2,11 +2,12 @@
 //! reported to the frontend through the `tunnel-status` event.
 
 use crate::askpass;
+use crate::daemon::{self, DaemonState};
 use crate::hosts::{self, load_config, save_config};
 use easyssh_core::tunnel::spawn_tunnel;
 use easyssh_core::{OpenSsh, Tunnel, TunnelKind};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::process::Child;
@@ -43,6 +44,8 @@ struct RunningTunnel {
 #[derive(Default)]
 pub struct Tunnels {
     running: Mutex<HashMap<String, Arc<RunningTunnel>>>,
+    /// Tunnels that run in the daemon (built-in engine).
+    remote: Mutex<HashSet<String>>,
     statuses: Mutex<HashMap<String, TunnelStatus>>,
 }
 
@@ -91,7 +94,7 @@ fn lock_error<T>(_: T) -> String {
     "tunnel state is unavailable".to_owned()
 }
 
-fn emit(app: &AppHandle, id: &str, status: TunnelStatus) {
+pub(crate) fn emit(app: &AppHandle, id: &str, status: TunnelStatus) {
     if let Ok(mut statuses) = app.state::<Tunnels>().statuses.lock() {
         statuses.insert(id.to_owned(), status.clone());
     }
@@ -102,6 +105,51 @@ fn emit(app: &AppHandle, id: &str, status: TunnelStatus) {
             status,
         },
     );
+}
+
+/// A status the daemon reported for one of its tunnels.
+pub fn remote_status(app: &AppHandle, status: easysshd::link::TunnelStatus) {
+    let tunnels = app.state::<Tunnels>();
+    let next = match status.state.as_str() {
+        "starting" => TunnelStatus::Starting,
+        "running" => TunnelStatus::Running,
+        "stopped" => TunnelStatus::Stopped,
+        _ => TunnelStatus::Failed {
+            message: status
+                .error
+                .unwrap_or_else(|| "the tunnel stopped".to_owned()),
+        },
+    };
+    if let Ok(mut remote) = tunnels.remote.lock() {
+        match next {
+            TunnelStatus::Starting | TunnelStatus::Running => {
+                remote.insert(status.id.clone());
+            }
+            _ => {
+                remote.remove(&status.id);
+            }
+        }
+    }
+    emit(app, &status.id, next);
+}
+
+/// Stops the daemon's tunnels when the app exits (they belong to the app).
+pub fn stop_remote(app: &AppHandle) {
+    let ids: Vec<String> = app
+        .state::<Tunnels>()
+        .remote
+        .lock()
+        .map(|remote| remote.iter().cloned().collect())
+        .unwrap_or_default();
+    let Some(link) = app.state::<DaemonState>().link() else {
+        return;
+    };
+    for id in ids {
+        let _ = tauri::async_runtime::block_on(tokio::time::timeout(
+            Duration::from_secs(2),
+            link.request("tunnel.stop", serde_json::json!({ "id": id })),
+        ));
+    }
 }
 
 #[tauri::command]
@@ -170,15 +218,15 @@ pub fn tunnel_save(input: TunnelInput) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn tunnel_delete(app: AppHandle, id: String) -> Result<(), String> {
-    tunnel_stop(app, id.clone())?;
+pub async fn tunnel_delete(app: AppHandle, id: String) -> Result<(), String> {
+    tunnel_stop(app, id.clone()).await?;
     let mut config = load_config()?;
     config.tunnels.retain(|tunnel| tunnel.id != id);
     save_config(&config)
 }
 
 #[tauri::command]
-pub fn tunnel_start(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn tunnel_start(app: AppHandle, id: String) -> Result<(), String> {
     let tunnels = app.state::<Tunnels>();
     if tunnels
         .running
@@ -193,6 +241,26 @@ pub fn tunnel_start(app: AppHandle, id: String) -> Result<(), String> {
         .into_iter()
         .find(|tunnel| tunnel.id == id)
         .ok_or("unknown tunnel")?;
+    if tunnels.remote.lock().map_err(lock_error)?.contains(&id) {
+        return Ok(());
+    }
+    // Hosts on the built-in engine run the tunnel in the daemon, on the
+    // connection the terminal already has.
+    let daemon_state = app.state::<DaemonState>();
+    if let Some(link) = daemon::russh_link(&daemon_state, &tunnel.host_id).await {
+        match link
+            .request("tunnel.start", serde_json::json!({ "tunnel": tunnel }))
+            .await
+        {
+            Ok(_) => {
+                tunnels.remote.lock().map_err(lock_error)?.insert(id);
+                return Ok(());
+            }
+            Err(error) if error.code == "already_running" => return Ok(()),
+            Err(error) if daemon::use_openssh(&error) => {}
+            Err(error) => return Err(error.message),
+        }
+    }
     let connection = hosts::connection(&tunnel.host_id)?;
     let env = askpass::env_for(&app, &connection.name)?;
     let mut child =
@@ -290,7 +358,22 @@ fn probe_address(tunnel: &Tunnel) -> Option<SocketAddr> {
 }
 
 #[tauri::command]
-pub fn tunnel_stop(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn tunnel_stop(app: AppHandle, id: String) -> Result<(), String> {
+    let is_remote = app
+        .state::<Tunnels>()
+        .remote
+        .lock()
+        .map_err(lock_error)?
+        .contains(&id);
+    if is_remote {
+        if let Some(link) = app.state::<DaemonState>().link() {
+            return link
+                .request("tunnel.stop", serde_json::json!({ "id": id }))
+                .await
+                .map(|_| ())
+                .map_err(|error| error.message);
+        }
+    }
     let running = app
         .state::<Tunnels>()
         .running
