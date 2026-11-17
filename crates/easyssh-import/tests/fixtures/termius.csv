@@ -1,0 +1,5 @@
+Groups,Label,Tags,Hostname/IP,Protocol,Port,Username,Password,SSH Key
+Prod/Web,web1,"blue,eu",web1.example.com,ssh,2222,alice,not-a-real-secret,
+Prod,db,,192.0.2.20,ssh,,dbadmin,,my-key
+,ftp,,192.0.2.21,telnet,23,,,
+,v6,,2001:db8::4,,70000,,,
