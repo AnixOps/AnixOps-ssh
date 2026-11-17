@@ -874,20 +874,36 @@
       "type": "object",
       "properties": {
         "schema_version": {
-          "$ref": "#/$defs/SchemaVersion"
+          "type": "integer",
+          "minimum": 0,
+          "description": "The protocol schema version the client speaks. A daemon that speaks another version answers with the `schema_mismatch` error."
+        },
+        "app_version": {
+          "type": "string",
+          "description": "Build version of the client application. The app compares the daemon's `app_version` with its own and asks a daemon from another build to drain (`daemon.shutdown_when_idle`)."
         }
       },
       "required": [
         "schema_version"
       ],
       "additionalProperties": false,
-      "description": "Command `proto.hello` payload. Reply: ProtoHelloResult."
+      "description": "Command `proto.hello` payload. Reply: ProtoHelloResult, or the error `schema_mismatch`."
     },
     "ProtoHelloResult": {
       "type": "object",
       "properties": {
         "schema_version": {
-          "$ref": "#/$defs/SchemaVersion"
+          "type": "integer",
+          "minimum": 0,
+          "description": "The protocol schema version the daemon speaks."
+        },
+        "app_version": {
+          "type": "string",
+          "description": "Build version of the daemon (the application executable it runs from)."
+        },
+        "draining": {
+          "type": "boolean",
+          "description": "True once the daemon was asked to exit when its sessions end; it refuses new sessions."
         }
       },
       "required": [
@@ -929,6 +945,10 @@
       "properties": {
         "connection": {
           "$ref": "#/$defs/Connection"
+        },
+        "group": {
+          "$ref": "#/$defs/Group",
+          "description": "A group to create when no group with this id exists yet; `connection.group_id` may refer to it."
         }
       },
       "required": [
@@ -984,6 +1004,10 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 65535
+        },
+        "ssh_auth_sock": {
+          "type": "string",
+          "description": "The client's current SSH_AUTH_SOCK, so the session uses the agent of the user's current login. Must be an absolute path to a socket owned by the daemon's user; otherwise it is ignored. Ignored on Windows."
         }
       },
       "required": [
@@ -1324,6 +1348,48 @@
       ],
       "additionalProperties": false,
       "description": "Event `askpass.prompt` payload."
+    },
+    "DaemonShutdownWhenIdleParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `daemon.shutdown_when_idle` payload. The daemon refuses new sessions (error `draining`) and exits once no session is running, even if clients stay connected. Reply: DaemonShutdownWhenIdleResult."
+    },
+    "DaemonShutdownWhenIdleResult": {
+      "type": "object",
+      "properties": {
+        "running_sessions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sessions still running; the daemon exits when this reaches 0."
+        }
+      },
+      "required": [
+        "running_sessions"
+      ],
+      "additionalProperties": false
+    },
+    "HostsChangedEvent": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Event `hosts.changed` payload. Sent to every connected client after `hosts.save` or `hosts.delete`; clients refresh their host list."
+    },
+    "AskpassResolvedEvent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false,
+      "description": "Event `askpass.resolved` payload. The prompt `id` was answered, cancelled or timed out; clients close any dialog for it."
     }
   }
 }
