@@ -188,7 +188,8 @@ themselves (we may also offer a hosted one).
 
 Crash reports are asked for on first start and can be turned off.
 Anonymous usage statistics are off unless the user turns them on. Terminal
-content, host names and addresses are never collected.
+content, host names and addresses are never collected. Details, field list and
+self-hosting: [telemetry.md](telemetry.md).
 
 ## 11. Compatibility
 

@@ -136,6 +136,7 @@ pub async fn session_open(
     rows: u16,
     events: Channel<SessionEvent>,
 ) -> Result<String, String> {
+    crate::telemetry::record_session();
     if let Some(supervisor) = daemon.supervisor().filter(|s| s.accepts_new_sessions()) {
         match supervisor
             .open_session(host_id.as_deref(), cols, rows, sink_for(events.clone()))

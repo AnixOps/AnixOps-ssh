@@ -11,11 +11,14 @@ mod hosts;
 mod sessions;
 mod settings;
 mod snippets;
+mod telemetry;
 mod tunnels;
 
 fn main() {
     // OpenSSH starts this executable to ask for a password; see askpass.rs.
     askpass::run_helper_if_requested();
+    // Crash capture first, so a panic in the daemon below is caught too.
+    telemetry::init();
     // Or, with `--easysshd`, the background session daemon; see daemon.rs.
     daemon::run_if_requested();
 
@@ -45,6 +48,10 @@ fn main() {
             settings::settings_get,
             settings::settings_save,
             settings::ssh_status,
+            telemetry::telemetry_status,
+            telemetry::telemetry_pending,
+            telemetry::telemetry_delete_pending,
+            telemetry::telemetry_report_frontend,
             backup::config_export,
             backup::config_import,
             backup::sync_get,
@@ -70,6 +77,7 @@ fn main() {
         ])
         .setup(|app| {
             daemon::start(app.handle());
+            telemetry::start_background();
             Ok(())
         })
         .build(tauri::generate_context!())
