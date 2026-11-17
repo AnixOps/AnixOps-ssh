@@ -6,6 +6,7 @@ use crate::session::{decode_nonce, encode_nonce, random_bytes, Role, Secret, Ses
 use crate::transport::Conn;
 use serde_json::{json, Value};
 use std::time::Duration;
+use tokio::io::{ReadHalf, WriteHalf};
 use tokio::time::timeout;
 
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -15,7 +16,52 @@ pub struct Channel {
     session: Session,
 }
 
+/// The receiving half of a split [`Channel`].
+pub struct ChannelReader {
+    io: ReadHalf<Conn>,
+    session: Session,
+}
+
+/// The sending half of a split [`Channel`].
+pub struct ChannelWriter {
+    io: WriteHalf<Conn>,
+    session: Session,
+}
+
+impl ChannelReader {
+    pub async fn recv(&mut self) -> Result<Value> {
+        let body = read_frame(&mut self.io, MAX_FRAME).await?;
+        let json = self.session.open(&body)?;
+        Ok(serde_json::from_slice(json)?)
+    }
+}
+
+impl ChannelWriter {
+    pub async fn send(&mut self, v: &Value) -> Result<()> {
+        let json = serde_json::to_vec(v)?;
+        let body = self.session.seal(&json);
+        write_frame(&mut self.io, &body).await
+    }
+}
+
 impl Channel {
+    /// Split into independent halves so one task can read while another
+    /// writes. Reading is not cancel-safe, so the reader must not be used
+    /// inside `select!` against other futures that may win.
+    pub fn into_split(self) -> (ChannelReader, ChannelWriter) {
+        let (r, w) = tokio::io::split(self.io);
+        (
+            ChannelReader {
+                io: r,
+                session: self.session.clone(),
+            },
+            ChannelWriter {
+                io: w,
+                session: self.session,
+            },
+        )
+    }
+
     pub async fn send(&mut self, v: &Value) -> Result<()> {
         let json = serde_json::to_vec(v)?;
         let body = self.session.seal(&json);

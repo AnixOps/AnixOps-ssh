@@ -2,20 +2,27 @@
 //!
 //! See the crate README for the threat model and wire format.
 
+pub mod askpass;
 pub mod channel;
 mod client;
+pub mod daemon;
 mod error;
 pub mod frame;
+pub mod launch;
+pub mod link;
 mod platform;
 pub mod runtime;
 mod server;
+pub mod service;
 pub mod session;
+pub mod terminal;
 pub mod transport;
 
 pub use client::Client;
 pub use error::{Error, Result};
 pub use runtime::{default_runtime_dir, Paths};
-pub use server::{handler, Handler, Server};
+pub use server::{handler, BoxFuture, Handler, Outbox, Server, Service};
+pub use service::{Daemon, DaemonConfig};
 
 /// Built-in handler: `{"type":"ping"}` is answered with `{"type":"pong"}`.
 pub fn builtin_handler() -> Handler {

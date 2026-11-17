@@ -1,62 +1,57 @@
-use easysshd::{builtin_handler, default_runtime_dir, Server};
+use easysshd::daemon::{run_blocking, Options};
+use easysshd::{default_runtime_dir, DaemonConfig};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
-fn parse_args() -> Result<PathBuf, String> {
+const USAGE: &str = "usage: easysshd [--runtime-dir <path>] [--config <connections.json>] [--idle-timeout-secs <n>]";
+
+fn parse_args() -> Result<Options, String> {
     let mut dir = None;
+    let mut config = DaemonConfig::for_current_user().map_err(|e| e.to_string())?;
     let mut args = std::env::args_os().skip(1);
     while let Some(a) = args.next() {
-        match a.to_str() {
-            Some("--runtime-dir") => {
-                dir = Some(PathBuf::from(
-                    args.next().ok_or("--runtime-dir needs a path")?,
-                ));
+        let name = a.to_string_lossy().into_owned();
+        match name.as_str() {
+            "--runtime-dir" | "--config" | "--idle-timeout-secs" => {
+                let v = args.next().ok_or(format!("{name} needs a value"))?;
+                match name.as_str() {
+                    "--runtime-dir" => dir = Some(PathBuf::from(v)),
+                    "--config" => config.config_store = easyssh_core::ConfigStore::at(v),
+                    _ => {
+                        let secs: u64 = v
+                            .to_str()
+                            .and_then(|s| s.parse().ok())
+                            .ok_or("--idle-timeout-secs needs a number")?;
+                        config.idle_timeout = Duration::from_secs(secs);
+                    }
+                }
             }
-            Some("-h") | Some("--help") => {
-                return Err("usage: easysshd [--runtime-dir <path>]".into());
-            }
-            _ => {
-                return Err(format!(
-                    "unknown argument {a:?}\nusage: easysshd [--runtime-dir <path>]"
-                ))
-            }
+            "-h" | "--help" => return Err(USAGE.into()),
+            _ => return Err(format!("unknown argument {a:?}\n{USAGE}")),
         }
     }
-    Ok(dir.unwrap_or_else(default_runtime_dir))
+    Ok(Options {
+        runtime_dir: dir.unwrap_or_else(default_runtime_dir),
+        config,
+    })
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    let dir = match parse_args() {
-        Ok(d) => d,
+fn main() -> ExitCode {
+    // OpenSSH may start this executable as its askpass helper.
+    easysshd::askpass::run_helper_if_requested();
+    let options = match parse_args() {
+        Ok(o) => o,
         Err(m) => {
             eprintln!("{m}");
             return ExitCode::from(2);
         }
     };
-    let server = match Server::start(&dir, builtin_handler()) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("easysshd: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    eprintln!("easysshd: listening, runtime dir {}", dir.display());
-    let shutdown = async {
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{signal, SignalKind};
-            if let Ok(mut term) = signal(SignalKind::terminate()) {
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {}
-                    _ = term.recv() => {}
-                }
-                return;
-            }
-        }
-        let _ = tokio::signal::ctrl_c().await;
-    };
-    match server.serve(shutdown).await {
+    eprintln!(
+        "easysshd: starting, runtime dir {}",
+        options.runtime_dir.display()
+    );
+    match run_blocking(options) {
         Ok(()) => {
             eprintln!("easysshd: shut down");
             ExitCode::SUCCESS

@@ -5,6 +5,7 @@ use tauri::Manager;
 
 mod askpass;
 mod backup;
+mod daemon;
 mod files;
 mod hosts;
 mod sessions;
@@ -15,11 +16,14 @@ mod tunnels;
 fn main() {
     // OpenSSH starts this executable to ask for a password; see askpass.rs.
     askpass::run_helper_if_requested();
+    // Or, with `--easysshd`, the background session daemon; see daemon.rs.
+    daemon::run_if_requested();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .manage(daemon::DaemonState::default())
         .manage(sessions::Sessions::default())
         .manage(files::Files::default())
         .manage(askpass::Askpass::default())
@@ -51,6 +55,9 @@ fn main() {
             sessions::session_write,
             sessions::session_resize,
             sessions::session_close,
+            sessions::sessions_list,
+            sessions::session_attach,
+            sessions::session_detach,
             files::sftp_open,
             files::sftp_list,
             files::sftp_mkdir,
@@ -61,6 +68,10 @@ fn main() {
             files::transfer_cancel,
             askpass::askpass_reply
         ])
+        .setup(|app| {
+            daemon::start(app.handle());
+            Ok(())
+        })
         .build(tauri::generate_context!())
         .expect("failed to build AnixOps SSH")
         .run(|app, event| {

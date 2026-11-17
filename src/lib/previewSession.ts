@@ -77,6 +77,9 @@ export function previewSession(
       }
     },
     resize() {},
+    detach() {
+      closed = true;
+    },
     close() {
       closed = true;
     },
