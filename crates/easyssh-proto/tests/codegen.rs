@@ -37,7 +37,10 @@ fn generated_types_are_up_to_date() {
         std::fs::write(&path, expected).unwrap();
         return;
     }
-    let actual = std::fs::read_to_string(&path).unwrap_or_default();
+    // A Windows checkout may turn LF into CRLF; compare content, not line ends.
+    let actual = std::fs::read_to_string(&path)
+        .unwrap_or_default()
+        .replace("\r\n", "\n");
     assert!(
         actual == expected,
         "src/generated.rs is stale; run `UPDATE_PROTO=1 cargo test -p easyssh-proto --test codegen`"
