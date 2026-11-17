@@ -1,0 +1,50 @@
+{
+  "account_ed25519_public_hex": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
+  "cert": {
+    "bytes_hex": "01ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c000000006553f1000000000d41696b6f2773206c6170746f7057965b5b4a2d8a24613ba2561b59b1853d29852c41be63844a71193448c6979fac3af6c97d9a0d4495757903139bf06874a38de23947ef8029df9df77cf96001",
+    "device_name": "Aiko's laptop",
+    "issued_at": 1700000000
+  },
+  "device_public_hex": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+  "device_seed_hex": "0707070707070707070707070707070707070707070707070707070707070707",
+  "envelopes": [
+    {
+      "ciphertext_hex": "deadbeef",
+      "deleted": false,
+      "record_id": "rec-1",
+      "signature_hex": "933638d9aece5d60e499fd93f8c44ac2694266934aa446a76a18ccda091f331324a571077391b4964c0fa83ccbae949bbf03c089f0e63aa7913668da56e24d0e",
+      "signer_hex": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+      "signing_bytes_hex": "656173797373682f76312f656e76656c6f7065000000057265632d31000000077661756c742d3100000002000000086465766963652d610000000000000005000000086465766963652d6200000000000000020000000004deadbeefea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+      "vault_id": "vault-1",
+      "version_vector": [
+        [
+          "device-a",
+          5
+        ],
+        [
+          "device-b",
+          2
+        ]
+      ]
+    },
+    {
+      "ciphertext_hex": "",
+      "deleted": true,
+      "record_id": "rec-1",
+      "signature_hex": "e11b8901e12927d82337f42a0dfdbc679ede04c66c7176272e1b1697c558464a4b15427dbddf95c8ac0810ce1ba24c7a070783f02e88babeb9c2bbb15aee0b07",
+      "signer_hex": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+      "signing_bytes_hex": "656173797373682f76312f656e76656c6f7065000000057265632d31000000077661756c742d3100000002000000086465766963652d610000000000000005000000086465766963652d6200000000000000020100000000ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+      "vault_id": "vault-1",
+      "version_vector": [
+        [
+          "device-a",
+          5
+        ],
+        [
+          "device-b",
+          2
+        ]
+      ]
+    }
+  ]
+}

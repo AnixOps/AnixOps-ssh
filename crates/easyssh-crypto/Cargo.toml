@@ -1,0 +1,30 @@
+[package]
+name = "easyssh-crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Local cryptographic building blocks for EasySSH v2: keys, record encryption, signed sync envelopes"
+
+[features]
+default = []
+# OS keychain backed KeyStore (Windows Credential Manager, macOS Keychain, Secret Service).
+os-keyring = ["dep:keyring"]
+
+[dependencies]
+argon2 = "0.6"
+chacha20poly1305 = "0.11"
+ed25519-dalek = "3"
+getrandom = "0.4"
+hkdf = "0.13"
+keyring = { version = "4", optional = true }
+sha2 = "0.11"
+subtle = "2"
+thiserror.workspace = true
+x25519-dalek = { version = "3", features = ["static_secrets"] }
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+hex = "0.4"
+serde.workspace = true
+serde_json.workspace = true
