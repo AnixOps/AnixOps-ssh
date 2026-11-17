@@ -1,0 +1,37 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\Default%20Settings]
+"HostName"=""
+"Protocol"="ssh"
+
+[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\Web%20Server]
+"HostName"="alice@web.example.com"
+"Protocol"="ssh"
+"PortNumber"=dword:00000016
+"UserName"="ignored"
+"PublicKeyFile"="C:\\Users\\example\\keys\\web.ppk"
+
+[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\Prod%2FDatabase%20%231]
+"HostName"="192.0.2.30"
+"Protocol"="ssh"
+"PortNumber"=dword:000008ae
+"UserName"="dbadmin"
+"ProxyMethod"=dword:00000005
+"ProxyTelnetCommand"="plink -load jump -nc %host:%port"
+"ProxyPassword"="not-a-real-secret"
+"SomeBinary"=hex:01,02,03,\
+  04,05
+
+[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\Serial%20Console]
+"HostName"="COM1"
+"Protocol"="serial"
+
+[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\No%20Host]
+"Protocol"="ssh"
+
+[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\Bad%20Port]
+"HostName"="2001:db8::5"
+"PortNumber"=dword:00fffff0
+
+[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\SshHostKeys]
+"rsa2@22:example.com"="0x10001,0xabc"
