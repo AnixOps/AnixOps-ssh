@@ -1,7 +1,7 @@
 # Architecture v2
 
-Status: **proposal, waiting for the owner's approval**. Nothing here is built
-yet; the shipped app is still the v1 design described in the README.
+Status: **approved 2026-11-17 and shipped in 2.0.0**, except FIDO2 security
+keys and the mobile app, which follow in 2.x.
 
 v1 is a thin, careful shell over the system OpenSSH. v2 keeps that care but
 changes what the product is: an open-source, local-first, end-to-end
