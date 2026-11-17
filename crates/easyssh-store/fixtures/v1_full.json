@@ -1,0 +1,146 @@
+{
+  "schema_version": 7,
+  "connections": [
+    {
+      "id": "7d9b3a52-1c40-4c8e-8a53-0f6b9d2c1e01",
+      "name": "Production DB",
+      "target": { "kind": "endpoint", "hostname": "db.prod.example", "username": "ops", "port": 2222 },
+      "group_id": "g-prod",
+      "tags": ["prod", "database", "prod"],
+      "favorite": true,
+      "color": "#d94f4f",
+      "notes": "Primary. Failover is db2.",
+      "proxy_jump": "ops@bastion.example:22",
+      "local_forwards": ["5432:localhost:5432", "9100:localhost:9100"],
+      "remote_forwards": ["8080:localhost:80"],
+      "dynamic_forwards": ["1080"],
+      "remote_command": "tmux new -A -s main",
+      "local_directories": ["/home/me/work"],
+      "remote_directories": ["/var/log", "/srv"],
+      "terminal": { "font_size": 16.0, "scrollback_lines": 50000, "startup_command": "cd /srv" },
+      "created_at": "2025-03-01T08:30:00Z",
+      "updated_at": "2025-06-15T17:45:12Z"
+    },
+    {
+      "id": "legacy-1",
+      "name": "Bastion",
+      "target": { "kind": "alias", "alias": "bastion" },
+      "group_id": "g-ghost",
+      "tags": ["infra"],
+      "favorite": false,
+      "color": null,
+      "notes": "",
+      "proxy_jump": null,
+      "local_forwards": [],
+      "remote_forwards": [],
+      "dynamic_forwards": [],
+      "remote_command": null,
+      "local_directories": [],
+      "remote_directories": [],
+      "terminal": { "font_size": 14.0, "scrollback_lines": 10000, "startup_command": null },
+      "created_at": "2024-11-02T10:00:00Z",
+      "updated_at": "2024-11-02T10:00:00Z"
+    },
+    {
+      "id": "bad-host",
+      "name": "Unsafe",
+      "target": { "kind": "endpoint", "hostname": "-oProxyCommand=evil", "username": null, "port": 22 },
+      "group_id": null,
+      "tags": [],
+      "favorite": false,
+      "color": null,
+      "notes": "",
+      "proxy_jump": null,
+      "local_forwards": [],
+      "remote_forwards": [],
+      "dynamic_forwards": [],
+      "remote_command": null,
+      "local_directories": [],
+      "remote_directories": [],
+      "terminal": { "font_size": 14.0, "scrollback_lines": 10000, "startup_command": null },
+      "created_at": "2024-11-02T10:00:00Z",
+      "updated_at": "2024-11-02T10:00:00Z"
+    }
+  ],
+  "groups": [
+    { "id": "g-prod", "name": "Production", "color": "#d94f4f", "parent_id": null },
+    { "id": "g-prod-eu", "name": "EU", "color": null, "parent_id": "g-prod" },
+    { "id": "g-orphan", "name": "Orphan", "color": null, "parent_id": "g-missing" }
+  ],
+  "recent_connection_ids": ["legacy-1", "7d9b3a52-1c40-4c8e-8a53-0f6b9d2c1e01"],
+  "snippets": [
+    { "id": "s-1", "name": "Disk usage", "content": "df -h && du -sh *" },
+    { "id": "5a1f0b4e-8c36-4b2f-9d7a-3e2c6f8a9b10", "name": "Tail syslog", "content": "tail -f /var/log/syslog" }
+  ],
+  "tunnels": [
+    {
+      "id": "t-1",
+      "name": "Postgres",
+      "host_id": "7d9b3a52-1c40-4c8e-8a53-0f6b9d2c1e01",
+      "kind": "local",
+      "bind_address": "127.0.0.1",
+      "bind_port": 15432,
+      "target_host": "localhost",
+      "target_port": 5432
+    },
+    {
+      "id": "c2f4e6a8-0b1d-4f3a-8e5c-7a9b1d3f5e70",
+      "name": "SOCKS",
+      "host_id": "legacy-1",
+      "kind": "dynamic",
+      "bind_address": null,
+      "bind_port": 1080,
+      "target_host": null,
+      "target_port": null
+    },
+    {
+      "id": "t-3",
+      "name": "Dangling",
+      "host_id": "gone",
+      "kind": "remote",
+      "bind_address": null,
+      "bind_port": 9000,
+      "target_host": "localhost",
+      "target_port": 9000
+    }
+  ],
+  "terminal": { "font_size": 15.0, "scrollback_lines": 20000, "startup_command": null },
+  "sessions": [
+    {
+      "id": "sess-1",
+      "connection_id": "legacy-1",
+      "name": "Bastion",
+      "target": "bastion",
+      "launched_at": "2025-06-01T09:00:00Z",
+      "verbose": false,
+      "launched": true
+    }
+  ],
+  "transfer_history": [],
+  "workspace": "hosts",
+  "theme": "dark",
+  "display_density": "compact",
+  "locale": "zh_cn",
+  "sidebar": {
+    "width": 320.0,
+    "collapsed_group_ids": ["g-prod"],
+    "selected_navigation": "favorites",
+    "selected_tag": "prod"
+  },
+  "sync": {
+    "display_name": "Laptop",
+    "repository_path": "/home/me/easyssh-sync",
+    "remote_url": "git@example.com:me/easyssh-sync.git",
+    "branch": "main",
+    "last_success_at": "2025-06-14T12:00:00Z",
+    "last_error": null,
+    "last_snapshot_hash": "abc123"
+  },
+  "experimental": {
+    "remote_file_browser": true,
+    "remote_text_editing": false,
+    "image_preview": true,
+    "dual_pane_file_browsing": false,
+    "git_metadata_sync_ui": false
+  }
+}

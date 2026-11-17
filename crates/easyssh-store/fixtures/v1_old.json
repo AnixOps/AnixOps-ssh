@@ -1,0 +1,31 @@
+{
+  "schema_version": 5,
+  "workspace": "files",
+  "connections": [
+    {
+      "id": "old-1",
+      "name": "Old box",
+      "target": { "kind": "endpoint", "hostname": "old.example", "username": "root", "port": 22 },
+      "group_id": null,
+      "tags": [],
+      "favorite": false,
+      "color": null,
+      "notes": "",
+      "proxy_jump": null,
+      "local_forwards": [],
+      "remote_forwards": [],
+      "dynamic_forwards": [],
+      "remote_command": null,
+      "local_directories": [],
+      "remote_directories": [],
+      "terminal": { "font_size": 14.0, "scrollback_lines": 10000, "startup_command": null },
+      "created_at": "2023-01-01T00:00:00Z",
+      "updated_at": "2023-01-01T00:00:00Z"
+    }
+  ],
+  "groups": [{ "id": "g-old", "name": "Legacy", "color": null }],
+  "recent_connection_ids": [],
+  "snippets": [{ "id": "sn-old", "name": "uptime", "content": "uptime" }],
+  "theme": "light",
+  "locale": "en"
+}
