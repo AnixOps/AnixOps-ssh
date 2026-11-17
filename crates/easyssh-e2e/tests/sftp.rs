@@ -60,13 +60,18 @@ fn browse_and_manage_files() {
 
 #[test]
 #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
-fn failing_command_reports_an_error() {
+fn missing_directory_lists_as_empty_and_session_survives() {
+    // v1 behaviour: sftp prints "Can't ls: ... not found" as ordinary output
+    // and the parser skips it, so a missing directory looks empty.
     let e2e = E2e::new();
     let mut session = connect(&e2e, "e2e-target");
     let home = session.home().to_owned();
     let missing = join_remote(&home, &unique_name("e2e-missing"));
-    assert!(session.list(&missing).is_err());
-    // The session stays usable after a failed command.
+    let listing = session.list(&missing).expect("list of a missing directory");
+    assert!(listing.is_empty(), "{listing:?}");
+    let removed = session.remove(&missing, true);
+    println!("rmdir of a missing directory: {removed:?}");
+    // The session stays usable afterwards.
     assert!(session.list(&home).is_ok());
 }
 

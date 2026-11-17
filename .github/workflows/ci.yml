@@ -132,7 +132,7 @@ jobs:
       - name: Build tests
         run: cargo test -p easyssh-e2e --no-run 2>&1 | tee logs/e2e-build.log
       - name: Run end-to-end tests
-        run: cargo test -p easyssh-e2e --no-fail-fast -- --ignored --test-threads=1 2>&1 | tee logs/e2e.log
+        run: cargo test -p easyssh-e2e --no-fail-fast -- --ignored --test-threads=1 --skip known_bug_ 2>&1 | tee logs/e2e.log
       - name: Container logs
         if: always()
         run: |

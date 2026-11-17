@@ -15,7 +15,7 @@ Needs Docker with Compose, OpenSSH client tools (`ssh`, `sftp`, `scp`,
 e2e/prepare.sh                              # throwaway key in e2e/.keys (git-ignored)
 docker compose -f e2e/docker-compose.yml up -d --build
 e2e/wait-ready.sh                           # waits for an SSH banner on 2222 and 2223
-cargo test -p easyssh-e2e -- --ignored --test-threads=1
+cargo test -p easyssh-e2e -- --ignored --test-threads=1 --skip known_bug_
 docker compose -f e2e/docker-compose.yml down
 ```
 
@@ -76,8 +76,50 @@ and check that OpenSSH really asked it for the password.
 Results from the CI run on the branch that added these tests. "passes" means
 it passed against v1 unchanged.
 
-BASELINE_TABLE
+| File | Test | v1 | Notes |
+| --- | --- | --- | --- |
+| `exec` | `config_is_isolated_from_the_real_home` | passes | ssh -G through the wrappers shows the test config |
+| `exec` | `exec_through_alias_returns_stdout` | passes |  |
+| `exec` | `exec_propagates_remote_exit_code` | passes | remote `exit 7` gives exit code 7 |
+| `exec` | `exec_through_endpoint_target` | passes | host, user and port instead of an alias |
+| `terminal` | `interactive_shell_on_a_pty` | passes | marker round trip, resize, exit ends ssh |
+| `sftp` | `browse_and_manage_files` | passes | connect, home, mkdir, list, upload, rename, remove, rmdir |
+| `sftp` | `missing_directory_lists_as_empty_and_session_survives` | passes | v1 shows a missing directory as empty ("Can't ls" is skipped as noise); session keeps working |
+| `sftp` | `upload_and_download_through_sftp_transfer` | passes | 300 kB, bytes identical |
+| `sftp` | `download_of_a_missing_file_fails_with_a_reason` | passes | non-zero exit, no local file |
+| `sftp` | `upload_and_download_through_scp_invocation` | passes | ScpInvocation, bytes identical |
+| `tunnels` | `local_forward_reaches_the_echo_service` | passes | -L, port closes after stop |
+| `tunnels` | `dynamic_forward_speaks_socks5` | passes | -D, SOCKS5 CONNECT by hand |
+| `tunnels` | `remote_forward_reaches_a_local_listener` | passes | -R, checked from inside the container |
+| `tunnels` | `forward_to_a_busy_local_port_fails_fast` | passes | ExitOnForwardFailure makes ssh exit |
+| `password` | `exec_with_password_from_askpass` | passes | askpass was asked for the password |
+| `password` | `wrong_password_fails_cleanly` | passes | Permission denied, no hang |
+| `password` | `sftp_session_with_password_from_askpass` | passes |  |
+| `password` | `sftp_session_with_wrong_password_errors_without_hanging` | passes | connect returns an error |
+| `password` | `tunnel_with_password_from_askpass` | passes |  |
+| `password` | `tunnel_with_wrong_password_exits` | passes | Permission denied |
+| `password` | `known_bug_transfer_with_password_from_askpass` | known failure | `sftp -b` implies BatchMode, no password prompt; see below |
+| `jump` | `exec_through_proxy_jump_alias_from_config` | passes | ProxyJump in ssh config |
+| `jump` | `exec_through_connection_proxy_jump` | passes | Connection.proxy_jump (-J) |
+| `jump` | `sftp_through_proxy_jump_alias_from_config` | passes | session, upload, download |
+| `jump` | `sftp_through_connection_proxy_jump` | passes | session, upload, download |
+| `jump` | `the_bastion_is_a_different_machine` | passes | sanity check for the jump tests |
 
 ## Known v1 failures
 
-None recorded yet.
+Tests for known v1 bugs are named `known_bug_*` and carry
+`#[ignore = "known v1 bug: ..."]`. CI skips them with `--skip known_bug_`.
+Run one on purpose with
+`cargo test -p easyssh-e2e known_bug_ -- --ignored`; it is expected to fail
+until the bug is fixed, and then the `known_bug_` prefix and the skip go away.
+
+### Password-only hosts: file transfers cannot authenticate
+
+`sftp::spawn_transfer` starts `sftp -b -`. OpenSSH documents that batch mode
+disables interactive authentication (it implies `BatchMode=yes`), so ssh
+never asks for a password and `SSH_ASKPASS` is never called. Against `pwuser`
+the upload ends with `Connection closed` and the askpass helper's log stays
+empty (CI run 43990861805). Browsing (`SftpSession`, no `-b`), exec and tunnels
+do prompt through askpass. In the app this means transfers to a host that only
+accepts passwords fail even though browsing it works; hosts with a key or an
+agent are not affected. Not fixed here (phase 0 changes no behaviour).

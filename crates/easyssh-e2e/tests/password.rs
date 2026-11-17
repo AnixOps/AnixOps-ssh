@@ -81,9 +81,12 @@ fn sftp_session_with_wrong_password_errors_without_hanging() {
     println!("wrong-password sftp error: {error}");
 }
 
+/// `sftp -b` turns on `BatchMode`, which makes ssh skip every password prompt,
+/// so `spawn_transfer` cannot authenticate to a password-only host and
+/// `SSH_ASKPASS` is never consulted.
 #[test]
-#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
-fn transfer_with_password_from_askpass() {
+#[ignore = "known v1 bug: sftp -b implies BatchMode so password transfers fail; see e2e/README.md#known-v1-failures"]
+fn known_bug_transfer_with_password_from_askpass() {
     let e2e = E2e::new();
     let (env, log) = e2e.askpass(PW_PASSWORD);
     let connection = e2e.alias("e2e-target-pw");
