@@ -808,20 +808,30 @@ async fn the_log_has_lifecycle_and_no_secrets_or_terminal_content() {
     c.call("session.close", json!({"session_id": id}))
         .await
         .unwrap();
+    let read_log = || {
+        let mut log = String::new();
+        for entry in std::fs::read_dir(&logs).unwrap() {
+            let entry = entry.unwrap();
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("easysshd.log")
+            {
+                log.push_str(&std::fs::read_to_string(entry.path()).unwrap());
+            }
+        }
+        log
+    };
+    // The exit is logged when the closed shell has been reaped, which can
+    // come after the reply to session.close; wait for it before stopping.
+    eventually("the session exit is logged", || {
+        read_log().contains("ended, exit code")
+    })
+    .await;
     drop(c);
     daemon.stop().await;
 
-    let mut log = String::new();
-    for entry in std::fs::read_dir(&logs).unwrap() {
-        let entry = entry.unwrap();
-        if entry
-            .file_name()
-            .to_string_lossy()
-            .starts_with("easysshd.log")
-        {
-            log.push_str(&std::fs::read_to_string(entry.path()).unwrap());
-        }
-    }
+    let log = read_log();
     for kind in [
         "daemon created",
         "connected",
