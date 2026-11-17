@@ -967,9 +967,9 @@ export interface AskpassPromptEvent {
    */
   vault_locked?: boolean;
   /**
-   * What the prompt asks for; absent for OpenSSH's askpass prompts.
+   * What the prompt asks for; absent for OpenSSH's askpass prompts. `security_key_pin` asks for the PIN of a FIDO2 security key; `security_key_touch` only tells the user to touch the key and takes no answer (it closes with `askpass.resolved`).
    */
-  kind?: "password" | "passphrase" | "keyboard_interactive" | "confirm";
+  kind?: "password" | "passphrase" | "keyboard_interactive" | "confirm" | "security_key_pin" | "security_key_touch";
   /**
    * Whether the answer may be shown while typing (keyboard-interactive prompts).
    */

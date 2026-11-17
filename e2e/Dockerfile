@@ -16,6 +16,7 @@ RUN apt-get update \
  && sed -i 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@' /etc/pam.d/sshd
 
 COPY sshd_config /etc/ssh/sshd_config
+COPY id_e2e_sk.pub /etc/e2e/id_e2e_sk.pub
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

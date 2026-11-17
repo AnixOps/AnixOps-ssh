@@ -82,6 +82,21 @@ pub trait Interaction: Send + Sync {
 
     /// The passphrase of an encrypted identity file.
     async fn passphrase(&self, key_path: &Path) -> Option<String>;
+
+    /// The security key `key` (a label, never secret) is waiting to be
+    /// touched. Shown until [`Interaction::security_key_touch_done`]. The
+    /// default shows nothing.
+    async fn security_key_touch(&self, _key: &str) {}
+
+    /// The touch is over: the key signed, or the attempt failed.
+    async fn security_key_touch_done(&self, _key: &str) {}
+
+    /// The PIN of the security key `key`. `retries` is how many tries the
+    /// device has left when it reported that. `None` cancels the key; the
+    /// default cancels. The PIN is never logged or stored by the engine.
+    async fn security_key_pin(&self, _key: &str, _retries: Option<u32>) -> Option<String> {
+        None
+    }
 }
 
 /// An [`Interaction`] that rejects unknown hosts and answers nothing. Useful

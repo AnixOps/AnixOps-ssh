@@ -130,7 +130,8 @@ pub struct Prompt {
     /// A yes/no question, such as accepting a new host key.
     pub confirm: bool,
     /// What a prompt of the built-in engine asks for (`password`,
-    /// `passphrase`, `keyboard_interactive`); `None` for OpenSSH's.
+    /// `passphrase`, `keyboard_interactive`, `security_key_pin`,
+    /// `security_key_touch`); `None` for OpenSSH's.
     pub kind: Option<&'static str>,
     /// Whether the answer may be shown while typing.
     pub echo: Option<bool>,
@@ -147,6 +148,20 @@ pub type Notify = Arc<dyn Fn(Prompt) -> bool + Send + Sync>;
 /// Told when a prompt is over (answered, cancelled or timed out), so that
 /// every client that was shown it can close its dialog.
 pub type Resolved = Arc<dyn Fn(u64) + Send + Sync>;
+
+/// A notice from [`Hub::notice`]; every client closes its dialog when this
+/// is dropped.
+pub struct Notice {
+    hub: Arc<Hub>,
+    id: u64,
+}
+
+impl Drop for Notice {
+    fn drop(&mut self) {
+        lock(&self.hub.pending).remove(&self.id);
+        (self.hub.resolved)(self.id);
+    }
+}
 
 /// A prompt shown to the user and what it may be remembered as.
 struct Waiting {
@@ -263,6 +278,40 @@ impl Hub {
         lock(&self.pending).remove(&id);
         (self.resolved)(id);
         answer
+    }
+
+    /// A notice the user only has to read, such as "touch your security
+    /// key": shown like a prompt (with `kind`) and closed when the returned
+    /// guard is dropped. It takes no answer; a reply to it is ignored.
+    /// `None` when nobody is attached to see it.
+    pub fn notice(self: &Arc<Self>, host: &str, text: &str, kind: &'static str) -> Option<Notice> {
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        let (sender, _receiver) = oneshot::channel();
+        lock(&self.pending).insert(
+            id,
+            Waiting {
+                sender,
+                matched: None,
+            },
+        );
+        let shown = (self.notify)(Prompt {
+            id,
+            host: host.to_owned(),
+            prompt: text.to_owned(),
+            confirm: false,
+            kind: Some(kind),
+            echo: Some(false),
+            rememberable: false,
+            vault_locked: false,
+        });
+        if !shown {
+            lock(&self.pending).remove(&id);
+            return None;
+        }
+        Some(Notice {
+            hub: self.clone(),
+            id,
+        })
     }
 
     /// Allocates an id that no askpass prompt uses, for other kinds of

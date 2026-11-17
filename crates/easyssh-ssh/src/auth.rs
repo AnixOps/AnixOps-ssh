@@ -4,6 +4,7 @@
 use crate::error::{AuthMethod, Error, Result};
 use crate::interaction::{Interaction, KbdPrompt};
 use crate::params::{AgentSource, ConnectParams};
+use crate::security_key::{default_security_key, SkKeyInfo, SkSignError, SkSigner};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse};
@@ -80,8 +81,9 @@ pub fn plan(config: &StageConfig, server_methods: &[MethodKind]) -> Vec<Stage> {
 }
 
 /// The type of key an OpenSSH private key file holds when it is a FIDO2
-/// `sk-*` key, which the engine cannot use. The public part of the key is
-/// stored unencrypted, so this works for passphrase-protected files too.
+/// `sk-*` key. The public part of the key is stored unencrypted, so this
+/// works for passphrase-protected files too. Whether such a key can be used
+/// depends on the authenticator backend ([`crate::hardware_backend_available`]).
 pub fn security_key_type(text: &str) -> Option<&'static str> {
     const TYPES: [&str; 2] = [
         "sk-ssh-ed25519@openssh.com",
@@ -123,12 +125,6 @@ pub async fn decode_identity(
     // Copies of the key and passphrase that cross to the blocking thread are
     // wiped when dropped.
     let text = Zeroizing::new(text.to_owned());
-    if let Some(kind) = security_key_type(&text) {
-        return Err(Error::Unsupported(format!(
-            "{} is a FIDO2 security key ({kind}); sk-* keys are not supported by this engine yet",
-            path.display()
-        )));
-    }
     let attempt = |text: Zeroizing<String>, passphrase: Option<Zeroizing<String>>| async move {
         tokio::task::spawn_blocking(move || {
             russh::keys::decode_secret_key(&text, passphrase.as_ref().map(|p| p.as_str()))
@@ -383,15 +379,13 @@ async fn try_identity_files<H: client::Handler>(
         };
         let method = AuthMethod::StoredKey(identity.label.clone());
         tried.push(method.clone());
-        let hash = rsa_hash(handle, key.algorithm().is_rsa()).await?;
-        let result = handle
-            .authenticate_publickey(
-                params.username.as_str(),
-                PrivateKeyWithHashAlg::new(Arc::new(key), hash),
-            )
-            .await?;
-        if note_result(&result, remaining) {
-            return Ok(Some(method));
+        match offer_key(handle, params, interaction, key, &identity.label).await? {
+            Ok(result) => {
+                if note_result(&result, remaining) {
+                    return Ok(Some(method));
+                }
+            }
+            Err(note) => notes.push(note),
         }
     }
     for path in &params.identity_files {
@@ -407,18 +401,66 @@ async fn try_identity_files<H: client::Handler>(
         };
         let method = AuthMethod::IdentityFile(path.clone());
         tried.push(method.clone());
-        let hash = rsa_hash(handle, key.algorithm().is_rsa()).await?;
-        let result = handle
-            .authenticate_publickey(
-                params.username.as_str(),
-                PrivateKeyWithHashAlg::new(Arc::new(key), hash),
-            )
-            .await?;
-        if note_result(&result, remaining) {
-            return Ok(Some(method));
+        match offer_key(
+            handle,
+            params,
+            interaction,
+            key,
+            &path.display().to_string(),
+        )
+        .await?
+        {
+            Ok(result) => {
+                if note_result(&result, remaining) {
+                    return Ok(Some(method));
+                }
+            }
+            Err(note) => notes.push(note),
         }
     }
     Ok(None)
+}
+
+/// Offers `key` to the server and signs when the server accepts it. An
+/// `sk-*` key is signed by the security key backend (touch and PIN go
+/// through `interaction`); any other key is signed in memory. The inner
+/// `Err` is a note for the failure report: the key could not be used.
+async fn offer_key<H: client::Handler>(
+    handle: &mut client::Handle<H>,
+    params: &ConnectParams,
+    interaction: &dyn Interaction,
+    key: PrivateKey,
+    label: &str,
+) -> Result<std::result::Result<AuthResult, String>> {
+    let user = params.username.as_str();
+    if let Some(info) = SkKeyInfo::of(&key) {
+        let Some(backend) = params.security_key.clone().or_else(default_security_key) else {
+            return Ok(Err(format!(
+                "{label} is a FIDO2 security key ({}), and this build has no security key \
+                 backend for this platform",
+                info.algorithm.name()
+            )));
+        };
+        let mut signer = SkSigner {
+            backend,
+            interaction,
+            label,
+            info,
+        };
+        return match handle
+            .authenticate_publickey_with(user, key.public_key().clone(), None, &mut signer)
+            .await
+        {
+            Ok(result) => Ok(Ok(result)),
+            Err(SkSignError::Send(_)) => Err(Error::Disconnected),
+            Err(SkSignError::Failed(error)) => Ok(Err(format!("{label}: {error}"))),
+        };
+    }
+    let hash = rsa_hash(handle, key.algorithm().is_rsa()).await?;
+    let result = handle
+        .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
+        .await?;
+    Ok(Ok(result))
 }
 
 const MAX_KBD_ROUNDS: usize = 8;
@@ -606,16 +648,6 @@ mod tests {
         );
         assert_eq!(security_key_type(&fake_sk_key("ssh-ed25519")), None);
         assert_eq!(security_key_type("not a key"), None);
-    }
-
-    #[tokio::test]
-    async fn fido2_identity_gives_a_clear_unsupported_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("id_ed25519_sk");
-        std::fs::write(&path, fake_sk_key("sk-ssh-ed25519@openssh.com")).unwrap();
-        let error = load_identity(&path, &DenyAll).await.unwrap_err();
-        assert!(matches!(error, Error::Unsupported(_)), "{error:?}");
-        assert!(error.to_string().contains("FIDO2"), "{error}");
     }
 
     // `ssh-keygen -t ed25519 -N 'pass phrase'`, test only.

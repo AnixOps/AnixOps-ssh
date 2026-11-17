@@ -1,6 +1,7 @@
 //! Connection parameters.
 
 use crate::known_hosts::{KnownHosts, MemoryKnownHosts};
+use crate::security_key::SecurityKey;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -88,6 +89,9 @@ pub struct ConnectParams {
     /// How often the password prompt is shown when the server refuses it.
     pub password_attempts: u32,
     pub known_hosts: Arc<dyn KnownHosts>,
+    /// The authenticator for `sk-*` keys. `None` uses the build's own
+    /// ([`crate::default_security_key`]).
+    pub security_key: Option<Arc<dyn SecurityKey>>,
 }
 
 impl ConnectParams {
@@ -109,7 +113,15 @@ impl ConnectParams {
             password: true,
             password_attempts: 3,
             known_hosts: Arc::new(MemoryKnownHosts::new()),
+            security_key: None,
         }
+    }
+
+    /// Signs for `sk-*` keys with `security_key` instead of the build's
+    /// default authenticator.
+    pub fn security_key(mut self, security_key: Arc<dyn SecurityKey>) -> Self {
+        self.security_key = Some(security_key);
+        self
     }
 
     pub fn known_hosts(mut self, store: Arc<dyn KnownHosts>) -> Self {

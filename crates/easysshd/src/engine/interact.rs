@@ -7,7 +7,7 @@
 //! within [`ANSWER_TIMEOUT`], the answer is "cancelled" (and a host key is
 //! rejected).
 
-use crate::askpass::{Hub, ANSWER_TIMEOUT};
+use crate::askpass::{Hub, Notice, ANSWER_TIMEOUT};
 use async_trait::async_trait;
 use easyssh_ssh::known_hosts::KnownHostStatus;
 use easyssh_ssh::{Decision, HostKeyDetails, Interaction, KbdPrompt};
@@ -103,6 +103,8 @@ pub struct DaemonInteraction {
     /// asks for exactly that user's password (never for a jump host, and
     /// never again after the server refused it).
     pub saved_password: Option<SavedPassword>,
+    /// The "touch your security key" notice while one is shown.
+    pub touch: Mutex<Option<Notice>>,
 }
 
 /// A saved password and the prompt it belongs to.
@@ -195,6 +197,27 @@ impl Interaction for DaemonInteraction {
             .prompt(&self.label, &prompt, "passphrase", false)
             .await
     }
+
+    async fn security_key_touch(&self, key: &str) {
+        let text = format!("Touch your security key ({key})");
+        let notice = self.hub.notice(&self.label, &text, "security_key_touch");
+        *lock(&self.touch) = notice;
+    }
+
+    async fn security_key_touch_done(&self, _key: &str) {
+        // Dropping the notice closes the dialog on every client.
+        lock(&self.touch).take();
+    }
+
+    async fn security_key_pin(&self, key: &str, retries: Option<u32>) -> Option<String> {
+        let mut prompt = format!("Enter the PIN of your security key ({key})");
+        if let Some(retries) = retries {
+            prompt.push_str(&format!(" - {retries} tries left"));
+        }
+        self.hub
+            .prompt(&self.label, &prompt, "security_key_pin", false)
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -248,6 +271,81 @@ mod tests {
         // The server refused it: the next prompt goes to the user.
         assert_eq!(saved.take("me@example.com's password"), None);
         assert_eq!(saved_with(None).take("me@example.com's password"), None);
+    }
+
+    type Shown = Arc<Mutex<Vec<(u64, String, String, Option<&'static str>)>>>;
+
+    /// An interaction whose hub records what it shows and what it closes.
+    async fn recording() -> (Arc<DaemonInteraction>, Shown, Arc<Mutex<Vec<u64>>>) {
+        let shown: Shown = Arc::default();
+        let closed: Arc<Mutex<Vec<u64>>> = Arc::default();
+        let (seen, ended) = (shown.clone(), closed.clone());
+        let hub = Hub::bind(
+            Arc::new(move |prompt| {
+                lock(&seen).push((prompt.id, prompt.host, prompt.prompt, prompt.kind));
+                true
+            }),
+            Arc::new(move |id| lock(&ended).push(id)),
+        )
+        .await
+        .unwrap();
+        let interaction = Arc::new(DaemonInteraction {
+            hub,
+            hostkeys: HostKeyPrompts::new(Arc::new(|_, _| 1)),
+            label: "web".into(),
+            saved_password: None,
+            touch: Mutex::default(),
+        });
+        (interaction, shown, closed)
+    }
+
+    #[tokio::test]
+    async fn touching_the_key_shows_a_notice_until_it_is_done() {
+        let (interaction, shown, closed) = recording().await;
+        interaction.security_key_touch("saved key of web").await;
+        let first = lock(&shown)[0].clone();
+        assert_eq!(first.1, "web");
+        assert_eq!(first.3, Some("security_key_touch"));
+        assert!(first.2.contains("Touch your security key"), "{first:?}");
+        assert!(lock(&closed).is_empty());
+        interaction
+            .security_key_touch_done("saved key of web")
+            .await;
+        assert_eq!(*lock(&closed), vec![first.0]);
+        // A second "done" closes nothing more.
+        interaction
+            .security_key_touch_done("saved key of web")
+            .await;
+        assert_eq!(lock(&closed).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_pin_is_asked_as_a_secret_prompt_and_never_shown_back() {
+        let (interaction, shown, _) = recording().await;
+        let asking = interaction.clone();
+        let task = tokio::spawn(async move { asking.security_key_pin("key", Some(2)).await });
+        while lock(&shown).is_empty() {
+            tokio::task::yield_now().await;
+        }
+        let (id, host, text, kind) = lock(&shown)[0].clone();
+        assert_eq!((host.as_str(), kind), ("web", Some("security_key_pin")));
+        assert!(text.contains("2 tries left"), "{text}");
+        interaction.hub.reply(id, Some("2468".into()), false);
+        assert_eq!(task.await.unwrap().as_deref(), Some("2468"));
+        assert!(!text.contains("2468"));
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_pin_prompt_cancels_the_key() {
+        let (interaction, shown, _) = recording().await;
+        let asking = interaction.clone();
+        let task = tokio::spawn(async move { asking.security_key_pin("key", None).await });
+        while lock(&shown).is_empty() {
+            tokio::task::yield_now().await;
+        }
+        let id = lock(&shown)[0].0;
+        interaction.hub.reply(id, None, false);
+        assert_eq!(task.await.unwrap(), None);
     }
 
     fn details(status: KnownHostStatus) -> HostKeyDetails {

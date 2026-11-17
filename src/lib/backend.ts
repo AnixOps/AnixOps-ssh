@@ -412,7 +412,7 @@ export interface AskpassPrompt {
   /** A yes/no question, such as accepting a new host key. */
   confirm: boolean;
   /** What the built-in engine asks for; absent for OpenSSH's prompts. */
-  kind?: "password" | "passphrase" | "keyboard_interactive";
+  kind?: "password" | "passphrase" | "keyboard_interactive" | "security_key_pin" | "security_key_touch";
   /** Whether the answer may be shown while typing. */
   echo?: boolean;
   /** The saved host's password or key passphrase: offer "Remember in vault". */
@@ -475,12 +475,27 @@ export function replyHostKey(id: number, decision: HostKeyDecision): void {
 /** Subscribes to OpenSSH prompts; returns the unsubscribe function. */
 export function onAskpass(handler: (prompt: AskpassPrompt) => void): () => void {
   if (!isTauri) {
-    if (new URLSearchParams(window.location.search).get("askpass") === "1") {
-      window.setTimeout(
-        () => handler({ id: 1, host: "prod-db", prompt: "postgres@10.0.2.20's password: ", confirm: false }),
-        300,
-      );
-    }
+    const preview = new URLSearchParams(window.location.search).get("askpass");
+    const samples: Record<string, AskpassPrompt> = {
+      "1": { id: 1, host: "prod-db", prompt: "postgres@10.0.2.20's password: ", confirm: false },
+      touch: {
+        id: 2,
+        host: "prod-db",
+        prompt: "Touch your security key (id_ed25519_sk)",
+        confirm: false,
+        kind: "security_key_touch",
+      },
+      pin: {
+        id: 3,
+        host: "prod-db",
+        prompt: "Enter the PIN of your security key (id_ed25519_sk)",
+        confirm: false,
+        kind: "security_key_pin",
+        echo: false,
+      },
+    };
+    const sample = preview ? samples[preview] : undefined;
+    if (sample) window.setTimeout(() => handler(sample), 300);
     return () => {};
   }
   const stop = listen<AskpassPrompt>("askpass", (event) => handler(event.payload));
