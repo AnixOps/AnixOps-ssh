@@ -13,7 +13,7 @@ use easyssh_core::{
     scan_default_ssh_config, AppConfig, ConfigStore, Connection, ConnectionTarget,
     ExternalTerminal, Group, OpenSsh, SshInvocation,
 };
-use easyssh_store::{open_app_store, Store};
+use easyssh_store::{open_app_store_with, Store};
 use easysshd::link::{Link, LinkError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -228,8 +228,8 @@ fn apply(
 pub(crate) fn open_store() -> Result<Store, String> {
     static WARNED: AtomicBool = AtomicBool::new(false);
     let v1 = ConfigStore::default_path().map_err(|error| error.to_string())?;
-    let opened =
-        open_app_store(v1.path()).map_err(|error| format!("cannot open the database: {error}"))?;
+    let opened = open_app_store_with(v1.path(), crate::vault::app_vault().cipher())
+        .map_err(|error| format!("cannot open the database: {error}"))?;
     if let Some(error) = &opened.migration_error {
         if !WARNED.swap(true, Ordering::Relaxed) {
             eprintln!("EasySSH: the v1 configuration was not migrated: {error}");

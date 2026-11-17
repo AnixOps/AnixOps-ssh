@@ -22,6 +22,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "host_shell_integration",
         sql: include_str!("../migrations/0002_host_shell_integration.sql"),
     },
+    Migration {
+        version: 3,
+        name: "host_secrets",
+        sql: include_str!("../migrations/0003_host_secrets.sql"),
+    },
 ];
 
 /// The newest schema version this build can apply.

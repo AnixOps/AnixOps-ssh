@@ -10,8 +10,9 @@ you do not need.
 
 ## Why another SSH client
 
-AnixOps SSH never implements the SSH protocol and never stores passwords or
-private keys. Every session runs your own `ssh`, so `~/.ssh/config`,
+AnixOps SSH never implements the SSH protocol. Every session runs your own
+`ssh` (passwords and keys are optional and stay encrypted, see
+[Security boundary](#security-boundary)), so `~/.ssh/config`,
 `ProxyJump`, `known_hosts`, the system SSH agent and the 1Password SSH agent
 work exactly as they do in your terminal. The app adds the parts a terminal
 lacks: an organised host list, tabs, a file pane, snippets and tunnels.
@@ -110,8 +111,31 @@ prompt jumps above. What the scripts do and the sequence format are in
 - Hosts, groups, snippets, tunnels, settings and known host keys live in a
   local SQLite database (`easyssh.db`) in the OS configuration directory. The
   first start of 2.0 migrates the v1 `connections.json` into it and keeps a
-  copy as `connections.v1-backup.json`. No passwords are stored; fields that
-  look like secrets are rejected when reading the v1 file.
+  copy as `connections.v1-backup.json`. Fields that look like secrets are
+  rejected when reading the v1 file.
+- **Saved passwords, private keys and key passphrases are optional** and are
+  stored only encrypted (XChaCha20-Poly1305) in the `host_secrets` table, with
+  keys only you hold. The encryption key is a random 32-byte device key in the
+  OS keychain (Keychain, Credential Manager or Secret Service). The record id
+  and field are bound into every ciphertext, so a value cannot be moved to
+  another host or field. Plaintext is never written to disk or to logs and is
+  zeroized in memory after use. Secrets are never exported, never put in Git
+  sync and never leave the machine.
+- **Without a vault passphrase the vault is protected by the OS keychain
+  only**: any program running as you that can read your keychain can read the
+  device key. Settings › Security lets you set a vault passphrase (Argon2id)
+  that wraps the device key; the raw key is then removed from the keychain,
+  you unlock once per run when a saved secret is first needed, can lock at any
+  time, and the vault locks itself after 15 idle minutes (configurable).
+  "Forget all saved secrets" deletes every stored secret. A forgotten vault
+  passphrase cannot be recovered.
+- Saved secrets are used only for the exact host and user they belong to. The
+  askpass helper answers only password and key passphrase prompts and never
+  host key questions or any other prompt. A saved private key is written to a
+  `0600` file in the runtime directory for the life of the `ssh` process and
+  deleted afterwards (and swept on daemon start).
+- Biometric unlock (Windows Hello, Touch ID) and FIDO2 are not built yet. The
+  `UnlockProvider` trait in `easyssh-vault` is the hook point.
 - The frontend only receives display data. Every `ssh`, `sftp` and tunnel
   command is built and validated in `easyssh-core`; values that could become
   extra options or commands are rejected.

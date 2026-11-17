@@ -78,7 +78,7 @@ pub async fn sftp_open(
     host_id: String,
 ) -> Result<OpenedFiles, String> {
     let connection = hosts::connection(&host_id)?;
-    let env = askpass::env_for(&app, &connection.name)?;
+    let env = askpass::env_for(&app, &connection.name, Some(&connection.id))?;
     let session = blocking(move || {
         SftpSession::connect(&OpenSsh, &connection, &env).map_err(|error| error.to_string())
     })
@@ -178,7 +178,7 @@ pub fn transfer_start(
             .ok_or("the remote path has no file name")?;
         (unique_download_path(&safe_file_name(name))?, remote)
     };
-    let env = askpass::env_for(&app, &connection.name)?;
+    let env = askpass::env_for(&app, &connection.name, Some(&connection.id))?;
     let mut child = sftp::spawn_transfer(&OpenSsh, &connection, upload, &local, &remote, &env)
         .map_err(|error| error.to_string())?;
     let stderr = child.stderr.take();

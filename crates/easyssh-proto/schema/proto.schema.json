@@ -1703,6 +1703,10 @@
               "type": "null"
             }
           ]
+        },
+        "remember": {
+          "type": "boolean",
+          "description": "Save the answer in the vault for this host. Only honoured for a prompt the event marked `rememberable`."
         }
       },
       "required": [
@@ -1794,6 +1798,14 @@
         },
         "confirm": {
           "type": "boolean"
+        },
+        "rememberable": {
+          "type": "boolean",
+          "description": "The prompt asks for the saved password or key passphrase of a saved host: the dialog may offer \"Remember in vault\"."
+        },
+        "vault_locked": {
+          "type": "boolean",
+          "description": "A saved answer exists but the vault is locked: the dialog may offer to unlock it (`askpass.unlock`)."
         }
       },
       "required": [
@@ -1846,6 +1858,256 @@
       ],
       "additionalProperties": false,
       "description": "Event `askpass.resolved` payload. The prompt `id` was answered, cancelled or timed out; clients close any dialog for it."
+    },
+    "VaultStatus": {
+      "type": "object",
+      "properties": {
+        "passphrase_set": {
+          "type": "boolean"
+        },
+        "unlocked": {
+          "type": "boolean"
+        },
+        "auto_lock_minutes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0 = never."
+        },
+        "keychain_available": {
+          "type": "boolean"
+        },
+        "keychain_error": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "passphrase_set",
+        "unlocked",
+        "auto_lock_minutes",
+        "keychain_available",
+        "keychain_error"
+      ],
+      "additionalProperties": false,
+      "description": "The vault state. No secret is ever part of it."
+    },
+    "VaultStatusParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `vault.status` payload. Reply: VaultStatus."
+    },
+    "VaultUnlockParams": {
+      "type": "object",
+      "properties": {
+        "passphrase": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "passphrase"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.unlock` payload. Reply: VaultStatus. Fails with `wrong_passphrase`."
+    },
+    "VaultLockParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `vault.lock` payload (\"lock now\"). Reply: VaultStatus."
+    },
+    "VaultSetPassphraseParams": {
+      "type": "object",
+      "properties": {
+        "passphrase": {
+          "type": "string"
+        },
+        "current": {
+          "type": "string",
+          "description": "Required to change an existing passphrase."
+        }
+      },
+      "required": [
+        "passphrase"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.set_passphrase` payload: set the vault passphrase, or change it when `current` is given. Reply: VaultStatus."
+    },
+    "VaultRemovePassphraseParams": {
+      "type": "object",
+      "properties": {
+        "passphrase": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "passphrase"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.remove_passphrase` payload: go back to keychain-only protection. Reply: VaultStatus."
+    },
+    "VaultSetAutoLockParams": {
+      "type": "object",
+      "properties": {
+        "minutes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1440
+        }
+      },
+      "required": [
+        "minutes"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.set_auto_lock` payload. Reply: VaultStatus."
+    },
+    "VaultForgetAllParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `vault.forget_all` payload: delete every saved password, key and passphrase. Works while locked. Reply: VaultForgetAllResult."
+    },
+    "VaultForgetAllResult": {
+      "type": "object",
+      "properties": {
+        "hosts": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "hosts"
+      ],
+      "additionalProperties": false
+    },
+    "SecretsStatusParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `secrets.status` payload. Reply: SecretsStatusResult. Needs no unlock."
+    },
+    "SecretsStatusResult": {
+      "type": "object",
+      "properties": {
+        "password": {
+          "type": "boolean"
+        },
+        "private_key": {
+          "type": "boolean"
+        },
+        "passphrase": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "password",
+        "private_key",
+        "passphrase"
+      ],
+      "additionalProperties": false,
+      "description": "Which secrets a host has saved. Never the values."
+    },
+    "SecretsSetParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string",
+          "description": "Absent keeps the saved value; an empty string clears it."
+        },
+        "private_key": {
+          "type": "string",
+          "description": "Key text (PEM or OpenSSH). Absent keeps; empty clears."
+        },
+        "passphrase": {
+          "type": "string",
+          "description": "Key passphrase. Absent keeps; empty clears."
+        }
+      },
+      "required": [
+        "host_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `secrets.set` payload. Reply: SecretsStatusResult. Fails with `vault_locked` when a passphrase vault is locked."
+    },
+    "AskpassUnlockParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "passphrase": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "passphrase"
+      ],
+      "additionalProperties": false,
+      "description": "Command `askpass.unlock` payload: unlock the vault and answer prompt `id` from it. Reply: null. Fails with `wrong_passphrase`."
+    },
+    "AskpassBindParams": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "type": "string"
+        },
+        "host_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "host_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `askpass.bind` payload: tell the daemon that the OpenSSH process using askpass `context` connects to saved host `host_id`, so its password and passphrase prompts for exactly that host and user may be answered from the vault. Reply: null."
+    },
+    "AskpassUnbindParams": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context"
+      ],
+      "additionalProperties": false,
+      "description": "Command `askpass.unbind` payload: the process is over. Reply: null."
+    },
+    "VaultChangedEvent": {
+      "type": "object",
+      "properties": {
+        "unlocked": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "unlocked"
+      ],
+      "additionalProperties": false,
+      "description": "Event `vault.changed` payload. Sent to every client when the vault locks or unlocks (also by auto-lock)."
     }
   }
 }

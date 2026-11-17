@@ -105,8 +105,10 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "easyssh-core",
+ "easyssh-crypto",
  "easyssh-store",
  "easyssh-telemetry",
+ "easyssh-vault",
  "easysshd",
  "portable-pty",
  "serde",
@@ -118,6 +120,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -1667,7 +1670,9 @@ version = "1.0.2"
 dependencies = [
  "async-trait",
  "easyssh-core",
+ "easyssh-crypto",
  "easyssh-ssh",
+ "easyssh-vault",
  "easysshd",
  "portable-pty",
  "serde_json",
@@ -1755,6 +1760,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "easyssh-core",
+ "easyssh-crypto",
  "easyssh-import",
  "rusqlite",
  "serde",
@@ -1763,6 +1769,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -1797,6 +1804,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "easyssh-vault"
+version = "1.0.2"
+dependencies = [
+ "easyssh-core",
+ "easyssh-crypto",
+ "easyssh-store",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "easysshd"
 version = "1.0.2"
 dependencies = [
@@ -1804,9 +1824,11 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "easyssh-core",
+ "easyssh-crypto",
  "easyssh-proto",
  "easyssh-store",
  "easyssh-telemetry",
+ "easyssh-vault",
  "fs4",
  "hmac 0.12.1",
  "libc",
@@ -1820,6 +1842,7 @@ dependencies = [
  "tokio",
  "uuid",
  "windows-sys 0.59.0",
+ "zeroize",
 ]
 
 [[package]]

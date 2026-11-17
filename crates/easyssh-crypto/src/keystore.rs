@@ -12,6 +12,8 @@ pub const SERVICE: &str = "easyssh";
 pub const DEVICE_KEY_ACCOUNT: &str = "device-key/v1";
 /// Account name of the Ed25519 device signing key seed.
 pub const DEVICE_SIGNING_ACCOUNT: &str = "device-signing-key/v1";
+/// Account name of the device key wrapped by the vault passphrase.
+pub const WRAPPED_DEVICE_KEY_ACCOUNT: &str = "device-key-wrapped/v1";
 
 #[derive(Debug, Error)]
 pub enum KeyStoreError {

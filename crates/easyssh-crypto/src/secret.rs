@@ -69,9 +69,48 @@ secret32! {
     AuthSecret
 }
 
+/// A variable-length secret (a password, a private key, a passphrase):
+/// zeroized on drop, never printed by `Debug`, never serialized.
+#[derive(Clone, Default, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+pub struct SecretText(String);
+
+impl SecretText {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self(text.into())
+    }
+
+    /// Borrow the text. Do not copy it into long-lived, non-zeroized storage.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<String> for SecretText {
+    fn from(text: String) -> Self {
+        Self(text)
+    }
+}
+
+impl core::fmt::Debug for SecretText {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("SecretText([REDACTED])")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secret_text_is_redacted() {
+        let s = SecretText::new("hunter2");
+        assert_eq!(format!("{s:?}"), "SecretText([REDACTED])");
+        assert_eq!(s.expose(), "hunter2");
+    }
 
     #[test]
     fn debug_is_redacted() {

@@ -16,6 +16,13 @@ import {
   previewSnapshot,
 } from "./preview";
 import { previewSession } from "./previewSession";
+import {
+  previewForgetAll,
+  previewSecretsSet,
+  previewSecretsStatus,
+  previewVault,
+  type VaultStatus,
+} from "./previewVault";
 import type {
   HostsImportApplyParams,
   HostsImportApplyResult,
@@ -359,6 +366,10 @@ export interface AskpassPrompt {
   prompt: string;
   /** A yes/no question, such as accepting a new host key. */
   confirm: boolean;
+  /** The saved host's password or key passphrase: offer "Remember in vault". */
+  rememberable?: boolean;
+  /** An answer is saved for this host but the vault is locked. */
+  vaultLocked?: boolean;
 }
 
 /** Subscribes to OpenSSH prompts; returns the unsubscribe function. */
@@ -383,8 +394,91 @@ export function onAskpassResolved(handler: (id: number) => void): () => void {
   return () => void stop.then((unlisten) => unlisten());
 }
 
-export function replyAskpass(id: number, answer: string | null): void {
-  if (isTauri) void invoke("askpass_reply", { id, answer }).catch(console.error);
+export function replyAskpass(id: number, answer: string | null, remember = false): void {
+  if (isTauri) void invoke("askpass_reply", { id, answer, remember }).catch(console.error);
+}
+
+/** Unlocks the vault from a prompt that needs it; the saved answer then goes to OpenSSH. */
+export async function unlockForAskpass(id: number, passphrase: string): Promise<void> {
+  if (isTauri) await invoke("askpass_unlock", { id, passphrase });
+}
+
+export type { VaultStatus };
+
+/** Which secrets a host has saved. The values never come back to the UI. */
+export interface SecretsStatus {
+  password: boolean;
+  privateKey: boolean;
+  passphrase: boolean;
+}
+
+/** A field left out keeps the saved value; an empty string clears it. */
+export interface SecretsInput {
+  password?: string;
+  privateKey?: string;
+  passphrase?: string;
+}
+
+/** The vault's state for Settings → Security. */
+export async function vaultStatus(): Promise<VaultStatus> {
+  return isTauri ? invoke<VaultStatus>("vault_status") : previewVault.status();
+}
+
+export async function vaultUnlock(passphrase: string): Promise<VaultStatus> {
+  return isTauri ? invoke<VaultStatus>("vault_unlock", { passphrase }) : previewVault.unlock(passphrase);
+}
+
+export async function vaultLock(): Promise<VaultStatus> {
+  return isTauri ? invoke<VaultStatus>("vault_lock") : previewVault.lock();
+}
+
+/** Sets the passphrase, or changes it when `current` is given. */
+export async function vaultSetPassphrase(passphrase: string, current: string | null = null): Promise<VaultStatus> {
+  return isTauri
+    ? invoke<VaultStatus>("vault_set_passphrase", { passphrase, current })
+    : previewVault.setPassphrase(passphrase, current);
+}
+
+export async function vaultRemovePassphrase(passphrase: string): Promise<VaultStatus> {
+  return isTauri
+    ? invoke<VaultStatus>("vault_remove_passphrase", { passphrase })
+    : previewVault.removePassphrase(passphrase);
+}
+
+export async function vaultSetAutoLock(minutes: number): Promise<VaultStatus> {
+  return isTauri ? invoke<VaultStatus>("vault_set_auto_lock", { minutes }) : previewVault.setAutoLock(minutes);
+}
+
+/** Deletes every saved password, key and passphrase; resolves to the number of hosts that had any. */
+export async function vaultForgetAll(): Promise<number> {
+  return isTauri ? invoke<number>("vault_forget_all") : previewForgetAll();
+}
+
+export async function secretsStatus(hostId: string): Promise<SecretsStatus> {
+  return isTauri ? invoke<SecretsStatus>("secrets_status", { hostId }) : previewSecretsStatus(hostId);
+}
+
+export async function secretsSet(hostId: string, input: SecretsInput): Promise<SecretsStatus> {
+  return isTauri
+    ? invoke<SecretsStatus>("secrets_set", {
+        hostId,
+        password: input.password ?? null,
+        privateKey: input.privateKey ?? null,
+        passphrase: input.passphrase ?? null,
+      })
+    : previewSecretsSet(hostId, input);
+}
+
+/** Subscribes to the vault locking or unlocking (auto-lock included); returns the unsubscribe function. */
+export function onVaultChanged(handler: (unlocked: boolean) => void): () => void {
+  if (!isTauri) return previewVault.onChanged(handler);
+  const stop = listen<{ unlocked: boolean }>("vault-changed", (event) => handler(event.payload.unlocked));
+  return () => void stop.then((unlisten) => unlisten());
+}
+
+/** True when an error from the backend says the vault has to be unlocked first. */
+export function isVaultLocked(reason: unknown): boolean {
+  return String(reason).includes("the vault is locked");
 }
 
 export interface Snippet {

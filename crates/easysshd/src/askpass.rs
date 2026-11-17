@@ -9,19 +9,31 @@
 //! `askpass.reply` on the helper's standard output.
 //!
 //! Answers are held in memory only until they are handed to the helper. They
-//! are never stored and never logged.
+//! are never stored and never logged, except that the user may tick
+//! "Remember in vault" on a password or key-passphrase prompt of a saved host,
+//! which saves it encrypted (see `easyssh-vault`).
+//!
+//! The daemon may also answer from the vault itself, without a dialog. That
+//! needs the process to be *bound* to a saved host ([`Hub::bind_process`]) and is
+//! limited to the exact password and passphrase prompts of that host and
+//! user (`easyssh_vault::match_prompt`); host-key questions and anything else
+//! always go to the user. A saved answer is tried once per process and kind:
+//! if OpenSSH asks again the stored secret was wrong, and the user is asked
+//! instead of the server being hit with the same wrong password again.
 
+use easyssh_vault::{match_prompt, Answer, Binding, PromptAnswers, SecretKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, Semaphore};
+use zeroize::Zeroizing;
 
 /// `"<port> <token>"`: where the helper connects and what it must present.
 pub const ENV_ENDPOINT: &str = "ANIXOPS_SSH_ASKPASS";
@@ -34,6 +46,7 @@ pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(300);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REQUEST: u64 = 64 * 1024;
 const MAX_CONCURRENT: usize = 32;
+const MAX_BINDINGS: usize = 4096;
 
 #[derive(Serialize, Deserialize)]
 struct Request {
@@ -116,6 +129,11 @@ pub struct Prompt {
     pub prompt: String,
     /// A yes/no question, such as accepting a new host key.
     pub confirm: bool,
+    /// The prompt is the saved password or key passphrase of a saved host,
+    /// so the dialog may offer "Remember in vault".
+    pub rememberable: bool,
+    /// A saved answer exists but the vault is locked.
+    pub vault_locked: bool,
 }
 
 /// Delivers a prompt to whoever can answer it; `false` when nobody can.
@@ -125,13 +143,24 @@ pub type Notify = Arc<dyn Fn(Prompt) -> bool + Send + Sync>;
 /// every client that was shown it can close its dialog.
 pub type Resolved = Arc<dyn Fn(u64) + Send + Sync>;
 
+/// A prompt shown to the user and what it may be remembered as.
+struct Waiting {
+    sender: oneshot::Sender<Option<String>>,
+    matched: Option<(Binding, SecretKind)>,
+}
+
 /// The daemon side: a loopback listener plus the table of open prompts.
 pub struct Hub {
     port: u16,
     token: String,
     notify: Notify,
     resolved: Resolved,
-    pending: Mutex<HashMap<u64, oneshot::Sender<Option<String>>>>,
+    pending: Mutex<HashMap<u64, Waiting>>,
+    answers: OnceLock<Arc<dyn PromptAnswers>>,
+    /// Which saved host each OpenSSH process (askpass context) belongs to.
+    bindings: Mutex<HashMap<String, Binding>>,
+    /// `(context, kind)` pairs already answered from the vault.
+    auto_answered: Mutex<HashSet<(String, bool)>>,
     /// Processes whose prompt was cancelled; their later prompts fail at once.
     cancelled: Mutex<HashSet<String>>,
     next: AtomicU64,
@@ -156,6 +185,9 @@ impl Hub {
             notify,
             resolved,
             pending: Mutex::new(HashMap::new()),
+            answers: OnceLock::new(),
+            bindings: Mutex::new(HashMap::new()),
+            auto_answered: Mutex::new(HashSet::new()),
             cancelled: Mutex::new(HashSet::new()),
             next: AtomicU64::new(1),
             answer_timeout,
@@ -185,11 +217,73 @@ impl Hub {
         format!("{} {}", self.port, self.token)
     }
 
+    /// Lets the hub answer from, and save to, the vault. Set once.
+    pub fn set_answers(&self, answers: Arc<dyn PromptAnswers>) {
+        let _ = self.answers.set(answers);
+    }
+
+    /// Declares that the OpenSSH process using askpass `context` connects to
+    /// the host `binding` describes. See the module documentation.
+    pub fn bind_process(&self, context: &str, binding: Binding) {
+        let mut bindings = lock(&self.bindings);
+        // Processes that never report their end (file transfers) must not
+        // make this grow for ever.
+        if bindings.len() >= MAX_BINDINGS {
+            bindings.clear();
+        }
+        bindings.insert(context.to_owned(), binding);
+    }
+
+    /// The process is over.
+    pub fn unbind_process(&self, context: &str) {
+        lock(&self.bindings).remove(context);
+        lock(&self.auto_answered).retain(|(c, _)| c != context);
+    }
+
     /// `askpass.reply`: deliver the user's answer (`None` cancels). Unknown or
-    /// already answered ids are ignored.
-    pub fn reply(&self, id: u64, answer: Option<String>) {
-        if let Some(sender) = lock(&self.pending).remove(&id) {
-            let _ = sender.send(answer);
+    /// already answered ids are ignored. With `remember`, a password or key
+    /// passphrase prompt of a saved host also saves the answer in the vault.
+    pub fn reply(&self, id: u64, answer: Option<String>, remember: bool) {
+        let Some(waiting) = lock(&self.pending).remove(&id) else {
+            return;
+        };
+        if let (true, Some(value), Some((binding, kind)), Some(answers)) = (
+            remember,
+            answer.as_ref(),
+            waiting.matched.as_ref(),
+            self.answers.get(),
+        ) {
+            // A failure (a locked vault) only means nothing was saved.
+            let _ = answers.remember(
+                binding,
+                *kind,
+                easyssh_crypto::SecretText::new(value.clone()),
+            );
+        }
+        let _ = waiting.sender.send(answer);
+    }
+
+    /// `askpass.unlock`, after the vault was unlocked: answer prompt `id`
+    /// from it. Returns whether the prompt got its saved answer.
+    pub fn answer_from_vault(&self, id: u64) -> bool {
+        let Some(answers) = self.answers.get() else {
+            return false;
+        };
+        let matched = lock(&self.pending)
+            .get(&id)
+            .and_then(|waiting| waiting.matched.clone());
+        let Some((binding, kind)) = matched else {
+            return false;
+        };
+        let Answer::Secret(secret) = answers.answer(&binding, kind) else {
+            return false;
+        };
+        match lock(&self.pending).remove(&id) {
+            Some(waiting) => {
+                let _ = waiting.sender.send(Some(secret.expose().to_owned()));
+                true
+            }
+            None => false,
         }
     }
 
@@ -205,8 +299,8 @@ impl Hub {
         if !same(request.token.as_bytes(), self.token.as_bytes()) {
             return None;
         }
-        let answer = self.ask(request).await;
-        let mut out = serde_json::to_vec(&answer).ok()?;
+        let answer = self.ask(request).await.map(Zeroizing::new);
+        let mut out = Zeroizing::new(serde_json::to_vec(&answer.as_deref()).ok()?);
         out.push(b'\n');
         write.write_all(&out).await.ok()
     }
@@ -215,14 +309,43 @@ impl Hub {
         if lock(&self.cancelled).contains(&request.context) {
             return None;
         }
+        let matched = lock(&self.bindings)
+            .get(&request.context)
+            .cloned()
+            .and_then(|binding| {
+                match_prompt(&binding, &request.prompt).map(|kind| (binding, kind))
+            });
+        let mut vault_locked = false;
+        if let (Some((binding, kind)), Some(answers)) = (&matched, self.answers.get()) {
+            let key = (request.context.clone(), *kind == SecretKind::Password);
+            if lock(&self.auto_answered).insert(key) {
+                let (answers, binding, kind) = (answers.clone(), binding.clone(), *kind);
+                let found = tokio::task::spawn_blocking(move || answers.answer(&binding, kind))
+                    .await
+                    .unwrap_or(Answer::None);
+                match found {
+                    Answer::Secret(secret) => return Some(secret.expose().to_owned()),
+                    Answer::Locked => {
+                        vault_locked = true;
+                        // Not used up: the unlock below may still answer it.
+                        lock(&self.auto_answered)
+                            .remove(&(request.context.clone(), kind == SecretKind::Password));
+                    }
+                    Answer::None => {}
+                }
+            }
+        }
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = oneshot::channel();
-        lock(&self.pending).insert(id, sender);
+        let rememberable = matched.is_some() && self.answers.get().is_some();
+        lock(&self.pending).insert(id, Waiting { sender, matched });
         let prompt = Prompt {
             id,
             host: request.host,
             confirm: request.prompt.contains("(yes/no"),
             prompt: request.prompt,
+            rememberable,
+            vault_locked,
         };
         if !(self.notify)(prompt) {
             lock(&self.pending).remove(&id);

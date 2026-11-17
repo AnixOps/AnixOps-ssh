@@ -787,6 +787,10 @@ export interface SessionDetachParams {
 export interface AskpassReplyParams {
   id: number;
   answer: string | null;
+  /**
+   * Save the answer in the vault for this host. Only honoured for a prompt the event marked `rememberable`.
+   */
+  remember?: boolean;
 }
 /**
  * Command `askpass.endpoint` payload. Reply: AskpassEndpointResult.
@@ -842,6 +846,14 @@ export interface AskpassPromptEvent {
   host: string;
   prompt: string;
   confirm: boolean;
+  /**
+   * The prompt asks for the saved password or key passphrase of a saved host: the dialog may offer "Remember in vault".
+   */
+  rememberable?: boolean;
+  /**
+   * A saved answer exists but the vault is locked: the dialog may offer to unlock it (`askpass.unlock`).
+   */
+  vault_locked?: boolean;
 }
 /**
  * Command `daemon.shutdown_when_idle` payload. The daemon refuses new sessions (error `draining`) and exits once no session is running, even if clients stay connected. Reply: DaemonShutdownWhenIdleResult.
@@ -875,4 +887,167 @@ export interface HostsChangedEvent {}
  */
 export interface AskpassResolvedEvent {
   id: number;
+}
+/**
+ * The vault state. No secret is ever part of it.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultStatus".
+ */
+export interface VaultStatus {
+  passphrase_set: boolean;
+  unlocked: boolean;
+  /**
+   * 0 = never.
+   */
+  auto_lock_minutes: number;
+  keychain_available: boolean;
+  keychain_error: string | null;
+}
+/**
+ * Command `vault.status` payload. Reply: VaultStatus.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultStatusParams".
+ */
+export interface VaultStatusParams {}
+/**
+ * Command `vault.unlock` payload. Reply: VaultStatus. Fails with `wrong_passphrase`.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultUnlockParams".
+ */
+export interface VaultUnlockParams {
+  passphrase: string;
+}
+/**
+ * Command `vault.lock` payload ("lock now"). Reply: VaultStatus.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultLockParams".
+ */
+export interface VaultLockParams {}
+/**
+ * Command `vault.set_passphrase` payload: set the vault passphrase, or change it when `current` is given. Reply: VaultStatus.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultSetPassphraseParams".
+ */
+export interface VaultSetPassphraseParams {
+  passphrase: string;
+  /**
+   * Required to change an existing passphrase.
+   */
+  current?: string;
+}
+/**
+ * Command `vault.remove_passphrase` payload: go back to keychain-only protection. Reply: VaultStatus.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultRemovePassphraseParams".
+ */
+export interface VaultRemovePassphraseParams {
+  passphrase: string;
+}
+/**
+ * Command `vault.set_auto_lock` payload. Reply: VaultStatus.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultSetAutoLockParams".
+ */
+export interface VaultSetAutoLockParams {
+  minutes: number;
+}
+/**
+ * Command `vault.forget_all` payload: delete every saved password, key and passphrase. Works while locked. Reply: VaultForgetAllResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultForgetAllParams".
+ */
+export interface VaultForgetAllParams {}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultForgetAllResult".
+ */
+export interface VaultForgetAllResult {
+  hosts: number;
+}
+/**
+ * Command `secrets.status` payload. Reply: SecretsStatusResult. Needs no unlock.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SecretsStatusParams".
+ */
+export interface SecretsStatusParams {
+  host_id: string;
+}
+/**
+ * Which secrets a host has saved. Never the values.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SecretsStatusResult".
+ */
+export interface SecretsStatusResult {
+  password: boolean;
+  private_key: boolean;
+  passphrase: boolean;
+}
+/**
+ * Command `secrets.set` payload. Reply: SecretsStatusResult. Fails with `vault_locked` when a passphrase vault is locked.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SecretsSetParams".
+ */
+export interface SecretsSetParams {
+  host_id: string;
+  /**
+   * Absent keeps the saved value; an empty string clears it.
+   */
+  password?: string;
+  /**
+   * Key text (PEM or OpenSSH). Absent keeps; empty clears.
+   */
+  private_key?: string;
+  /**
+   * Key passphrase. Absent keeps; empty clears.
+   */
+  passphrase?: string;
+}
+/**
+ * Command `askpass.unlock` payload: unlock the vault and answer prompt `id` from it. Reply: null. Fails with `wrong_passphrase`.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "AskpassUnlockParams".
+ */
+export interface AskpassUnlockParams {
+  id: number;
+  passphrase: string;
+}
+/**
+ * Command `askpass.bind` payload: tell the daemon that the OpenSSH process using askpass `context` connects to saved host `host_id`, so its password and passphrase prompts for exactly that host and user may be answered from the vault. Reply: null.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "AskpassBindParams".
+ */
+export interface AskpassBindParams {
+  context: string;
+  host_id: string;
+}
+/**
+ * Command `askpass.unbind` payload: the process is over. Reply: null.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "AskpassUnbindParams".
+ */
+export interface AskpassUnbindParams {
+  context: string;
+}
+/**
+ * Event `vault.changed` payload. Sent to every client when the vault locks or unlocks (also by auto-lock).
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultChangedEvent".
+ */
+export interface VaultChangedEvent {
+  unlocked: boolean;
 }
