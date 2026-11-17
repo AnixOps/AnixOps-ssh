@@ -2573,6 +2573,16 @@
         },
         "this_device": {
           "type": "boolean"
+        },
+        "revoked_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix seconds on the server's clock; present when revoked. What the device sent before is still valid, what it sends after is refused."
+        },
+        "cert_expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix seconds. The device certificate is renewed automatically while signed in."
         }
       },
       "required": [
@@ -2838,7 +2848,7 @@
         "account_id"
       ],
       "additionalProperties": false,
-      "description": "Command `vault.members.remove` payload (owner only). The vault key is not rotated yet. Reply: null."
+      "description": "Command `vault.members.remove` payload (owner only): removes the member and replaces the vault key, re-encrypting every record under the new one. Reply: null."
     },
     "VaultMembersRoleParams": {
       "type": "object",

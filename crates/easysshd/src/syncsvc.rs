@@ -17,11 +17,16 @@
 use base64::Engine;
 use easyssh_crypto::{
     account_fingerprint, fingerprints_match, open_vault_key, seal_vault_key, AccountKeyPair,
-    DeviceCert, DeviceSigningKey, KdfParams, SealPublicKey,
+    DeviceCert, DeviceSigningKey, KdfParams, SealPublicKey, VaultKey,
 };
 use easyssh_store::{personal_vault_server_id, Store, StoreError, StoreSync, VaultKind};
-use easyssh_sync::account::{create_vault, enroll_device, login, register, Account};
-use easyssh_sync::wire::{device_id_for, ErrorCode, PutMemberRequest, Role};
+use easyssh_sync::account::{
+    create_vault, enroll_device, login, register, renew_device_cert, seal_for_members,
+    trust_revocations, Account,
+};
+use easyssh_sync::wire::{
+    device_id_for, ErrorCode, MemberInfo, PutMemberRequest, Role, VaultSummary,
+};
 use easyssh_sync::{
     AuthError, DeviceIdentity, HttpClient, SyncEngine, SyncError, SyncReport, TransportError,
     Verifier,
@@ -44,6 +49,11 @@ pub const DEFAULT_DEBOUNCE: Duration = Duration::from_millis(1500);
 pub const DEFAULT_POLL: Duration = Duration::from_secs(3);
 /// Shortest passphrase for a new account.
 pub const MIN_PASSPHRASE_CHARS: usize = 8;
+/// A device certificate is renewed when it has less than this left.
+pub const DEFAULT_RENEW_BEFORE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// How often a vault key rotation re-syncs and tries again when somebody
+/// else wrote meanwhile.
+const ROTATE_ATTEMPTS: usize = 4;
 
 /// Tunables of the sync service; tests use fast ones.
 #[derive(Clone)]
@@ -52,6 +62,8 @@ pub struct SyncOptions {
     pub interval: Duration,
     pub debounce: Duration,
     pub poll: Duration,
+    /// Renew the device certificate when less than this is left of it.
+    pub renew_before: Duration,
 }
 
 impl Default for SyncOptions {
@@ -61,6 +73,7 @@ impl Default for SyncOptions {
             interval: DEFAULT_INTERVAL,
             debounce: DEFAULT_DEBOUNCE,
             poll: DEFAULT_POLL,
+            renew_before: DEFAULT_RENEW_BEFORE,
         }
     }
 }
@@ -93,6 +106,8 @@ impl From<TransportError> for SyncFailure {
                 ErrorCode::DeviceNotRegistered => "device_not_registered",
                 ErrorCode::DeviceRevoked => "device_revoked",
                 ErrorCode::InvalidSignature => "invalid_signature",
+                ErrorCode::CertificateExpired => "certificate_expired",
+                ErrorCode::StaleKeyGeneration => "stale_key_generation",
                 ErrorCode::RegistrationClosed => "registration_closed",
                 ErrorCode::Internal => "server_error",
             },
@@ -142,6 +157,10 @@ impl From<SyncError> for SyncFailure {
                 Ok(store) => (*store).into(),
                 Err(other) => failure("store_error", other.to_string()),
             },
+            SyncError::UnknownKeyGeneration { .. } => {
+                failure("stale_key_generation", error.to_string())
+            }
+            SyncError::Rotation(_) => failure("rotation_failed", error.to_string()),
             other => failure("sync_error", other.to_string()),
         }
     }
@@ -222,7 +241,8 @@ struct Session {
     client: HttpClient,
     account: Account,
     device_seed: [u8; 32],
-    device_cert: DeviceCert,
+    /// Replaced in place when the certificate is renewed.
+    device_cert: Mutex<DeviceCert>,
     personal_vault: String,
     device_hex: String,
     fingerprint: String,
@@ -233,7 +253,7 @@ impl Session {
         DeviceIdentity {
             device_id: device_id.to_owned(),
             signing_key: DeviceSigningKey::from_seed(self.device_seed),
-            cert: self.device_cert.clone(),
+            cert: lock(&self.device_cert).clone(),
         }
     }
 
@@ -245,7 +265,7 @@ impl Session {
             device_name: self.device_name.clone(),
             keys: b64(&*keys),
             device_seed: b64(&self.device_seed),
-            device_cert: b64(&self.device_cert.to_bytes()),
+            device_cert: b64(&lock(&self.device_cert).to_bytes()),
             token: self.client.token().unwrap_or_default(),
         };
         serde_json::to_vec(&secrets)
@@ -303,7 +323,7 @@ impl Session {
             client,
             account,
             device_seed,
-            device_cert,
+            device_cert: Mutex::new(device_cert),
             device_hex,
             fingerprint,
         }
@@ -673,13 +693,20 @@ impl SyncService {
         let list: Vec<Value> = devices
             .into_iter()
             .map(|d| {
-                json!({
+                let mut device = json!({
                     "device_id": d.device_id,
                     "name": d.name,
                     "created_at": d.created_at.max(0),
                     "revoked": d.revoked,
                     "this_device": d.device_id == session.device_hex,
-                })
+                });
+                if let Some(at) = d.revoked_at {
+                    device["revoked_at"] = json!(at.max(0));
+                }
+                if d.cert_expires_at > 0 {
+                    device["cert_expires_at"] = json!(d.cert_expires_at);
+                }
+                device
             })
             .collect();
         Ok(json!({"devices": list}))
@@ -831,6 +858,7 @@ impl SyncService {
                 &PutMemberRequest {
                     role,
                     sealed_key: Some(sealed),
+                    key_generation: Some(summary.key_generation),
                 },
             )
             .await?;
@@ -844,13 +872,91 @@ impl SyncService {
         }))
     }
 
+    /// Remove a member and replace the vault key in one step: a new key
+    /// is generated, every record of the vault is re-encrypted under it (a
+    /// new version signed by this device) and the new key is sealed to the
+    /// members who remain. The server applies it all or not at all and
+    /// refuses writes under the old key afterwards. The removed member
+    /// keeps what they had already synced and nothing newer.
     pub async fn members_remove(
         &self,
         vault_id: &str,
         account_id: &str,
     ) -> Result<(), SyncFailure> {
         let session = self.need_session()?;
-        session.client.remove_member(vault_id, account_id).await?;
+        let _run = self.run.lock().await;
+        for _ in 0..ROTATE_ATTEMPTS {
+            let (mut engine, vaults) = self.prepare_engine(&session).await?;
+            let summary = vaults
+                .iter()
+                .find(|v| v.vault_id == vault_id)
+                .ok_or_else(|| failure("not_found", "no such vault"))?;
+            if summary.role != Role::Owner {
+                return Err(failure("forbidden", "only owners remove members"));
+            }
+            // Bring this device level with the server first, so that every
+            // record the server holds can be re-encrypted.
+            let synced = engine.sync(vault_id).await;
+            self.save_high_water(&engine)?;
+            match synced {
+                Ok(_) => {}
+                Err(error) if error.is_stale_key() => continue,
+                Err(error) => return Err(error.into()),
+            }
+            let members = session.client.members(vault_id).await?;
+            if !members.iter().any(|m| m.account_id == account_id) {
+                return Err(failure("not_found", "no such member"));
+            }
+            let remaining: Vec<MemberInfo> = members
+                .into_iter()
+                .filter(|m| m.account_id != account_id)
+                .collect();
+            self.check_pins(&session, &remaining)?;
+            let new_key =
+                VaultKey::generate().map_err(|e| failure("crypto_error", e.to_string()))?;
+            let sealed = seal_for_members(&remaining, &new_key)?;
+            let rotated = engine
+                .rotate_vault_key(vault_id, new_key, Some(account_id.to_owned()), sealed)
+                .await;
+            self.save_high_water(&engine)?;
+            match rotated {
+                Ok(_) => return Ok(()),
+                Err(SyncError::Rotation(why)) if why.is_retryable() => continue,
+                Err(error) if error.is_stale_key() => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(failure(
+            "conflict",
+            "the vault kept changing while its key was being replaced; try again",
+        ))
+    }
+
+    /// A key is sealed only to account keys that match what was pinned
+    /// (or first seen): a server that swapped a member's key would
+    /// otherwise receive the new vault key.
+    fn check_pins(&self, session: &Session, members: &[MemberInfo]) -> Result<(), SyncFailure> {
+        for member in members {
+            if member.account_id == session.account.account_id {
+                continue;
+            }
+            let fingerprint = Self::fingerprint_of(&member.seal_public, &member.signing_public)?;
+            match self.with_store(|s| s.sync_pin(&member.account_id))? {
+                Some(pin) if !fingerprints_match(&pin.fingerprint, &fingerprint) => {
+                    return Err(failure(
+                        "fingerprint_mismatch",
+                        format!(
+                            "the keys of {} changed; confirm them first",
+                            member.username
+                        ),
+                    ));
+                }
+                Some(_) => {}
+                None => self.with_store(|s| {
+                    s.set_sync_pin(&member.account_id, &member.username, &fingerprint, false)
+                })?,
+            }
+        }
         Ok(())
     }
 
@@ -869,6 +975,7 @@ impl SyncService {
                 &PutMemberRequest {
                     role,
                     sealed_key: None,
+                    key_generation: None,
                 },
             )
             .await?;
@@ -919,7 +1026,60 @@ impl SyncService {
         self.publish();
     }
 
-    async fn sync_session(&self, session: &Session) -> Result<Counts, SyncFailure> {
+    fn save_high_water(
+        &self,
+        engine: &SyncEngine<HttpClient, StoreSync>,
+    ) -> Result<(), SyncFailure> {
+        // What was verified so far stays verified, even after an error.
+        self.with_store(|s| {
+            s.save_high_water(engine.verifier().high_water())?;
+            s.sync_repair_references()
+        })?;
+        Ok(())
+    }
+
+    /// Renew the device certificate when it is about to expire (or has):
+    /// the same device key gets a new certificate, signed by the account
+    /// key, registered with the server and stored. A failure matters only
+    /// once the old certificate is no longer valid.
+    async fn renew_certificate(&self, session: &Session) -> Result<(), SyncFailure> {
+        let now = chrono::Utc::now().timestamp();
+        let expires = lock(&session.device_cert).expires_at;
+        let margin = i64::try_from(self.options.renew_before.as_secs()).unwrap_or(i64::MAX);
+        if expires.saturating_sub(now) > margin {
+            return Ok(());
+        }
+        let public = DeviceSigningKey::from_seed(session.device_seed).public();
+        let renewed = renew_device_cert(
+            &session.client,
+            &session.account,
+            &session.device_name,
+            &public,
+            now,
+        )
+        .await;
+        match renewed {
+            Ok(cert) => {
+                *lock(&session.device_cert) = cert;
+                let blob = session.secrets()?;
+                self.with_store(|s| {
+                    s.set_sync_account(&session.server_url, &session.username, &blob)
+                })?;
+                Ok(())
+            }
+            Err(_) if expires > now => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// An engine over the local store with the keys of every vault the
+    /// account can read (the current generation of each), the other
+    /// members' account keys and the known device revocations.
+    async fn prepare_engine(
+        &self,
+        session: &Session,
+    ) -> Result<(SyncEngine<HttpClient, StoreSync>, Vec<VaultSummary>), SyncFailure> {
+        self.renew_certificate(session).await?;
         let device_id = self.with_store(|s| s.device_id().to_owned());
         let high_water = self.with_store(|s| s.load_high_water())?;
         let verifier =
@@ -937,7 +1097,7 @@ impl SyncService {
         for vault in &vaults {
             let key = open_vault_key(&vault.sealed_key, &session.account.keys.sealing)
                 .map_err(|e| failure("crypto_error", e.to_string()))?;
-            engine.add_vault_key(&vault.vault_id, key);
+            engine.add_vault_key(&vault.vault_id, vault.key_generation, key);
             if vault.vault_id != session.personal_vault {
                 self.with_store(|s| {
                     s.ensure_team_vault(&vault.vault_id, "Shared vault", vault.role.as_str())
@@ -945,45 +1105,55 @@ impl SyncService {
                 self.trust_members(session, &mut engine, &vault.vault_id)
                     .await?;
             }
+            trust_revocations(&session.client, engine.verifier_mut(), &vault.vault_id).await?;
         }
+        Ok((engine, vaults))
+    }
 
-        let mut total = SyncReport::default();
-        let mut failed: Option<SyncFailure> = None;
-        for vault in &vaults {
-            let result = if vault.role.can_write() {
-                engine.sync(&vault.vault_id).await
-            } else {
-                engine.pull(&vault.vault_id).await
-            };
-            match result {
-                Ok(report) => {
-                    total.pulled += report.pulled;
-                    total.pushed += report.pushed;
-                    total.merged += report.merged;
-                    total.overwritten += report.overwritten;
-                    total.rejected.extend(report.rejected);
-                }
-                Err(error) => {
-                    failed = Some(error.into());
-                    break;
+    async fn sync_session(&self, session: &Session) -> Result<Counts, SyncFailure> {
+        // A rotation by another member can land between listing the vaults
+        // and syncing them; one fresh start picks up the new key.
+        let mut attempt = 0;
+        loop {
+            let (mut engine, vaults) = self.prepare_engine(session).await?;
+            let mut total = SyncReport::default();
+            let mut failed: Option<SyncError> = None;
+            for vault in &vaults {
+                let result = if vault.role.can_write() {
+                    engine.sync(&vault.vault_id).await
+                } else {
+                    engine.pull(&vault.vault_id).await
+                };
+                match result {
+                    Ok(report) => {
+                        total.pulled += report.pulled;
+                        total.pushed += report.pushed;
+                        total.merged += report.merged;
+                        total.overwritten += report.overwritten;
+                        total.rejected.extend(report.rejected);
+                    }
+                    Err(error) => {
+                        failed = Some(error);
+                        break;
+                    }
                 }
             }
+            let saved = self.save_high_water(&engine);
+            if let Some(error) = failed {
+                if error.is_stale_key() && attempt == 0 {
+                    attempt += 1;
+                    continue;
+                }
+                return Err(error.into());
+            }
+            saved?;
+            return Ok(Counts {
+                pulled: total.pulled,
+                pushed: total.pushed,
+                merged: total.merged,
+                resolved: total.overwritten,
+            });
         }
-        // What was verified so far stays verified, even after an error.
-        let saved = self.with_store(|s| {
-            s.save_high_water(engine.verifier().high_water())?;
-            s.sync_repair_references()
-        });
-        if let Some(error) = failed {
-            return Err(error);
-        }
-        saved?;
-        Ok(Counts {
-            pulled: total.pulled,
-            pushed: total.pushed,
-            merged: total.merged,
-            resolved: total.overwritten,
-        })
     }
 
     /// Trust the signing keys of the other members of a shared vault, but
@@ -1115,7 +1285,8 @@ mod tests {
             keys,
         };
         let key = DeviceSigningKey::from_seed([3; 32]);
-        let cert = easyssh_crypto::certify_device(&account.keys.signing, &key.public(), "mac", 5);
+        let cert =
+            easyssh_crypto::certify_device(&account.keys.signing, &key.public(), "mac", 5, 99);
         let client = HttpClient::new("http://127.0.0.1:1").unwrap();
         client.set_token(Some("TOKEN".into()));
         let session = Session::assemble(

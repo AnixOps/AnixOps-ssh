@@ -20,6 +20,10 @@ pub enum VerifyError {
     BadSignature,
     #[error("rollback: version vector is older than one already seen for this record")]
     Rollback,
+    #[error("the signer's certificate had expired when the server received this version")]
+    CertificateExpired,
+    #[error("the signing device had been revoked when the server received this version")]
+    DeviceRevoked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -70,6 +74,57 @@ pub enum SyncError {
     BadRecord(&'static str),
     #[error("gave up after repeated conflicts on record {0}")]
     TooManyConflicts(String),
+    /// The server holds a vault key generation this client has no key for
+    /// (the vault was rotated); fetch the vault list again and retry.
+    #[error("no key for generation {generation} of vault {vault_id}")]
+    UnknownKeyGeneration { vault_id: String, generation: u32 },
+    #[error("the vault key rotation was refused: {0}")]
+    Rotation(RotationFailure),
+}
+
+impl SyncError {
+    /// The vault key changed under this client: refresh the keys and retry.
+    pub fn is_stale_key(&self) -> bool {
+        matches!(
+            self,
+            SyncError::UnknownKeyGeneration { .. }
+                | SyncError::Transport(TransportError::Api {
+                    code: ErrorCode::StaleKeyGeneration,
+                    ..
+                })
+        )
+    }
+}
+
+/// Why the server did not apply a key rotation. Nothing was written.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum RotationFailure {
+    #[error("the vault key is already at generation {current}")]
+    Generation { current: u32 },
+    #[error("the members changed meanwhile")]
+    Members,
+    #[error("{} record(s) changed meanwhile", .0.len())]
+    Conflict(Vec<String>),
+    #[error("the server holds {} record(s) this device cannot re-encrypt", .0.len())]
+    Missing(Vec<String>),
+    #[error("record {record_id} was refused: {message}")]
+    Rejected {
+        record_id: String,
+        code: ErrorCode,
+        message: String,
+    },
+}
+
+impl RotationFailure {
+    /// Pulling and trying again can fix it.
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            RotationFailure::Generation { .. }
+                | RotationFailure::Members
+                | RotationFailure::Conflict(_)
+        )
+    }
 }
 
 #[derive(Debug, Error)]

@@ -135,14 +135,15 @@ encrypted, with keys only you hold, in code anyone can audit".
 |---|---|---|
 | Device key (random 32 bytes) | OS keychain; unlocked with Windows Hello, Touch ID / Secure Enclave or a FIDO2 key where available | Local database fields |
 | Account key | Derived from the passphrase with Argon2id; never stored, never sent | The account's X25519 key pair |
-| Vault keys (random 32 bytes) | Sealed to each member's X25519 public key | Entities in that vault |
-| Device signing key (Ed25519) | Keychain; certified by the account key | Signatures on every sync payload |
+| Vault keys (random 32 bytes, one per generation) | Sealed to each member's X25519 public key | Entities in that vault; replaced when a member is removed |
+| Device signing key (Ed25519) | Keychain; certified by the account key for one year, renewed while signed in | Signatures on every sync payload |
 
 - Entities are encrypted as whole records with XChaCha20-Poly1305. The
   associated data binds the record id, vault id and version, so a server
   cannot move ciphertext between records or vaults.
-- Only routing metadata stays in plain text: id, vault id, version vector,
-  deleted flag, signer. Labels, addresses, usernames, passwords, keys and
+- Only routing metadata stays in plain text: id, vault id, table, key
+  generation, version vector, deleted flag, signer. All of it is covered by
+  the envelope signature. Labels, addresses, usernames, passwords, keys and
   snippets are all inside the ciphertext.
 - Signing in to a server proves knowledge of the passphrase without sending
   it (SRP-6a or OPAQUE; chosen in phase 5 with test vectors).
@@ -186,10 +187,12 @@ by us; it carries the same data as an export file, never secrets.)
 The only sync channel is `easyssh-server`, which a user or a team runs
 themselves (we may also offer a hosted one).
 
-- **Envelope**: plain routing metadata, a version vector, the ciphertext,
-  and the device's Ed25519 signature over all of it. Clients reject an
-  envelope with a bad signature, an uncertified device or a version vector
-  older than one they have already seen (rollback protection).
+- **Envelope**: plain routing metadata (including the table and the vault
+  key generation), a version vector, the ciphertext, and the device's
+  Ed25519 signature over all of it. Clients reject an envelope with a bad
+  signature, an uncertified or expired device, a device that was revoked
+  before the server received it, or a version vector older than one they
+  have already seen (rollback protection).
 - **Merging happens on clients**, since the server cannot read records.
   Inside the ciphertext every field carries a stamp (Lamport clock and
   device id). When two version vectors are concurrent, records merge field
@@ -198,7 +201,18 @@ themselves (we may also offer a hosted one).
   record's history, kept locally and on the server, and can be restored in
   one click.
 - **Push** is a compare-and-set on the version vector. If the server holds a
-  concurrent version, it returns it; the client merges and pushes again.
+  concurrent version, it returns it; the client merges and pushes again. A
+  batch endpoint takes many records at once (all or nothing, per-record
+  report); the first upload uses it.
+- **Removing a member replaces the vault key.** The owner's device generates
+  a new key, re-encrypts every record under it (a new version signed by that
+  device), seals it to the remaining members and sends it all in one atomic
+  request; the server then refuses writes under the old key generation. The
+  removed member keeps what they had already synced, nothing newer.
+- **Revoking a device is dated.** The server records when; what the device
+  sent before stays valid, what it sends afterwards is refused by the server
+  and by clients (which learn the times from the server). Device
+  certificates expire after a year and are renewed while signed in.
 - Deletes are signed tombstones, not server instructions.
 
 ### 8.1 How the app does it
@@ -226,7 +240,21 @@ Where the implemented behaviour differs from or adds to the above:
   `unconfirmed` until the owner has compared the safety number when adding
   them; a changed key blocks adding and shows as `changed`. The safety number
   is `easyssh_crypto::account_fingerprint`.
-- Not done: vault key rotation on member removal, syncing saved secrets. A device is re-enrolled on every sign-in.
+- Vault key rotation is `SyncEngine::rotate_vault_key`, driven by
+  `vault.members.remove` in the daemon: it syncs first, checks that every
+  remaining member's key still matches the pinned safety number, then rotates;
+  if somebody wrote meanwhile it syncs and tries again (four rounds). Server
+  history from before a rotation stays under the old key and is not readable
+  afterwards by the remaining members. There is no role below viewer, so
+  removal is the only change that rotates.
+- A device is re-enrolled (fresh key, fresh one-year certificate) on every
+  sign-in, and a signed-in device renews its certificate when less than 30 days
+  are left. A device whose certificate expired while it was offline can renew
+  it as long as its session is valid, otherwise it signs in again.
+- Envelope and certificate formats are version 2 (table, key generation and
+  certificate expiry are signed). Nothing was released with version 1, so there
+  is no reader for it.
+- Not done: syncing saved secrets.
 
 ## 9. Terminal
 

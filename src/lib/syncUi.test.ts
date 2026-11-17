@@ -156,6 +156,9 @@ describe("errorKey", () => {
   it("maps known codes only", () => {
     expect(errorKey("wrong_passphrase")).toBe("wrongPassphrase");
     expect(errorKey("network_error")).toBe("network");
+    expect(errorKey("rotation_failed")).toBe("rotationFailed");
+    expect(errorKey("certificate_expired")).toBe("certificateExpired");
+    expect(errorKey("stale_key_generation")).toBe("staleKey");
     expect(errorKey("something_else")).toBeNull();
     expect(errorKey(null)).toBeNull();
   });

@@ -81,6 +81,18 @@ impl HttpClient {
         url: Url,
         body: Option<serde_json::Value>,
     ) -> Result<(u16, Vec<u8>), TransportError> {
+        self.raw_with(method, url, body, true).await
+    }
+
+    /// `check_limit` false skips the local body-size check, for endpoints
+    /// with their own, larger limit (key rotation).
+    async fn raw_with(
+        &self,
+        method: Method,
+        url: Url,
+        body: Option<serde_json::Value>,
+        check_limit: bool,
+    ) -> Result<(u16, Vec<u8>), TransportError> {
         let mut request = self.http.request(method, url);
         if let Some(token) = self.token.read().expect("token lock").as_deref() {
             request = request.bearer_auth(token);
@@ -92,7 +104,7 @@ impl HttpClient {
             // never sees its 413. Once the server has said what it accepts,
             // refuse here with the same error instead.
             let max = self.max_body.load(Ordering::Relaxed);
-            if bytes.len() > max {
+            if check_limit && bytes.len() > max {
                 return Err(TransportError::Api {
                     status: 413,
                     code: ErrorCode::TooLarge,
@@ -274,17 +286,55 @@ impl HttpClient {
         self.call_empty(Method::PUT, url, Self::json(request)).await
     }
 
-    pub async fn remove_member(
+    /// Revoked devices of the vault's members, with revocation times.
+    pub async fn revoked_devices(
         &self,
         vault_id: &str,
-        account_id: &str,
-    ) -> Result<(), TransportError> {
-        let url = self.url(&["v1", "vaults", vault_id, "members", account_id]);
-        self.call_empty(Method::DELETE, url, None).await
+    ) -> Result<Vec<RevokedDevice>, TransportError> {
+        let url = self.url(&["v1", "vaults", vault_id, "revoked-devices"]);
+        self.call(Method::GET, url, None).await
     }
 }
 
 impl Transport for HttpClient {
+    async fn push_batch(
+        &self,
+        vault_id: &str,
+        request: &BatchPushRequest,
+    ) -> Result<BatchPushResponse, TransportError> {
+        let url = self.url(&["v1", "vaults", vault_id, "records", "batch"]);
+        let (status, bytes) = self.raw(Method::POST, url, Self::json(request)).await?;
+        match status {
+            200 | 409 => match serde_json::from_slice(&bytes) {
+                Ok(parsed) => Ok(parsed),
+                // A 409 that is a plain error, not a report.
+                Err(_) if status == 409 => Err(Self::api_error(status, &bytes)),
+                Err(e) => Err(TransportError::Protocol(e.to_string())),
+            },
+            _ => Err(Self::api_error(status, &bytes)),
+        }
+    }
+
+    async fn rotate(
+        &self,
+        vault_id: &str,
+        request: &RotateRequest,
+    ) -> Result<RotateResponse, TransportError> {
+        let url = self.url(&["v1", "vaults", vault_id, "rotate"]);
+        let (status, bytes) = self
+            .raw_with(Method::POST, url, Self::json(request), false)
+            .await?;
+        match status {
+            200 | 409 => match serde_json::from_slice(&bytes) {
+                Ok(parsed) => Ok(parsed),
+                // A 409 that is a plain error, not a report.
+                Err(_) if status == 409 => Err(Self::api_error(status, &bytes)),
+                Err(e) => Err(TransportError::Protocol(e.to_string())),
+            },
+            _ => Err(Self::api_error(status, &bytes)),
+        }
+    }
+
     async fn push(
         &self,
         vault_id: &str,

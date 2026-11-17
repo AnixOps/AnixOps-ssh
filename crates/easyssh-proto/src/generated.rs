@@ -1765,11 +1765,17 @@ pub struct SyncCounts {
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct SyncDevice {
+    ///Unix seconds. The device certificate is renewed automatically while signed in.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub cert_expires_at: ::std::option::Option<u64>,
     ///Unix seconds.
     pub created_at: u64,
     pub device_id: ::std::string::String,
     pub name: ::std::string::String,
     pub revoked: bool,
+    ///Unix seconds on the server's clock; present when revoked. What the device sent before is still valid, what it sends after is refused.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub revoked_at: ::std::option::Option<u64>,
     pub this_device: bool,
 }
 ///Command `sync.devices.list` payload. Reply: SyncDevicesListResult.
@@ -2803,7 +2809,7 @@ pub struct VaultMembersLookupResult {
     pub fingerprint: ::std::string::String,
     pub username: ::std::string::String,
 }
-///Command `vault.members.remove` payload (owner only). The vault key is not rotated yet. Reply: null.
+///Command `vault.members.remove` payload (owner only): removes the member and replaces the vault key, re-encrypting every record under the new one. Reply: null.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct VaultMembersRemoveParams {

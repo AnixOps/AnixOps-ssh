@@ -146,6 +146,13 @@ jobs:
         run: cargo test -p easyssh-e2e --no-run 2>&1 | tee logs/e2e-build.log
       - name: Run end-to-end tests
         run: cargo test -p easyssh-e2e --no-fail-fast -- --ignored --test-threads=1 2>&1 | tee logs/e2e.log
+      # Build only, nothing is pushed. Catches a broken Dockerfile or a
+      # Cargo.lock that `--locked` refuses, which the Rust jobs would not see.
+      - name: Build easyssh-server image
+        if: ${{ !cancelled() }}
+        run: |
+          docker build -f crates/easyssh-server/Dockerfile -t easyssh-server:ci . 2>&1 | tee logs/server-image.log
+          docker run --rm easyssh-server:ci --version 2>&1 | tee -a logs/server-image.log
       - name: Container logs
         if: always()
         run: |

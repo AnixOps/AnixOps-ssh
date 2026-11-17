@@ -133,7 +133,7 @@ export function TeamVaults() {
                 onError={setError}
               />
             ))}
-            <p className="px-1 text-caption font-normal text-label-3">{t.teamNoRotation}</p>
+            <p className="px-1 text-caption font-normal text-label-3">{t.teamRotates}</p>
           </>
         )}
       </div>
