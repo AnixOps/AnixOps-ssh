@@ -1,9 +1,42 @@
 # easysshd
 
-The EasySSH desktop daemon's local IPC transport. This crate is the library
-(`Server`, `Client`) and a binary (`easysshd [--runtime-dir <path>]`) that
-answers `{"type":"ping"}` with `{"type":"pong"}`. Payloads are opaque JSON for
-now.
+The EasySSH desktop daemon: the authenticated local IPC transport (`Server`,
+`Client`) and the services on top of it. Terminal sessions live here, so they
+survive a reload or close of the UI window. The binary
+(`easysshd [--runtime-dir <path>] [--config <connections.json>] [--idle-timeout-secs <n>]`)
+serves the `easyssh-proto` command set; the app starts the same code from its
+own executable with the hidden `--easysshd` flag.
+
+## Services
+
+Every message after the handshake is an `easyssh-proto` `Command`; anything
+that fails `validate_command` is answered with a `ProtoError` (`invalid_command`,
+or `unknown_command` for an unknown kind) and the connection stays open.
+
+- `proto.hello`, `hosts.list|save|delete` (the same `connections.json` as the
+  v1 app, same validation).
+- `session.open|write|resize|close`: a PTY running the system `ssh` exactly as
+  v1 builds it (or the local shell for a null host). `session.list`,
+  `session.attach {session_id, from_seq?}` and `session.detach` add reattach.
+- Output is UTF-8 text; every byte has an offset in the session's stream.
+  `session.output` events carry it as `seq`. Each session keeps the last 1 MiB
+  (ring buffer). `session.attach` replies, then replays the buffer from
+  `from_seq`, then `session.exit` if the session already ended, then streams
+  live, atomically, so a client sees neither gap nor duplicate. Several clients
+  can attach; output fans out. Ended sessions stay (with their scrollback)
+  until `session.close`.
+- `askpass.prompt` / `askpass.reply` / `askpass.endpoint`: OpenSSH's
+  `SSH_ASKPASS` helper (the app executable in helper mode) talks to a
+  loopback listener guarded by a random token; the daemon forwards prompts to
+  every attached client. Answers are held in memory only until handed to the
+  helper, and are never stored or logged.
+- A client that stops reading (4096 queued frames) is disconnected rather than
+  buffered without bound; it can reconnect and replay with `from_seq`.
+- The daemon exits after 10 minutes with no clients and no running sessions.
+
+`link` (the app side: request/reply, per-session sinks, ordered fire-and-forget
+`post`) and `launch` (connect, or start detached and retry) are toolkit-free so
+the Tauri layer stays thin.
 
 ## Threat model
 
