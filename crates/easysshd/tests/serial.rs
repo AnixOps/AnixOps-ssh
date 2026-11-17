@@ -149,6 +149,10 @@ impl Tc {
 struct FakeDevice {
     /// Kept open: the pty lives as long as its master.
     _master: Box<dyn MasterPty + Send>,
+    /// Kept open on macOS, which refuses terminal ioctls on a slave nobody
+    /// holds. On Linux it is closed: hanging up the master then ends the
+    /// daemon's session.
+    _slave: Option<Box<dyn portable_pty::SlavePty + Send>>,
     writer: Box<dyn Write + Send>,
     received: mpsc::Receiver<Vec<u8>>,
     path: String,
@@ -180,8 +184,7 @@ impl FakeDevice {
             .expect("this platform names its pty slaves")
             .to_string_lossy()
             .into_owned();
-        // The slave is only a path to the daemon: close our end.
-        drop(pair.slave);
+        let slave = cfg!(target_os = "macos").then_some(pair.slave);
         let mut reader = pair.master.try_clone_reader().unwrap();
         let writer = pair.master.take_writer().unwrap();
         let (tx, received) = mpsc::channel();
@@ -204,6 +207,7 @@ impl FakeDevice {
         });
         FakeDevice {
             _master: pair.master,
+            _slave: slave,
             writer,
             received,
             path,
