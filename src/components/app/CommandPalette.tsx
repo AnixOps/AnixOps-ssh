@@ -2,6 +2,7 @@ import {
   ArrowLeftRight,
   CornerDownLeft,
   Columns2,
+  Download,
   FolderOpen,
   Maximize2,
   Minimize2,
@@ -88,6 +89,7 @@ export function CommandPalette({
   onOpenHost,
   onOpenLocal,
   onNewHost,
+  onImport,
   onToggleFiles,
   onPaneAction,
   paneCount,
@@ -103,6 +105,7 @@ export function CommandPalette({
   onOpenHost: (host: Host) => void;
   onOpenLocal: () => void;
   onNewHost: () => void;
+  onImport: () => void;
   onToggleFiles: () => void;
   onPaneAction: (action: PaneAction) => void;
   /** Panes in the active tab; 0 without one. */
@@ -128,6 +131,7 @@ export function CommandPalette({
     const actions: Item[] = [
       { id: "local", section: t.paletteActions, title: t.openLocal, icon: SquareTerminal, run: onOpenLocal },
       { id: "new-host", section: t.paletteActions, title: t.newHost, icon: Plus, run: onNewHost },
+      { id: "import-hosts", section: t.paletteActions, title: t.importHosts, icon: Download, run: onImport },
       ...(activeHostTab
         ? [{ id: "files", section: t.paletteActions, title: t.toggleFiles, icon: FolderOpen, run: onToggleFiles }]
         : []),
@@ -222,6 +226,7 @@ export function CommandPalette({
     onOpenHost,
     onOpenLocal,
     onNewHost,
+    onImport,
     onToggleFiles,
     onPaneAction,
     onNav,

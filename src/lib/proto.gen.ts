@@ -92,6 +92,28 @@ export type Reply =
       id: string;
       error: ProtoError;
     };
+/**
+ * Source formats `easyssh-import` reads.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "ImportFormat".
+ */
+export type ImportFormat =
+  "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "csv" | "openssh";
+/**
+ * What to do with an imported host that matches a stored one (same hostname, port and user).
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "ImportDuplicatePolicy".
+ */
+export type ImportDuplicatePolicy = "skip" | "update" | "keep-both";
+/**
+ * `source`: the file's folders (stored groups of the same name are reused). `none`: no group for new hosts. `existing`: every host goes into `group_id`.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "ImportGroupMode".
+ */
+export type ImportGroupMode = "source" | "none" | "existing";
 
 /**
  * Entities (v1 shapes), envelopes and the starting command/event set.
@@ -422,6 +444,127 @@ export interface HostsDeleteParams {
   id: string;
 }
 /**
+ * A host found in an import file. Never carries a secret.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "ImportHost".
+ */
+export interface ImportHost {
+  label: string;
+  hostname: string;
+  port: number;
+  username?: string | null;
+  /**
+   * Folders from the root, outermost first.
+   */
+  group_path?: string[];
+  /**
+   * Key file path the source referenced; never read.
+   */
+  identity_file?: string | null;
+  jump?: string[];
+  /**
+   * Reasons the host needs the OpenSSH engine.
+   */
+  openssh_only?: string[];
+  notes?: string;
+  /**
+   * Preview only: a stored host has the same hostname, port and user. Ignored by hosts.import_apply.
+   */
+  exists?: boolean;
+  /**
+   * Preview only: why the host cannot be imported. Ignored by hosts.import_apply.
+   */
+  problem?: string;
+}
+/**
+ * Command `hosts.import_preview` payload. Reply: HostsImportPreviewResult. Writes nothing.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostsImportPreviewParams".
+ */
+export interface HostsImportPreviewParams {
+  /**
+   * File read by the daemon (use for large files; at most 8 MiB). Exactly one of `path` and `data`.
+   */
+  path?: string;
+  /**
+   * The file's bytes, base64. Exactly one of `path` and `data`; the frame limit (4 MiB) applies.
+   */
+  data?: string;
+  /**
+   * Name of the file, for formats that name a session after it.
+   */
+  file_name?: string;
+  /**
+   * Overrides detection.
+   */
+  format?: "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "csv" | "openssh";
+  /**
+   * Directory OpenSSH `Include` paths resolve in and may not leave. Only for the user's own `~/.ssh`, on their explicit action.
+   */
+  base_dir?: string;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostsImportPreviewResult".
+ */
+export interface HostsImportPreviewResult {
+  /**
+   * The format that was parsed.
+   */
+  format: ImportFormat | null;
+  /**
+   * What detection chose.
+   */
+  detected: ImportFormat | null;
+  hosts: ImportHost[];
+  groups: string[][];
+  warnings: string[];
+  /**
+   * Records recognised but not importable.
+   */
+  skipped: number;
+}
+/**
+ * Command `hosts.import_apply` payload. Reply: HostsImportApplyResult. Adds and updates only; nothing stored is ever removed. Broadcasts `hosts.changed` when something changed.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostsImportApplyParams".
+ */
+export interface HostsImportApplyParams {
+  /**
+   * The selected hosts.
+   *
+   * @maxItems 5000
+   */
+  hosts: ImportHost[];
+  group_mode: ImportGroupMode;
+  /**
+   * Required with group_mode `existing`.
+   */
+  group_id?: string;
+  duplicates: ImportDuplicatePolicy;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostsImportApplyResult".
+ */
+export interface HostsImportApplyResult {
+  created: number;
+  updated: number;
+  /**
+   * Matches left alone.
+   */
+  unchanged: number;
+  groups_created: number;
+  rejected: {
+    label: string;
+    reason: string;
+  }[];
+  warnings: string[];
+}
+/**
  * A stored known_hosts entry. The key itself is not sent, only its fingerprint.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -730,7 +873,7 @@ export interface DaemonShutdownWhenIdleResult {
   running_sessions: number;
 }
 /**
- * Event `hosts.changed` payload. Sent to every connected client after `hosts.save` or `hosts.delete`; clients refresh their host list.
+ * Event `hosts.changed` payload. Sent to every connected client after `hosts.save`, `hosts.delete` or a `hosts.import_apply` that changed something; clients refresh their host list.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "HostsChangedEvent".

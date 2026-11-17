@@ -281,7 +281,7 @@ pub struct Group {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub parent_id: ::std::option::Option<::std::string::String>,
 }
-///Event `hosts.changed` payload. Sent to every connected client after `hosts.save` or `hosts.delete`; clients refresh their host list.
+///Event `hosts.changed` payload. Sent to every connected client after `hosts.save`, `hosts.delete` or a `hosts.import_apply` that changed something; clients refresh their host list.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
 #[serde(deny_unknown_fields)]
 pub struct HostsChangedEvent {}
@@ -290,6 +290,73 @@ pub struct HostsChangedEvent {}
 #[serde(deny_unknown_fields)]
 pub struct HostsDeleteParams {
     pub id: ::std::string::String,
+}
+///Command `hosts.import_apply` payload. Reply: HostsImportApplyResult. Adds and updates only; nothing stored is ever removed. Broadcasts `hosts.changed` when something changed.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostsImportApplyParams {
+    pub duplicates: ImportDuplicatePolicy,
+    ///Required with group_mode `existing`.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub group_id: ::std::option::Option<::std::string::String>,
+    pub group_mode: ImportGroupMode,
+    ///The selected hosts.
+    pub hosts: ::std::vec::Vec<ImportHost>,
+}
+///`HostsImportApplyResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostsImportApplyResult {
+    pub created: u64,
+    pub groups_created: u64,
+    pub rejected: ::std::vec::Vec<HostsImportApplyResultRejectedItem>,
+    ///Matches left alone.
+    pub unchanged: u64,
+    pub updated: u64,
+    pub warnings: ::std::vec::Vec<::std::string::String>,
+}
+///`HostsImportApplyResultRejectedItem`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostsImportApplyResultRejectedItem {
+    pub label: ::std::string::String,
+    pub reason: ::std::string::String,
+}
+///Command `hosts.import_preview` payload. Reply: HostsImportPreviewResult. Writes nothing.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct HostsImportPreviewParams {
+    ///Directory OpenSSH `Include` paths resolve in and may not leave. Only for the user's own `~/.ssh`, on their explicit action.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub base_dir: ::std::option::Option<::std::string::String>,
+    ///The file's bytes, base64. Exactly one of `path` and `data`; the frame limit (4 MiB) applies.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub data: ::std::option::Option<::std::string::String>,
+    ///Name of the file, for formats that name a session after it.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub file_name: ::std::option::Option<::std::string::String>,
+    ///Overrides detection.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub format: ::std::option::Option<ImportFormat>,
+    ///File read by the daemon (use for large files; at most 8 MiB). Exactly one of `path` and `data`.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub path: ::std::option::Option<::std::string::String>,
+}
+///`HostsImportPreviewResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostsImportPreviewResult {
+    ///What detection chose.
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub detected: ::std::option::Option<ImportFormat>,
+    ///The format that was parsed.
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub format: ::std::option::Option<ImportFormat>,
+    pub groups: ::std::vec::Vec<::std::vec::Vec<::std::string::String>>,
+    pub hosts: ::std::vec::Vec<ImportHost>,
+    ///Records recognised but not importable.
+    pub skipped: u64,
+    pub warnings: ::std::vec::Vec<::std::string::String>,
 }
 ///Command `hosts.list` payload. Reply: HostsListResult.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
@@ -316,6 +383,232 @@ pub struct HostsSaveParams {
 #[serde(deny_unknown_fields)]
 pub struct HostsSaveResult {
     pub id: ::std::string::String,
+}
+///What to do with an imported host that matches a stored one (same hostname, port and user).
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ImportDuplicatePolicy {
+    #[serde(rename = "skip")]
+    Skip,
+    #[serde(rename = "update")]
+    Update,
+    #[serde(rename = "keep-both")]
+    KeepBoth,
+}
+impl ::std::fmt::Display for ImportDuplicatePolicy {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Skip => f.write_str("skip"),
+            Self::Update => f.write_str("update"),
+            Self::KeepBoth => f.write_str("keep-both"),
+        }
+    }
+}
+impl ::std::str::FromStr for ImportDuplicatePolicy {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "skip" => Ok(Self::Skip),
+            "update" => Ok(Self::Update),
+            "keep-both" => Ok(Self::KeepBoth),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ImportDuplicatePolicy {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for ImportDuplicatePolicy {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///Source formats `easyssh-import` reads.
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ImportFormat {
+    #[serde(rename = "putty")]
+    Putty,
+    #[serde(rename = "securecrt")]
+    Securecrt,
+    #[serde(rename = "mobaxterm")]
+    Mobaxterm,
+    #[serde(rename = "xshell")]
+    Xshell,
+    #[serde(rename = "finalshell")]
+    Finalshell,
+    #[serde(rename = "termius")]
+    Termius,
+    #[serde(rename = "csv")]
+    Csv,
+    #[serde(rename = "openssh")]
+    Openssh,
+}
+impl ::std::fmt::Display for ImportFormat {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Putty => f.write_str("putty"),
+            Self::Securecrt => f.write_str("securecrt"),
+            Self::Mobaxterm => f.write_str("mobaxterm"),
+            Self::Xshell => f.write_str("xshell"),
+            Self::Finalshell => f.write_str("finalshell"),
+            Self::Termius => f.write_str("termius"),
+            Self::Csv => f.write_str("csv"),
+            Self::Openssh => f.write_str("openssh"),
+        }
+    }
+}
+impl ::std::str::FromStr for ImportFormat {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "putty" => Ok(Self::Putty),
+            "securecrt" => Ok(Self::Securecrt),
+            "mobaxterm" => Ok(Self::Mobaxterm),
+            "xshell" => Ok(Self::Xshell),
+            "finalshell" => Ok(Self::Finalshell),
+            "termius" => Ok(Self::Termius),
+            "csv" => Ok(Self::Csv),
+            "openssh" => Ok(Self::Openssh),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ImportFormat {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for ImportFormat {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`source`: the file's folders (stored groups of the same name are reused). `none`: no group for new hosts. `existing`: every host goes into `group_id`.
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ImportGroupMode {
+    #[serde(rename = "source")]
+    Source,
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "existing")]
+    Existing,
+}
+impl ::std::fmt::Display for ImportGroupMode {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Source => f.write_str("source"),
+            Self::None => f.write_str("none"),
+            Self::Existing => f.write_str("existing"),
+        }
+    }
+}
+impl ::std::str::FromStr for ImportGroupMode {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "source" => Ok(Self::Source),
+            "none" => Ok(Self::None),
+            "existing" => Ok(Self::Existing),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ImportGroupMode {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for ImportGroupMode {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///A host found in an import file. Never carries a secret.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct ImportHost {
+    ///Preview only: a stored host has the same hostname, port and user. Ignored by hosts.import_apply.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub exists: ::std::option::Option<bool>,
+    ///Folders from the root, outermost first.
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub group_path: ::std::vec::Vec<::std::string::String>,
+    pub hostname: ::std::string::String,
+    ///Key file path the source referenced; never read.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub identity_file: ::std::option::Option<::std::string::String>,
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub jump: ::std::vec::Vec<::std::string::String>,
+    pub label: ::std::string::String,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub notes: ::std::option::Option<::std::string::String>,
+    ///Reasons the host needs the OpenSSH engine.
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub openssh_only: ::std::vec::Vec<::std::string::String>,
+    pub port: ::std::num::NonZeroU64,
+    ///Preview only: why the host cannot be imported. Ignored by hosts.import_apply.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub problem: ::std::option::Option<::std::string::String>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub username: ::std::option::Option<::std::string::String>,
 }
 ///A stored known_hosts entry. The key itself is not sent, only its fingerprint.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]

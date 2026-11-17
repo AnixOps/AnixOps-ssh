@@ -27,3 +27,6 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 uuid.workspace = true
 zeroize = "1"
+
+[dev-dependencies]
+tempfile.workspace = true

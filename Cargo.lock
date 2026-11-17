@@ -118,6 +118,7 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tempfile",
  "uuid",
  "zeroize",
 ]
@@ -1760,6 +1761,7 @@ dependencies = [
  "chrono",
  "easyssh-core",
  "easyssh-crypto",
+ "easyssh-import",
  "rusqlite",
  "serde",
  "serde_json",

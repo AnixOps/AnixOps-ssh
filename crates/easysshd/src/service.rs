@@ -6,9 +6,14 @@ use crate::askpass::{Hub, Prompt};
 use crate::log::Logger;
 use crate::server::{BoxFuture, Outbox, Service};
 use crate::terminal::{SpawnOptions, TermSession, DEFAULT_SCROLLBACK};
+use base64::Engine;
 use easyssh_core::security::{validate_alias, validate_connection};
 use easyssh_core::{ConfigStore, Connection, Group, OpenSsh, SshInvocation};
 use easyssh_proto as proto;
+use easyssh_store::import::{
+    import_apply, import_preview, read_import_file, ApplyRequest, ImportPreview, PreviewRequest,
+    MAX_IMPORT_BYTES,
+};
 use easyssh_store::{open_app_store_with, SecretFlags, Store, StoreError};
 use easyssh_vault::{Binding, KeyFile, StoreAccess, Vault, VaultError, VaultSecrets};
 use portable_pty::CommandBuilder;
@@ -473,6 +478,19 @@ impl Daemon {
                 self.broadcast("hosts.changed", json!({}));
                 ok(Value::Null)
             }
+            "hosts.import_preview" => {
+                let p: ImportPreviewParams = parse(payload)?;
+                let preview = self.import_preview(p)?;
+                ok(serde_json::to_value(preview).map_err(|e| fail("internal", e.to_string()))?)
+            }
+            "hosts.import_apply" => {
+                let p: ApplyRequest = parse(payload)?;
+                let outcome = import_apply(&lock(&self.store), &p).map_err(import_failure)?;
+                if outcome.changed() {
+                    self.broadcast("hosts.changed", json!({}));
+                }
+                ok(serde_json::to_value(outcome).map_err(|e| fail("internal", e.to_string()))?)
+            }
             "known_hosts.list" => {
                 let _: proto::KnownHostsListParams = parse(payload)?;
                 let entries: Vec<Value> = lock(&self.store)
@@ -898,6 +916,44 @@ impl Daemon {
         Ok(id)
     }
 
+    /// Parses an import file given as a path (read here, at most 8 MiB) or as
+    /// base64 bytes, and marks the hosts that are stored already.
+    fn import_preview(&self, p: ImportPreviewParams) -> Result<ImportPreview, Failure> {
+        let file_name = p.file_name.clone().unwrap_or_default();
+        let bytes = match (&p.path, &p.data) {
+            (Some(path), None) => read_import_file(Path::new(path)).map_err(import_failure)?,
+            (None, Some(data)) => {
+                // Base64 is 4/3 of the bytes; refuse before decoding.
+                if data.len() > MAX_IMPORT_BYTES / 3 * 4 + 4 {
+                    return Err(fail(
+                        "invalid_import",
+                        format!("the file is larger than {} MiB", MAX_IMPORT_BYTES >> 20),
+                    ));
+                }
+                base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|e| fail("invalid_import", format!("data is not base64: {e}")))?
+            }
+            _ => {
+                return Err(fail(
+                    "invalid_import",
+                    "give exactly one of `path` and `data`",
+                ))
+            }
+        };
+        let base_dir = p.base_dir.as_deref().map(Path::new);
+        import_preview(
+            &lock(&self.store),
+            &PreviewRequest {
+                bytes: &bytes,
+                file_name: &file_name,
+                format: p.format.as_deref(),
+                base_dir,
+            },
+        )
+        .map_err(import_failure)
+    }
+
     fn delete_host(&self, id: &str) -> Result<(), Failure> {
         lock(&self.store)
             .remove_host(id)
@@ -967,6 +1023,23 @@ fn flags_json(flags: SecretFlags) -> Value {
         "private_key": flags.private_key,
         "passphrase": flags.passphrase,
     })
+}
+
+#[derive(serde::Deserialize)]
+struct ImportPreviewParams {
+    path: Option<String>,
+    data: Option<String>,
+    file_name: Option<String>,
+    format: Option<String>,
+    base_dir: Option<String>,
+}
+
+/// A refused import is the caller's input; a store failure is ours.
+fn import_failure(error: StoreError) -> Failure {
+    match &error {
+        StoreError::Invalid(message) => fail("invalid_import", message.clone()),
+        _ => store_failure(error),
+    }
 }
 
 /// Upper bound for a `known_hosts` file the daemon agrees to import.

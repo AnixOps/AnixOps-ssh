@@ -37,6 +37,7 @@ current 1.x app.
 | **Snippets** | Saved commands, run in the active terminal or broadcast to all. |
 | **Tunnels** | Local, remote and SOCKS forwards, one switch each, with live status. |
 | **Command palette** | Hosts, snippets, tunnels and actions in one search box. |
+| **Import from other clients** | Bring in hosts from `~/.ssh/config` (with `Include`), PuTTY, SecureCRT, MobaXterm, Xshell, FinalShell, Termius or CSV. Review them first, choose a group and what to do with duplicates; nothing you have is removed. Passwords and keys are never imported. |
 | **Backup and sync** | Export and import hosts, or keep them in a Git repository. Never includes passwords or keys. |
 | **Design** | [AnixOps Design](https://github.com/AnixOps/AnixOps-design): light, dark or system theme; Chinese and English. |
 
