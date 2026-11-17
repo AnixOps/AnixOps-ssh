@@ -61,6 +61,9 @@ pub struct HostFields {
     /// Per-host engine override; `None` follows the global setting.
     #[serde(default)]
     pub engine: Option<EnginePreference>,
+    /// Opt-in shell integration for terminals on this host.
+    #[serde(default)]
+    pub shell_integration: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,6 +126,7 @@ fn fields_of(connection: &Connection) -> HostFields {
         proxy_jump: connection.proxy_jump.clone(),
         notes: connection.notes.clone(),
         engine: connection.engine,
+        shell_integration: connection.shell_integration,
         port: 22,
         ..HostFields::default()
     };
@@ -213,6 +217,7 @@ fn apply(
     connection.engine = fields
         .engine
         .filter(|engine| *engine != EnginePreference::Auto);
+    connection.shell_integration = fields.shell_integration;
     validate_connection(connection).map_err(|error| error.to_string())?;
     if let Some(jump) = &connection.proxy_jump {
         validate_alias(jump).map_err(|error| error.to_string())?;

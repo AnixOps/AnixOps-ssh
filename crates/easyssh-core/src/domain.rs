@@ -153,6 +153,10 @@ pub struct Connection {
     pub local_directories: Vec<String>,
     pub remote_directories: Vec<String>,
     pub terminal: TerminalPreferences,
+    /// Opt-in shell integration (see `shell-integration/README.md`). Absent in
+    /// stored files means off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shell_integration: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// Per-host engine override; absent means `auto`.
@@ -182,6 +186,7 @@ impl Connection {
             local_directories: Vec::new(),
             remote_directories: Vec::new(),
             terminal: TerminalPreferences::default(),
+            shell_integration: false,
             created_at: now,
             updated_at: now,
             engine: None,

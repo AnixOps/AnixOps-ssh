@@ -7,8 +7,12 @@ if [ ! -f /keys/id_e2e.pub ]; then
   echo "missing /keys/id_e2e.pub; run e2e/prepare.sh before docker compose up" >&2
   exit 1
 fi
-install -d -m 700 -o keyuser -g keyuser /home/keyuser/.ssh
-install -m 600 -o keyuser -g keyuser /keys/id_e2e.pub /home/keyuser/.ssh/authorized_keys
+# zshuser and fishuser have the same key and a different login shell (shell
+# integration is tested on all three).
+for user in keyuser zshuser fishuser; do
+  install -d -m 700 -o "$user" -g "$user" "/home/$user/.ssh"
+  install -m 600 -o "$user" -g "$user" /keys/id_e2e.pub "/home/$user/.ssh/authorized_keys"
+done
 
 socat TCP-LISTEN:7777,bind=127.0.0.1,fork,reuseaddr EXEC:cat &
 

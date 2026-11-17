@@ -33,6 +33,8 @@ export interface HostFields {
   notes: string;
   /** Per-host SSH engine override; null or "auto" follows the global setting. */
   engine?: EnginePreference | null;
+  /** Opt-in: send the shell integration script after login. */
+  shellIntegration: boolean;
 }
 
 /** Which SSH engine runs a host: the built-in one (russh) or the system OpenSSH. */

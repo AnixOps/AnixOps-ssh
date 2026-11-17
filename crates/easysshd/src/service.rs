@@ -7,7 +7,7 @@ use crate::engine::interact::{parse_decision, Broadcast};
 use crate::engine::{self, plan, Engine, KnownHostsPaths};
 use crate::log::Logger;
 use crate::server::{BoxFuture, Outbox, Service};
-use crate::terminal::{TermSession, DEFAULT_SCROLLBACK};
+use crate::terminal::{SpawnOptions, TermSession, DEFAULT_SCROLLBACK};
 use easyssh_core::security::{validate_alias, validate_connection};
 use easyssh_core::{AppConfig, ConfigStore, Connection, OpenSsh, SshInvocation};
 use easyssh_proto as proto;
@@ -768,15 +768,27 @@ impl Daemon {
         let scrollback = self.cfg.scrollback_bytes;
         let (cols, rows) = (p.cols, p.rows);
         let on_exit = self.exit_hook();
+        let spawn_id = id;
         tokio::task::spawn_blocking(move || {
-            let command = command_for(
+            let (command, shell_integration) = command_for(
                 &store,
                 shell.as_deref(),
                 host_id.as_deref(),
                 agent_sock.as_deref(),
             )?;
-            TermSession::spawn(id, host_id, command, cols, rows, scrollback, on_exit)
-                .map_err(|e| fail("spawn_failed", e))
+            TermSession::spawn(
+                spawn_id,
+                host_id,
+                command,
+                SpawnOptions {
+                    cols,
+                    rows,
+                    scrollback,
+                    shell_integration,
+                },
+                on_exit,
+            )
+            .map_err(|e| fail("spawn_failed", e))
         })
         .await
         .map_err(|e| fail("internal", e.to_string()))?
@@ -825,14 +837,26 @@ impl Daemon {
         let result = match opened {
             Ok((shell, lease)) => {
                 let id = uuid::Uuid::new_v4().simple().to_string();
+                // The same opt-in as on a PTY: the byte stream is the same.
+                let shell_integration = self
+                    .load_config()
+                    .ok()
+                    .zip(p.host_id.as_deref())
+                    .and_then(|(config, host_id)| {
+                        resolve(&config, host_id).ok().map(|c| c.shell_integration)
+                    })
+                    .unwrap_or(false);
                 let session = TermSession::spawn_remote(
                     id,
                     p.host_id.clone(),
                     shell,
                     Box::new(lease),
-                    p.cols,
-                    p.rows,
-                    self.cfg.scrollback_bytes,
+                    SpawnOptions {
+                        cols: p.cols,
+                        rows: p.rows,
+                        scrollback: self.cfg.scrollback_bytes,
+                        shell_integration,
+                    },
                     self.exit_hook(),
                 );
                 Ok((session, ("russh", reason)))
@@ -965,13 +989,15 @@ fn command_for(
     shell: Option<&std::path::Path>,
     host_id: Option<&str>,
     agent_sock: Option<&Path>,
-) -> Result<CommandBuilder, Failure> {
+) -> Result<(CommandBuilder, bool), Failure> {
+    let mut shell_integration = false;
     let mut command = match host_id {
         Some(host_id) => {
             let config = store
                 .load()
                 .map_err(|e| fail("config_error", e.to_string()))?;
             let connection = resolve(&config, host_id)?;
+            shell_integration = connection.shell_integration;
             let invocation = SshInvocation::for_connection(&OpenSsh, &connection)
                 .map_err(|e| fail("invalid_host", e.to_string()))?;
             let mut command = CommandBuilder::new(invocation.executable);
@@ -991,7 +1017,7 @@ fn command_for(
     if let Some(home) = dirs::home_dir() {
         command.cwd(home);
     }
-    Ok(command)
+    Ok((command, shell_integration))
 }
 
 #[cfg(windows)]

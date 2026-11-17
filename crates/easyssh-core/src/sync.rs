@@ -255,6 +255,7 @@ impl SyncConnection {
             local_directories: Vec::new(),
             remote_directories: Vec::new(),
             terminal: Default::default(),
+            shell_integration: false,
             created_at: now,
             updated_at: now,
             engine: None,

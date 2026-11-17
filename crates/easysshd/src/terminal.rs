@@ -6,13 +6,14 @@
 //! Live events, the scrollback and `from_seq` all use these offsets, so a
 //! client that attaches late replays exactly what it missed.
 
+use crate::integration::{self, Action, Integration};
 use crate::server::Outbox;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc as async_mpsc;
 
 /// Default scrollback per session, in bytes of UTF-8 text.
@@ -180,6 +181,8 @@ struct State {
     exit: Option<Option<u32>>,
     cols: u16,
     rows: u16,
+    /// Present while the opt-in shell integration is being delivered.
+    integration: Option<Integration>,
 }
 
 struct Io {
@@ -205,6 +208,16 @@ enum Backend {
     Remote(async_mpsc::UnboundedSender<RemoteCmd>),
 }
 
+/// Settings of a new session.
+pub struct SpawnOptions {
+    pub cols: u16,
+    pub rows: u16,
+    /// Bytes of output kept for replay.
+    pub scrollback: usize,
+    /// Deliver the opt-in shell integration (see `integration`).
+    pub shell_integration: bool,
+}
+
 /// One terminal session.
 pub struct TermSession {
     on_exit: ExitHook,
@@ -222,11 +235,15 @@ impl TermSession {
         id: String,
         host_id: Option<String>,
         command: CommandBuilder,
-        cols: u16,
-        rows: u16,
-        scrollback: usize,
+        options: SpawnOptions,
         on_exit: ExitHook,
     ) -> Result<Arc<TermSession>, String> {
+        let SpawnOptions {
+            cols,
+            rows,
+            scrollback,
+            shell_integration,
+        } = options;
         let pair = native_pty_system()
             .openpty(pty_size(cols, rows))
             .map_err(|e| e.to_string())?;
@@ -249,6 +266,7 @@ impl TermSession {
                 exit: None,
                 cols: size.cols,
                 rows: size.rows,
+                integration: shell_integration.then(|| Integration::new(Instant::now())),
             }),
             io: Backend::Pty(Mutex::new(Io {
                 master: Some(pair.master),
@@ -274,6 +292,10 @@ impl TermSession {
         });
         let pump = session.clone();
         std::thread::spawn(move || pump.pump(reader, &exit_rx));
+        if shell_integration {
+            let delivery = session.clone();
+            std::thread::spawn(move || delivery.deliver_integration());
+        }
         Ok(session)
     }
 
@@ -287,11 +309,15 @@ impl TermSession {
         host_id: Option<String>,
         shell: easyssh_ssh::ShellHandle,
         keep: Box<dyn std::any::Any + Send>,
-        cols: u16,
-        rows: u16,
-        scrollback: usize,
+        options: SpawnOptions,
         on_exit: ExitHook,
     ) -> Arc<TermSession> {
+        let SpawnOptions {
+            cols,
+            rows,
+            scrollback,
+            shell_integration,
+        } = options;
         let (commands, receiver) = async_mpsc::unbounded_channel();
         let size = pty_size(cols, rows);
         let session = Arc::new(TermSession {
@@ -304,6 +330,7 @@ impl TermSession {
                 exit: None,
                 cols: size.cols,
                 rows: size.rows,
+                integration: shell_integration.then(|| Integration::new(Instant::now())),
             }),
             io: Backend::Remote(commands),
             engine: Mutex::new(None),
@@ -314,6 +341,10 @@ impl TermSession {
             drop(keep);
             owner.finish(code);
         });
+        if shell_integration {
+            let delivery = session.clone();
+            std::thread::spawn(move || delivery.deliver_integration());
+        }
         session
     }
 
@@ -389,11 +420,69 @@ impl TermSession {
 
     fn output(&self, text: &str) {
         let mut state = lock(&self.state);
+        let shown = match state.integration.as_mut() {
+            Some(delivery) => {
+                let shown = delivery.filter(text, Instant::now());
+                if delivery.is_done() {
+                    state.integration = None;
+                }
+                shown
+            }
+            None => text.to_owned(),
+        };
+        self.publish(&mut state, &shown);
+    }
+
+    fn publish(&self, state: &mut State, text: &str) {
+        if text.is_empty() {
+            return;
+        }
         let seq = state.scrollback.push(text);
         let payload = json!({"session_id": self.id, "data": text, "seq": seq});
         state
             .subscribers
             .retain(|s| s.outbox.event("session.output", payload.clone()));
+    }
+
+    /// Runs beside the pump while shell integration is pending: waits for a
+    /// prompt, types the script (hidden by `output`) and watches for it to
+    /// stall. See `integration` for the whole exchange.
+    fn deliver_integration(&self) {
+        loop {
+            std::thread::sleep(Duration::from_millis(50));
+            let mut state = lock(&self.state);
+            if state.exit.is_some() {
+                return;
+            }
+            let Some(delivery) = state.integration.as_mut() else {
+                return;
+            };
+            let now = Instant::now();
+            if let Some(released) = delivery.flush_stalled(now) {
+                state.integration = None;
+                self.publish(&mut state, &released);
+                return;
+            }
+            match delivery.tick(now) {
+                Action::Nothing => {
+                    if delivery.is_done() {
+                        state.integration = None;
+                        return;
+                    }
+                }
+                Action::Inject => {
+                    // Wipe the prompt that is on screen: the shell prints a
+                    // fresh one when the script has run.
+                    self.publish(&mut state, "\r\x1b[2K");
+                    drop(state);
+                    for line in integration::bootstrap_lines() {
+                        if self.write_raw(line.as_bytes()).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn finish(&self, code: Option<u32>) {
@@ -411,6 +500,13 @@ impl TermSession {
 
     /// `session.write`: raw bytes to the child's terminal input.
     pub fn write(&self, data: &[u8]) -> Result<(), String> {
+        if let Some(delivery) = lock(&self.state).integration.as_mut() {
+            delivery.note_input();
+        }
+        self.write_raw(data)
+    }
+
+    fn write_raw(&self, data: &[u8]) -> Result<(), String> {
         let io = match &self.io {
             Backend::Pty(io) => io,
             Backend::Remote(commands) => {

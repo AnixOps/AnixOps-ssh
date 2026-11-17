@@ -199,6 +199,17 @@ Host e2e-bastion
     Port {BASTION_PORT}
     User keyuser
 
+# Login shells zsh and fish, for the shell integration tests.
+Host e2e-zsh
+    HostName 127.0.0.1
+    Port {TARGET_PORT}
+    User zshuser
+
+Host e2e-fish
+    HostName 127.0.0.1
+    Port {TARGET_PORT}
+    User fishuser
+
 # Only resolvable from inside the compose network.
 Host e2e-target-internal
     HostName target
