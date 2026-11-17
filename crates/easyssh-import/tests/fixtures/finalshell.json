@@ -1,0 +1,10 @@
+[
+  {"id": "f1", "name": "Production", "parent_id": "root", "conection_type": 1},
+  {"id": "f2", "name": "Web", "parent_id": "f1"},
+  {"id": "c1", "name": "bastion", "host": "192.0.2.1", "port": 22, "user_name": "ops", "parent_id": "f1", "conection_type": 100, "authentication_type": 1, "password": "not-a-real-secret"},
+  {"id": "c2", "name": "web1", "host": "web1.example.com", "port": "2222", "user_name": "alice", "parent_id": "f2", "conection_type": 100, "authentication_type": 2, "private_key_id": "key-123", "jump_server_id": "c1", "description": "front end"},
+  {"id": "c3", "name": "v6", "host": "2001:db8::3", "port": "bad", "jump_server_id": "missing"},
+  {"id": "f3", "name": "loopA", "parent_id": "f4"},
+  {"id": "f4", "name": "loopB", "parent_id": "f3"},
+  {"id": "c4", "name": "looped", "host": "looped.example.com", "parent_id": "f3"}
+]

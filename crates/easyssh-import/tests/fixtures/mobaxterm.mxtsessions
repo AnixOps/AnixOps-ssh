@@ -1,0 +1,16 @@
+[Bookmarks]
+SubRep=
+ImgNum=42
+Top Level=#109#0%top.example.com%22%alice%%-1%-1%%%%%0%0%0%%%-1%0%0%0%%1080%%0%0%1%#MobaFont%10%0%0%-1%15%236,236,236%30,30,30%180,180,180%0%-1%0%%xterm%-1%-1%_Std_Colors_0_%80%24%0%1%-1%<none>%%0%1%-1%<none>%%0#0# #-1
+
+[Bookmarks_1]
+SubRep=Servers\Prod
+ImgNum=41
+web=#109#0%web.example.com%2222%bob%%-1%-1%%%%%0%0%0%_ProfileDir_\.ssh\web_key%%-1%0%0%0%%1080%%0%0%1%#MobaFont%10%0%0%-1%15%236,236,236%30,30,30%180,180,180%0%-1%0%%xterm%-1%-1%_Std_Colors_0_%80%24%0%1%-1%<none>%%0#0# #-1
+rdp-box=#91#4%192.0.2.50%3389%carol%%-1#0# #-1
+vnc=#91#5%192.0.2.51%5900%
+broken=nonsense
+v6=#109#0%2001:db8::9%0%%%-1
+
+[Passwords]
+alice@top=not-a-real-secret
