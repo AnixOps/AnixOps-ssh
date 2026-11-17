@@ -272,14 +272,10 @@ fn record_of(table: &str, fields: BTreeMap<String, Value>, meta: &Meta) -> Recor
     let mut version = RecordVersion::new(table);
     version.version_vector = vector_of(&meta.version_vector);
     for (name, value) in fields {
-        let stamp = meta
-            .field_stamps
-            .get(&name)
-            .map(stamp_of)
-            .unwrap_or(Stamp {
-                lamport: 0,
-                device: String::new(),
-            });
+        let stamp = meta.field_stamps.get(&name).map(stamp_of).unwrap_or(Stamp {
+            lamport: 0,
+            device: String::new(),
+        });
         version.stamps.insert(name.clone(), stamp);
         version.fields.insert(name, value);
     }
@@ -289,7 +285,9 @@ fn record_of(table: &str, fields: BTreeMap<String, Value>, meta: &Meta) -> Recor
             version.tombstone = Some(stamp);
         } else {
             // A restored record: the restore outranks the delete it undid.
-            version.fields.insert(DELETED.to_owned(), Value::Bool(false));
+            version
+                .fields
+                .insert(DELETED.to_owned(), Value::Bool(false));
             version.stamps.insert(DELETED.to_owned(), stamp);
         }
     } else if meta.deleted {
@@ -319,13 +317,10 @@ fn stamps_of(version: &RecordVersion) -> (BTreeMap<String, FieldStamp>, bool) {
         .filter(|(name, _)| name.as_str() != DELETED)
         .map(|(name, stamp)| (name.clone(), field_stamp_of(stamp)))
         .collect();
-    let newest = [
-        version.stamps.get(DELETED),
-        version.tombstone.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    .max();
+    let newest = [version.stamps.get(DELETED), version.tombstone.as_ref()]
+        .into_iter()
+        .flatten()
+        .max();
     if let Some(stamp) = newest {
         stamps.insert(DELETED.to_owned(), field_stamp_of(stamp));
     }
@@ -427,7 +422,10 @@ impl Store {
         let found = if record_id == VAULT_META_RECORD {
             self.vault_meta_row(&local_vault)?.map(|(name, meta)| {
                 let fields = BTreeMap::from([("name".to_owned(), Value::String(name))]);
-                (record_of(VAULT_META_TABLE, fields, &meta), local_vault.clone())
+                (
+                    record_of(VAULT_META_TABLE, fields, &meta),
+                    local_vault.clone(),
+                )
             })
         } else {
             self.export_any(record_id)?
@@ -452,7 +450,9 @@ impl Store {
         if local_vault != PERSONAL_VAULT_ID {
             if let Some((_, meta)) = self.vault_meta_row(&local_vault)? {
                 if !meta.version_vector.is_empty() {
-                    if let Some(record) = self.sync_get(personal, server_vault, VAULT_META_RECORD)? {
+                    if let Some(record) =
+                        self.sync_get(personal, server_vault, VAULT_META_RECORD)?
+                    {
                         if record.is_dirty() {
                             out.push(record);
                         }
@@ -480,9 +480,8 @@ impl Store {
                 if local.is_empty() {
                     continue;
                 }
-                let server: Option<BTreeMap<String, u64>> = server
-                    .map(|text| serde_json::from_str(&text))
-                    .transpose()?;
+                let server: Option<BTreeMap<String, u64>> =
+                    server.map(|text| serde_json::from_str(&text)).transpose()?;
                 if server.as_ref() == Some(&local) {
                     continue;
                 }
@@ -516,15 +515,12 @@ impl Store {
             return Ok(());
         }
         let version = &record.version;
-        let mut item = match T::from_fields(
-            existing.as_ref().map(|row| &row.item),
-            id,
-            &version.fields,
-        ) {
-            Ok(item) => item,
-            Err(StoreError::Invalid(_)) => return Ok(()),
-            Err(other) => return Err(other),
-        };
+        let mut item =
+            match T::from_fields(existing.as_ref().map(|row| &row.item), id, &version.fields) {
+                Ok(item) => item,
+                Err(StoreError::Invalid(_)) => return Ok(()),
+                Err(other) => return Err(other),
+            };
         let deleted = version.is_deleted();
         if !deleted {
             match item.check_remote() {
@@ -546,7 +542,10 @@ impl Store {
         item.sync_meta(&meta);
         let mut columns = item.columns(self, local_vault)?;
         columns.push(("id", rusqlite::types::Value::Text(meta.id.clone())));
-        columns.push(("vault_id", rusqlite::types::Value::Text(local_vault.to_owned())));
+        columns.push((
+            "vault_id",
+            rusqlite::types::Value::Text(local_vault.to_owned()),
+        ));
         columns.push((
             "updated_at",
             rusqlite::types::Value::Text(fmt_ts(meta.updated_at)),
@@ -974,7 +973,10 @@ impl Store {
                     entity: "history entry",
                     id: history_seq.to_string(),
                 })?;
-            if matches!(entry.field.as_str(), "password" | "private_key" | "passphrase") {
+            if matches!(
+                entry.field.as_str(),
+                "password" | "private_key" | "passphrase"
+            ) {
                 return Err(StoreError::Invalid("secrets are not restored".into()));
             }
             let value = entry.old_value.unwrap_or(Value::Null);

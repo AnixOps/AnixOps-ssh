@@ -428,6 +428,20 @@ pub struct HostsSaveParams {
 pub struct HostsSaveResult {
     pub id: ::std::string::String,
 }
+///Command `hosts.vaults` payload. Reply: HostsVaultsResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct HostsVaultsParams {}
+///`HostsVaultsResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostsVaultsResult {
+    ///Host id to vault id, for the hosts that are not in the personal vault.
+    pub host_vaults: ::std::collections::HashMap<
+        ::std::string::String,
+        ::std::string::String,
+    >,
+}
 ///What to do with an imported host that matches a stored one (same hostname, port and user).
 #[derive(
     ::serde::Deserialize,

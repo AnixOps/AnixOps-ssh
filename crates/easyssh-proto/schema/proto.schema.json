@@ -2758,6 +2758,29 @@
       ],
       "additionalProperties": false,
       "description": "Command `hosts.history_restore` payload: put one old value back, as an ordinary edit that syncs. Reply: null."
+    },
+    "HostsVaultsParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `hosts.vaults` payload. Reply: HostsVaultsResult."
+    },
+    "HostsVaultsResult": {
+      "type": "object",
+      "properties": {
+        "host_vaults": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Host id to vault id, for the hosts that are not in the personal vault."
+        }
+      },
+      "required": [
+        "host_vaults"
+      ],
+      "additionalProperties": false
     }
   }
 }

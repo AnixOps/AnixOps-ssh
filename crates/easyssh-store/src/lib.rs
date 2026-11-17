@@ -32,8 +32,8 @@ pub use known_hosts::{fingerprint_of, KnownHost, KnownHostsImport, SkippedLine};
 pub use meta::{FieldChange, FieldStamp, HistoryEntry, Meta};
 pub use migrations::latest_version;
 pub use secrets::{SecretChange, SecretFlags, SecretsUpdate, StoredSecrets};
-pub use sync::{personal_vault_server_id, StoreSync, SyncAccountRow, SyncPin};
 pub use store::{Record, Store, Vault, VaultKind, PERSONAL_VAULT_ID};
+pub use sync::{personal_vault_server_id, StoreSync, SyncAccountRow, SyncPin};
 pub use v1::{EntityCounts, MigrationReport, Skipped, MIGRATION_SETTING};
 
 #[cfg(test)]

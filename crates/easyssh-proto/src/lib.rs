@@ -116,7 +116,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ),
     ("sync.devices.revoke", "SyncDevicesRevokeParams", ""),
     ("vaults.list", "VaultsListParams", "VaultsListResult"),
-    ("vault.create_shared", "VaultCreateSharedParams", "VaultInfo"),
+    (
+        "vault.create_shared",
+        "VaultCreateSharedParams",
+        "VaultInfo",
+    ),
     (
         "vault.members.list",
         "VaultMembersListParams",
@@ -135,6 +139,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "HostsMoveVaultParams",
         "HostsMoveVaultResult",
     ),
+    ("hosts.vaults", "HostsVaultsParams", "HostsVaultsResult"),
     ("hosts.history", "HostsHistoryParams", "HostsHistoryResult"),
     ("hosts.history_restore", "HostsHistoryRestoreParams", ""),
 ];

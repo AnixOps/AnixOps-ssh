@@ -20,8 +20,8 @@ pub mod sign;
 pub mod version_vector;
 
 pub use error::{CryptoError, Result};
-pub use fingerprint::{account_fingerprint, fingerprints_match, FINGERPRINT_GROUPS};
 pub use field::{DeviceFieldCipher, DeviceKeyCipher, FieldCipher, NotConfigured};
+pub use fingerprint::{account_fingerprint, fingerprints_match, FINGERPRINT_GROUPS};
 pub use kdf::{derive_account_secrets, AccountSecrets, KdfHeader, KdfParams};
 pub use keys::{
     open_vault_key, seal_vault_key, unwrap_account_keys, wrap_account_keys, AccountKeyPair,

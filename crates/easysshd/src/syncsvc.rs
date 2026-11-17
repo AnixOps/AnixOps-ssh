@@ -20,9 +20,7 @@ use easyssh_crypto::{
     DeviceCert, DeviceSigningKey, KdfParams, SealPublicKey,
 };
 use easyssh_store::{personal_vault_server_id, Store, StoreError, StoreSync, VaultKind};
-use easyssh_sync::account::{
-    create_vault, enroll_device, login, register, Account,
-};
+use easyssh_sync::account::{create_vault, enroll_device, login, register, Account};
 use easyssh_sync::wire::{device_id_for, ErrorCode, PutMemberRequest, Role};
 use easyssh_sync::{
     AuthError, DeviceIdentity, HttpClient, SyncEngine, SyncError, SyncReport, TransportError,
@@ -522,7 +520,10 @@ impl SyncService {
         let url = validate_server_url(server_url)?;
         let username = username.trim().to_owned();
         if username.is_empty() || username.chars().count() > 64 {
-            return Err(failure("invalid_command", "the user name needs 1 to 64 characters"));
+            return Err(failure(
+                "invalid_command",
+                "the user name needs 1 to 64 characters",
+            ));
         }
         if new_account && passphrase.chars().count() < MIN_PASSPHRASE_CHARS {
             return Err(failure(
@@ -718,7 +719,10 @@ impl SyncService {
         let session = self.need_session()?;
         let name = name.trim();
         if name.is_empty() || name.chars().count() > 64 {
-            return Err(failure("invalid_command", "the vault name needs 1 to 64 characters"));
+            return Err(failure(
+                "invalid_command",
+                "the vault name needs 1 to 64 characters",
+            ));
         }
         let id = uuid::Uuid::new_v4().to_string();
         create_vault(&session.client, &session.account, &id).await?;
@@ -840,7 +844,11 @@ impl SyncService {
         }))
     }
 
-    pub async fn members_remove(&self, vault_id: &str, account_id: &str) -> Result<(), SyncFailure> {
+    pub async fn members_remove(
+        &self,
+        vault_id: &str,
+        account_id: &str,
+    ) -> Result<(), SyncFailure> {
         let session = self.need_session()?;
         session.client.remove_member(vault_id, account_id).await?;
         Ok(())
@@ -914,8 +922,8 @@ impl SyncService {
     async fn sync_session(&self, session: &Session) -> Result<Counts, SyncFailure> {
         let device_id = self.with_store(|s| s.device_id().to_owned());
         let high_water = self.with_store(|s| s.load_high_water())?;
-        let verifier = Verifier::new(session.account.keys.signing.public())
-            .with_high_water(high_water);
+        let verifier =
+            Verifier::new(session.account.keys.signing.public()).with_high_water(high_water);
         let mut engine = SyncEngine::new(
             session.client.clone(),
             StoreSync::new(self.store.clone(), session.personal_vault.clone()),
@@ -1110,7 +1118,15 @@ mod tests {
         let cert = easyssh_crypto::certify_device(&account.keys.signing, &key.public(), "mac", 5);
         let client = HttpClient::new("http://127.0.0.1:1").unwrap();
         client.set_token(Some("TOKEN".into()));
-        let session = Session::assemble("http://127.0.0.1:1", "ann", "mac", client, account, [3; 32], cert);
+        let session = Session::assemble(
+            "http://127.0.0.1:1",
+            "ann",
+            "mac",
+            client,
+            account,
+            [3; 32],
+            cert,
+        );
         let blob = session.secrets().unwrap();
         let text = String::from_utf8_lossy(&blob).into_owned();
         assert!(!text.contains("passphrase"));

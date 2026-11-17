@@ -4,8 +4,8 @@
 use crate::agent::validate_agent_socket;
 use crate::askpass::{Hub, Prompt};
 use crate::log::Logger;
-use crate::syncsvc::{SyncFailure, SyncOptions, SyncService};
 use crate::server::{BoxFuture, Outbox, Service};
+use crate::syncsvc::{SyncFailure, SyncOptions, SyncService};
 use crate::terminal::{SpawnOptions, TermSession, DEFAULT_SCROLLBACK};
 use base64::Engine;
 use easyssh_core::security::{validate_alias, validate_connection};
@@ -875,6 +875,16 @@ impl Daemon {
                     .map_err(store_failure)?;
                 self.broadcast("hosts.changed", json!({}));
                 ok(json!({"id": id}))
+            }
+            "hosts.vaults" => {
+                let _: proto::HostsVaultsParams = parse(payload)?;
+                let hosts = lock(&self.store).list_hosts().map_err(store_failure)?;
+                let map: serde_json::Map<String, Value> = hosts
+                    .into_iter()
+                    .filter(|r| r.meta.vault_id != easyssh_store::PERSONAL_VAULT_ID)
+                    .map(|r| (r.meta.id, Value::String(r.meta.vault_id)))
+                    .collect();
+                ok(json!({"host_vaults": map}))
             }
             "hosts.history" => {
                 let p: proto::HostsHistoryParams = parse(payload)?;

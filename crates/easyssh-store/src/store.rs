@@ -675,9 +675,9 @@ pub struct Vault {
 
 impl Store {
     pub fn list_vaults(&self) -> Result<Vec<Vault>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, name, kind, created_at, role FROM vaults ORDER BY created_at, id")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, kind, created_at, role FROM vaults ORDER BY created_at, id",
+        )?;
         let mut rows = stmt.query([])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {

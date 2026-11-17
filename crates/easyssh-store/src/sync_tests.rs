@@ -183,9 +183,18 @@ async fn groups_snippets_tunnels_and_known_hosts_sync() {
             .group_id,
         Some(group.id.clone())
     );
-    assert_eq!(s.get_snippet(&snippet.id).unwrap().unwrap().item.content, "uptime");
-    assert_eq!(s.get_tunnel(&tunnel.id).unwrap().unwrap().item.bind_port, 5433);
-    assert_eq!(s.get_known_host(&known.id).unwrap().unwrap().item.key_blob, vec![1, 2, 3, 4]);
+    assert_eq!(
+        s.get_snippet(&snippet.id).unwrap().unwrap().item.content,
+        "uptime"
+    );
+    assert_eq!(
+        s.get_tunnel(&tunnel.id).unwrap().unwrap().item.bind_port,
+        5433
+    );
+    assert_eq!(
+        s.get_known_host(&known.id).unwrap().unwrap().item.key_blob,
+        vec![1, 2, 3, 4]
+    );
 }
 
 #[tokio::test]
@@ -214,7 +223,12 @@ async fn concurrent_edits_to_different_fields_both_survive() {
 
     for dev in [&a, &b] {
         let got = dev.host(&id).unwrap().item.connection;
-        assert_eq!(got.color.as_deref(), Some("red"), "{}", dev.store().device_id());
+        assert_eq!(
+            got.color.as_deref(),
+            Some("red"),
+            "{}",
+            dev.store().device_id()
+        );
         assert_eq!(got.notes, "deploys on friday");
     }
 }
@@ -286,13 +300,9 @@ async fn a_remote_edit_that_replaces_a_local_value_writes_history() {
     let report = b.sync().await;
     assert_eq!(report.pulled, 1);
     assert_eq!(b.host(&id).unwrap().item.connection.name, "new-name");
-    assert!(b
-        .store()
-        .history(&id)
-        .unwrap()
-        .iter()
-        .any(|entry| entry.field == "name"
-            && entry.old_value == Some(serde_json::json!("old-name"))));
+    assert!(b.store().history(&id).unwrap().iter().any(
+        |entry| entry.field == "name" && entry.old_value == Some(serde_json::json!("old-name"))
+    ));
 }
 
 #[tokio::test]
@@ -347,7 +357,10 @@ async fn cursor_record_tokens_and_high_water_survive_a_restart() {
         personal: personal.clone(),
     };
     let report = b2.sync().await;
-    assert_eq!(report.pulled, 0, "the cursor was kept, nothing is pulled twice");
+    assert_eq!(
+        report.pulled, 0,
+        "the cursor was kept, nothing is pulled twice"
+    );
 
     // Rollback protection survives the restart: a server that serves a
     // version older than one already seen is refused.
@@ -385,7 +398,9 @@ async fn team_vaults_are_separate_and_carry_a_name() {
         d.engine.add_vault_key(&team, VaultKey::from_bytes([9; 32]));
     }
     a.store().create_team_vault(&team, "Platform team").unwrap();
-    b.store().ensure_team_vault(&team, "Shared vault", "editor").unwrap();
+    b.store()
+        .ensure_team_vault(&team, "Shared vault", "editor")
+        .unwrap();
 
     let connection = new_host("shared-host");
     let id = connection.id.clone();
@@ -416,7 +431,10 @@ async fn team_vaults_are_separate_and_carry_a_name() {
     // The personal vault of B has no trace of the shared host; the team one does.
     let on_b = b.store().get_host(&moved_id).unwrap().unwrap();
     assert_eq!(on_b.meta.vault_id, team);
-    assert!(b.store().get_host(&id).unwrap().is_none(), "the original was removed");
+    assert!(
+        b.store().get_host(&id).unwrap().is_none(),
+        "the original was removed"
+    );
     let vault = b
         .store()
         .list_vaults()
@@ -451,7 +469,11 @@ async fn an_invalid_remote_host_is_skipped_not_fatal() {
 fn account_secrets_are_sealed_and_cleared_with_sync_state() {
     let store = Store::open_in_memory("dev-a", Arc::new(PlaintextForTests)).unwrap();
     store
-        .set_sync_account("https://sync.example.org", "ann", b"{\"token\":\"TOP-SECRET\"}")
+        .set_sync_account(
+            "https://sync.example.org",
+            "ann",
+            b"{\"token\":\"TOP-SECRET\"}",
+        )
         .unwrap();
     let row = store.sync_account().unwrap().unwrap();
     assert_eq!(row.username, "ann");
@@ -476,7 +498,10 @@ fn personal_vault_ids_differ_per_account_and_are_stable() {
         personal_vault_server_id("one"),
         personal_vault_server_id("one")
     );
-    assert_ne!(personal_vault_server_id("one"), personal_vault_server_id("two"));
+    assert_ne!(
+        personal_vault_server_id("one"),
+        personal_vault_server_id("two")
+    );
 }
 
 #[test]

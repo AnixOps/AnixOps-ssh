@@ -12,7 +12,7 @@ use easyssh_vault::Vault;
 use easysshd::link::{AskpassPrompt, Link, LinkHandler};
 use easysshd::{Daemon, DaemonConfig, DaemonExtras, Server, SyncOptions};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::TempDir;
@@ -59,8 +59,6 @@ struct Device {
     task: JoinHandle<()>,
     link: Link,
     events: Arc<Events>,
-    root: PathBuf,
-    keys: Arc<MemoryKeyStore>,
 }
 
 fn private_dir(path: &Path) {
@@ -96,7 +94,10 @@ async fn start(root: &Path, keys: Arc<MemoryKeyStore>) -> Device {
         idle_timeout: Duration::from_secs(600),
     };
     let runtime = root.join("run");
-    let vault = Arc::new(Vault::with_kdf(keys.clone(), KdfParams::insecure_for_tests()));
+    let vault = Arc::new(Vault::with_kdf(
+        keys.clone(),
+        KdfParams::insecure_for_tests(),
+    ));
     let extras = DaemonExtras {
         log_dir: Some(runtime.clone()),
         runtime_dir: Some(runtime.clone()),
@@ -125,8 +126,6 @@ async fn start(root: &Path, keys: Arc<MemoryKeyStore>) -> Device {
         task,
         link,
         events,
-        root: root.to_owned(),
-        keys,
     }
 }
 
@@ -259,7 +258,10 @@ async fn an_edit_on_one_device_appears_on_the_other() {
 
     // The second device signs in to the existing account and receives it.
     let signed = b.signin(&server.url, "ann", "ann-laptop").await;
-    assert_eq!(signed["fingerprint"], status["fingerprint"], "same account, same safety number");
+    assert_eq!(
+        signed["fingerprint"], status["fingerprint"],
+        "same account, same safety number"
+    );
     assert_ne!(signed["device_id"], status["device_id"]);
     let got = b.host(&id).await.expect("the host arrived");
     assert_eq!(got["name"], "Web");
@@ -295,7 +297,10 @@ async fn an_edit_on_one_device_appears_on_the_other() {
     let devices = a.ok("sync.devices.list", json!({})).await;
     let devices = devices["devices"].as_array().unwrap();
     assert_eq!(devices.len(), 2);
-    assert_eq!(devices.iter().filter(|d| d["this_device"] == true).count(), 1);
+    assert_eq!(
+        devices.iter().filter(|d| d["this_device"] == true).count(),
+        1
+    );
     a.stop().await;
     b.stop().await;
 }
@@ -315,7 +320,8 @@ async fn concurrent_edits_to_different_fields_both_survive() {
 
     // Both edit while offline from each other, different fields.
     a.edit(&id, |h| h["color"] = json!("#ff0000")).await;
-    b.edit(&id, |h| h["notes"] = json!("deploys on friday")).await;
+    b.edit(&id, |h| h["notes"] = json!("deploys on friday"))
+        .await;
     a.sync().await;
     let status = b.sync().await;
     assert_eq!(status["last"]["merged"], 1);
@@ -347,7 +353,10 @@ async fn a_same_field_conflict_keeps_the_loser_in_history_and_restore_syncs() {
     b.edit(&id, |h| h["name"] = json!("db-from-b")).await;
     a.sync().await;
     let status = b.sync().await;
-    assert!(status["last"]["resolved"].as_u64().unwrap() >= 1, "{status}");
+    assert!(
+        status["last"]["resolved"].as_u64().unwrap() >= 1,
+        "{status}"
+    );
     a.sync().await;
     let (name_a, name_b) = (
         a.host(&id).await.unwrap()["name"].clone(),
@@ -488,7 +497,10 @@ async fn a_shared_vault_reaches_a_member_and_the_fingerprints_match() {
     let old_id = host["id"].as_str().unwrap().to_owned();
     a.save(&host).await;
     let moved = a
-        .ok("hosts.move_vault", json!({"id": old_id, "vault_id": vault_id}))
+        .ok(
+            "hosts.move_vault",
+            json!({"id": old_id, "vault_id": vault_id}),
+        )
         .await;
     let new_id = moved["id"].as_str().unwrap().to_owned();
     assert_ne!(new_id, old_id);
@@ -520,7 +532,8 @@ async fn a_shared_vault_reaches_a_member_and_the_fingerprints_match() {
     assert_eq!(me["trust"], "self");
 
     // An editor's change flows back to the owner.
-    b.edit(&new_id, |h| h["name"] = json!("Shared by Bob")).await;
+    b.edit(&new_id, |h| h["name"] = json!("Shared by Bob"))
+        .await;
     b.sync().await;
     a.sync().await;
     assert_eq!(a.host(&new_id).await.unwrap()["name"], "Shared by Bob");
@@ -544,10 +557,12 @@ async fn a_shared_vault_reaches_a_member_and_the_fingerprints_match() {
         json!({"vault_id": vault_id, "account_id": bob_id}),
     )
     .await;
-    a.edit(&new_id, |h| h["name"] = json!("After removal")).await;
+    a.edit(&new_id, |h| h["name"] = json!("After removal"))
+        .await;
     a.sync().await;
+    // The server no longer lists the vault for Bob: nothing more arrives.
     let status = b.sync().await;
-    assert_eq!(status["state"], "error", "{status}");
+    assert_eq!(status["state"], "idle", "{status}");
     assert_eq!(
         b.host(&new_id).await.unwrap()["name"],
         "Viewer edit",
