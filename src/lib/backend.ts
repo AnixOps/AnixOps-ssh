@@ -5,7 +5,9 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { previewCancel, previewFiles, previewTransfer } from "./previewFiles";
 import {
+  previewApplyImport,
   previewDeleteHost,
+  previewImport,
   previewImportKnownHosts,
   previewKnownHosts,
   previewRemoveKnownHost,
@@ -14,6 +16,12 @@ import {
   previewSnapshot,
 } from "./preview";
 import { previewSession } from "./previewSession";
+import type {
+  HostsImportApplyParams,
+  HostsImportApplyResult,
+  HostsImportPreviewResult,
+  ImportFormat,
+} from "./proto.gen";
 import { UNAVAILABLE, type PendingReports, type TelemetryStatus } from "./telemetry";
 
 export type HostSource = "saved" | "ssh_config";
@@ -124,6 +132,43 @@ export async function deleteHost(id: string): Promise<void> {
 export async function setFavorite(id: string, favorite: boolean): Promise<void> {
   if (!isTauri) return previewSetFavorite(id, favorite);
   await invoke("host_set_favorite", { id, favorite });
+}
+
+export type {
+  HostsImportApplyParams,
+  HostsImportApplyResult,
+  HostsImportPreviewResult,
+  ImportDuplicatePolicy,
+  ImportFormat,
+  ImportHost,
+} from "./proto.gen";
+
+/** What an import reads: a file the user picked, or `~/.ssh/config` on their command. */
+export type ImportSource = { kind: "file"; path: string } | { kind: "ssh_config" };
+
+/** Asks for a host list file. Returns null if cancelled. */
+export async function pickImportFile(): Promise<string | null> {
+  if (!isTauri) return "/Users/you/Downloads/sessions.csv";
+  const picked = await openDialog({ multiple: false, directory: false });
+  return typeof picked === "string" ? picked : null;
+}
+
+/** Parses `source` and marks hosts that are stored already. Writes nothing.
+ *  `format` overrides detection. */
+export async function previewImportHosts(
+  source: ImportSource,
+  format: ImportFormat | null,
+): Promise<HostsImportPreviewResult> {
+  if (!isTauri) return previewImport(source.kind, format);
+  return source.kind === "ssh_config"
+    ? invoke<HostsImportPreviewResult>("import_preview_ssh_config", { format })
+    : invoke<HostsImportPreviewResult>("import_preview_file", { path: source.path, format });
+}
+
+/** Merges the selected hosts. Adds and updates only; never removes. */
+export async function applyImportHosts(request: HostsImportApplyParams): Promise<HostsImportApplyResult> {
+  if (!isTauri) return previewApplyImport(request);
+  return invoke<HostsImportApplyResult>("import_apply_hosts", { request });
 }
 
 /** A host key the app trusts. Only the fingerprint is shown, never the key. */

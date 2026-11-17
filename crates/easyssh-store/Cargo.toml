@@ -10,6 +10,7 @@ description = "SQLite storage for EasySSH v2: entities, numbered migrations, syn
 base64.workspace = true
 chrono.workspace = true
 easyssh-core = { path = "../easyssh-core" }
+easyssh-import = { path = "../easyssh-import" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde.workspace = true
 serde_json.workspace = true

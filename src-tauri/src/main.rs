@@ -8,6 +8,7 @@ mod backup;
 mod daemon;
 mod files;
 mod hosts;
+mod import;
 mod known_hosts;
 mod sessions;
 mod settings;
@@ -38,6 +39,9 @@ fn main() {
             hosts::host_save,
             hosts::host_delete,
             hosts::host_set_favorite,
+            import::import_preview_file,
+            import::import_preview_ssh_config,
+            import::import_apply_hosts,
             known_hosts::known_hosts_list,
             known_hosts::known_hosts_import,
             known_hosts::known_hosts_remove,
