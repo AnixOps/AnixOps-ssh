@@ -140,6 +140,9 @@ impl PromptAnswers for VaultSecrets {
                 ..SecretsUpdate::default()
             },
         };
-        self.with_store(|store| self.vault.set_host_secrets(store, &binding.host_id, &update))?
+        self.with_store(|store| {
+            self.vault
+                .set_host_secrets(store, &binding.host_id, &update)
+        })?
     }
 }

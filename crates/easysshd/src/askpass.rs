@@ -46,6 +46,7 @@ pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(300);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_REQUEST: u64 = 64 * 1024;
 const MAX_CONCURRENT: usize = 32;
+const MAX_BINDINGS: usize = 4096;
 
 #[derive(Serialize, Deserialize)]
 struct Request {
@@ -224,7 +225,13 @@ impl Hub {
     /// Declares that the OpenSSH process using askpass `context` connects to
     /// the host `binding` describes. See the module documentation.
     pub fn bind_process(&self, context: &str, binding: Binding) {
-        lock(&self.bindings).insert(context.to_owned(), binding);
+        let mut bindings = lock(&self.bindings);
+        // Processes that never report their end (file transfers) must not
+        // make this grow for ever.
+        if bindings.len() >= MAX_BINDINGS {
+            bindings.clear();
+        }
+        bindings.insert(context.to_owned(), binding);
     }
 
     /// The process is over.
@@ -247,7 +254,11 @@ impl Hub {
             self.answers.get(),
         ) {
             // A failure (a locked vault) only means nothing was saved.
-            let _ = answers.remember(binding, *kind, easyssh_crypto::SecretText::new(value.clone()));
+            let _ = answers.remember(
+                binding,
+                *kind,
+                easyssh_crypto::SecretText::new(value.clone()),
+            );
         }
         let _ = waiting.sender.send(answer);
     }

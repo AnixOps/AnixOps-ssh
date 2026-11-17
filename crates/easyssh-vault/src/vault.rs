@@ -38,6 +38,8 @@ pub enum VaultError {
     KeychainUnavailable(String),
     #[error("keychain error: {0}")]
     KeyStore(String),
+    #[error("{0}")]
+    Input(String),
     #[error("database error: {0}")]
     Store(String),
     #[error("encryption error: {0}")]
@@ -53,6 +55,7 @@ impl VaultError {
             VaultError::Passphrase(_) => "invalid_passphrase",
             VaultError::KeychainUnavailable(_) => "keychain_unavailable",
             VaultError::KeyStore(_) => "keychain_error",
+            VaultError::Input(_) => "invalid_command",
             VaultError::Store(_) => "store_error",
             VaultError::Crypto(_) => "crypto_error",
         }

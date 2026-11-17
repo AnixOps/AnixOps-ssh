@@ -13,11 +13,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod input;
 pub mod keyfile;
 pub mod prompt;
 pub mod source;
 mod vault;
 
+pub use input::{secrets_update, InputError, MAX_SECRET_BYTES};
 pub use keyfile::{key_dir, sweep, KeyFile};
 pub use prompt::{match_prompt, Binding, SecretKind};
 pub use source::{Answer, PromptAnswers, SecretSource, StoreAccess, VaultSecrets};

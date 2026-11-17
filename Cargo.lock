@@ -105,8 +105,10 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "easyssh-core",
+ "easyssh-crypto",
  "easyssh-store",
  "easyssh-telemetry",
+ "easyssh-vault",
  "easysshd",
  "portable-pty",
  "serde",
@@ -117,6 +119,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -1666,7 +1669,9 @@ version = "1.0.2"
 dependencies = [
  "async-trait",
  "easyssh-core",
+ "easyssh-crypto",
  "easyssh-ssh",
+ "easyssh-vault",
  "easysshd",
  "portable-pty",
  "serde_json",

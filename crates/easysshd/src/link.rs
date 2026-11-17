@@ -457,6 +457,17 @@ impl Link {
         )
     }
 
+    /// `askpass.bind`: the OpenSSH process using askpass `context` connects
+    /// to the saved host `host_id`, so the daemon may answer its password
+    /// and passphrase prompts for that host from the vault. Queued ahead of
+    /// anything sent later, so call it before starting the process.
+    pub fn askpass_bind(&self, context: &str, host_id: &str) -> Result<(), LinkError> {
+        self.post(
+            "askpass.bind",
+            json!({"context": context, "host_id": host_id}),
+        )
+    }
+
     /// `askpass.reply`; `None` cancels the prompt.
     pub fn askpass_reply(&self, id: u64, answer: Option<String>) -> Result<(), LinkError> {
         self.askpass_reply_with(id, answer, false)

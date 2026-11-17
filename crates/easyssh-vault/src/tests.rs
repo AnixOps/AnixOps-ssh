@@ -1,8 +1,6 @@
 use crate::*;
 use easyssh_core::{Connection, ConnectionTarget};
-use easyssh_crypto::{
-    protect, DeviceKey, KdfParams, KeyStore, MemoryKeyStore, SecretText,
-};
+use easyssh_crypto::{protect, DeviceKey, KdfParams, KeyStore, MemoryKeyStore, SecretText};
 use easyssh_store::{SecretChange, SecretsUpdate, Store};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -216,10 +214,14 @@ fn unavailable_keychain_is_reported_not_papered_over() {
             _: &str,
             _: &str,
         ) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, easyssh_crypto::KeyStoreError> {
-            Err(easyssh_crypto::KeyStoreError::Unavailable("no service".into()))
+            Err(easyssh_crypto::KeyStoreError::Unavailable(
+                "no service".into(),
+            ))
         }
         fn set(&self, _: &str, _: &str, _: &[u8]) -> Result<(), easyssh_crypto::KeyStoreError> {
-            Err(easyssh_crypto::KeyStoreError::Unavailable("no service".into()))
+            Err(easyssh_crypto::KeyStoreError::Unavailable(
+                "no service".into(),
+            ))
         }
         fn delete(&self, _: &str, _: &str) -> Result<(), easyssh_crypto::KeyStoreError> {
             Ok(())

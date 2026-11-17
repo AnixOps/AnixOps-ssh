@@ -21,7 +21,8 @@ use tokio::task::JoinHandle;
 
 const PASSWORD: &str = "pw-SECRET-4d1c9e";
 const PASSPHRASE: &str = "phrase-SECRET-77aa31";
-const KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\nKEYBODY-SECRET-5521\n-----END OPENSSH PRIVATE KEY-----\n";
+const KEY: &str =
+    "-----BEGIN OPENSSH PRIVATE KEY-----\nKEYBODY-SECRET-5521\n-----END OPENSSH PRIVATE KEY-----\n";
 const VAULT_PASSPHRASE: &str = "vault-pass-SECRET-9c3e";
 
 #[derive(Default)]
@@ -172,9 +173,12 @@ async fn save_host(s: &Running, connection: &Connection) {
 }
 
 async fn bind(s: &Running, context: &str, host_id: &str) {
-    s.call("askpass.bind", json!({"context": context, "host_id": host_id}))
-        .await
-        .unwrap();
+    s.call(
+        "askpass.bind",
+        json!({"context": context, "host_id": host_id}),
+    )
+    .await
+    .unwrap();
 }
 
 const USER_PROMPT: &str = "alice@db.example.test's password: ";
@@ -208,7 +212,9 @@ async fn stored_password_answers_only_the_exact_host_and_user() {
     };
     let prompt = s.next_prompt(0).await;
     assert!(prompt.rememberable && !prompt.vault_locked);
-    s.link.askpass_reply(prompt.id, Some("typed".into())).unwrap();
+    s.link
+        .askpass_reply(prompt.id, Some("typed".into()))
+        .unwrap();
     assert_eq!(ask.await.unwrap().as_deref(), Some("typed"));
 
     // The passphrase prompt of a key, once.
@@ -256,9 +262,12 @@ async fn an_unbound_process_and_another_host_get_no_saved_answer() {
     let b = endpoint_host("b", "alice", "other.example.test");
     save_host(&s, &a).await;
     save_host(&s, &b).await;
-    s.call("secrets.set", json!({"host_id": a.id, "password": PASSWORD}))
-        .await
-        .unwrap();
+    s.call(
+        "secrets.set",
+        json!({"host_id": a.id, "password": PASSWORD}),
+    )
+    .await
+    .unwrap();
 
     // Not bound at all.
     let ask = {
@@ -277,7 +286,12 @@ async fn an_unbound_process_and_another_host_get_no_saved_answer() {
     let ask = {
         let endpoint = s.endpoint.clone();
         tokio::task::spawn_blocking(move || {
-            askpass::ask(&endpoint, "ctx-b", "h", "alice@other.example.test's password: ")
+            askpass::ask(
+                &endpoint,
+                "ctx-b",
+                "h",
+                "alice@other.example.test's password: ",
+            )
         })
     };
     let shown = s.next_prompt(1).await;
@@ -345,11 +359,17 @@ async fn a_locked_vault_asks_for_the_passphrase_and_then_answers() {
     let s = start(dir.path()).await;
     let host = endpoint_host("db", "alice", "db.example.test");
     save_host(&s, &host).await;
-    s.call("secrets.set", json!({"host_id": host.id, "password": PASSWORD}))
-        .await
-        .unwrap();
+    s.call(
+        "secrets.set",
+        json!({"host_id": host.id, "password": PASSWORD}),
+    )
+    .await
+    .unwrap();
     let status = s
-        .call("vault.set_passphrase", json!({"passphrase": VAULT_PASSPHRASE}))
+        .call(
+            "vault.set_passphrase",
+            json!({"passphrase": VAULT_PASSPHRASE}),
+        )
         .await
         .unwrap();
     proto::validate("VaultStatus", &status).unwrap();
@@ -438,15 +458,21 @@ async fn vault_commands_status_lock_auto_lock_and_forget_all() {
         "invalid_key"
     );
     assert_eq!(
-        s.call("secrets.set", json!({"host_id": host.id, "password": "a\nb"}))
-            .await
-            .unwrap_err(),
+        s.call(
+            "secrets.set",
+            json!({"host_id": host.id, "password": "a\nb"})
+        )
+        .await
+        .unwrap_err(),
         "invalid_command"
     );
     assert_eq!(
-        s.call("secrets.set", json!({"host_id": "missing", "password": "x"}))
-            .await
-            .unwrap_err(),
+        s.call(
+            "secrets.set",
+            json!({"host_id": "missing", "password": "x"})
+        )
+        .await
+        .unwrap_err(),
         "store_error"
     );
 
@@ -523,16 +549,16 @@ async fn deleting_a_host_deletes_its_secrets_and_nothing_secret_is_in_the_log() 
     )
     .await
     .unwrap();
-    s.call("vault.set_passphrase", json!({"passphrase": VAULT_PASSPHRASE}))
-        .await
-        .unwrap();
-    s.call("vault.lock", json!({})).await.unwrap();
     s.call(
-        "vault.unlock",
+        "vault.set_passphrase",
         json!({"passphrase": VAULT_PASSPHRASE}),
     )
     .await
     .unwrap();
+    s.call("vault.lock", json!({})).await.unwrap();
+    s.call("vault.unlock", json!({"passphrase": VAULT_PASSPHRASE}))
+        .await
+        .unwrap();
     bind(&s, "ctx", &host.id).await;
     assert_eq!(s.ask("ctx", USER_PROMPT).await.as_deref(), Some(PASSWORD));
     // A rejected command with a secret in it must not echo it either.
@@ -585,7 +611,7 @@ mod key_files {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    static PATH_LOCK: Mutex<()> = Mutex::new(());
+    static PATH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// A fake `ssh` first on `PATH` that records how it was called and
     /// lingers a moment, like a connected session.
@@ -625,7 +651,7 @@ mod key_files {
 
     #[tokio::test]
     async fn a_saved_key_is_a_private_file_only_while_ssh_runs() {
-        let _guard = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = PATH_LOCK.lock().await;
         let dir = TempDir::new().unwrap();
         let bin = fake_ssh(dir.path(), "1");
         let old_path = std::env::var_os("PATH").unwrap_or_default();
@@ -637,9 +663,12 @@ mod key_files {
         let s = start(dir.path()).await;
         let host = endpoint_host("db", "alice", "db.example.test");
         save_host(&s, &host).await;
-        s.call("secrets.set", json!({"host_id": host.id, "private_key": KEY}))
-            .await
-            .unwrap();
+        s.call(
+            "secrets.set",
+            json!({"host_id": host.id, "private_key": KEY}),
+        )
+        .await
+        .unwrap();
         let opened = s
             .call(
                 "session.open",
@@ -667,14 +696,17 @@ mod key_files {
         );
 
         // Gone when ssh ends.
-        wait_for("the key file to be deleted", || key_files(dir.path()).is_empty()).await;
+        wait_for("the key file to be deleted", || {
+            key_files(dir.path()).is_empty()
+        })
+        .await;
         assert!(!Path::new(path).exists());
         s.stop().await;
     }
 
     #[tokio::test]
     async fn closing_the_session_deletes_the_key_and_a_locked_vault_fails_early() {
-        let _guard = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = PATH_LOCK.lock().await;
         let dir = TempDir::new().unwrap();
         let bin = fake_ssh(dir.path(), "30");
         let old_path = std::env::var_os("PATH").unwrap_or_default();
@@ -686,18 +718,20 @@ mod key_files {
         let s = start(dir.path()).await;
         let host = endpoint_host("db", "alice", "db.example.test");
         save_host(&s, &host).await;
-        s.call("secrets.set", json!({"host_id": host.id, "private_key": KEY}))
-            .await
-            .unwrap();
+        s.call(
+            "secrets.set",
+            json!({"host_id": host.id, "private_key": KEY}),
+        )
+        .await
+        .unwrap();
         let opened = s
             .call(
                 "session.open",
                 json!({"host_id": host.id, "cols": 80, "rows": 24}),
             )
             .await;
-        let opened = opened.map_err(|e| {
+        let opened = opened.inspect_err(|_| {
             std::env::set_var("PATH", &old_path);
-            e
         });
         let session = opened.unwrap()["session_id"].as_str().unwrap().to_owned();
         wait_for("the key file to exist", || key_files(dir.path()).len() == 1).await;
@@ -712,9 +746,12 @@ mod key_files {
         wait_for("the key file to be deleted", || !file.exists()).await;
 
         // A passphrase vault that is locked cannot hand out the key.
-        s.call("vault.set_passphrase", json!({"passphrase": VAULT_PASSPHRASE}))
-            .await
-            .unwrap();
+        s.call(
+            "vault.set_passphrase",
+            json!({"passphrase": VAULT_PASSPHRASE}),
+        )
+        .await
+        .unwrap();
         s.call("vault.lock", json!({})).await.unwrap();
         let error = s
             .call(

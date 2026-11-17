@@ -1,6 +1,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { BackupSync } from "@/components/app/BackupSync";
 import { KnownHosts } from "@/components/app/KnownHosts";
+import { VaultSettings } from "@/components/app/VaultSettings";
 import { CircleAlert, CircleCheck, Eye, EyeOff, Minus, Plus, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
@@ -174,6 +175,10 @@ export function SettingsPanel({
               ))}
             </div>
           )}
+        </Group>
+
+        <Group title={t.security}>
+          <VaultSettings />
         </Group>
 
         <Group title={t.privacy}>

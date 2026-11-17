@@ -14,6 +14,7 @@ mod settings;
 mod snippets;
 mod telemetry;
 mod tunnels;
+mod vault;
 
 fn main() {
     // OpenSSH starts this executable to ask for a password; see askpass.rs.
@@ -77,7 +78,17 @@ fn main() {
             files::sftp_close,
             files::transfer_start,
             files::transfer_cancel,
-            askpass::askpass_reply
+            askpass::askpass_reply,
+            askpass::askpass_unlock,
+            vault::vault_status,
+            vault::vault_unlock,
+            vault::vault_lock,
+            vault::vault_set_passphrase,
+            vault::vault_remove_passphrase,
+            vault::vault_set_auto_lock,
+            vault::vault_forget_all,
+            vault::secrets_status,
+            vault::secrets_set
         ])
         .setup(|app| {
             daemon::start(app.handle());

@@ -51,7 +51,7 @@ first. Details per phase are in
 | 1 | v1.2 | Daemon | JSON Schema contract, `easysshd` with authenticated local IPC, sessions survive UI reloads |
 | 2 | v1.3 | Engine | russh engine with OpenSSH fallback; one connection for terminal, files and tunnels; OpenSSH becomes an advanced option once russh passes the whole e2e suite |
 | 3 | v2.0 | Store | SQLite with v1 migration (done: hosts, groups, settings and known hosts now live in `easyssh.db`), importers from every common client (next) |
-| 4 | v2.1 | Vault | Encrypted passwords and keys, Windows Hello, Secure Enclave, FIDO2, serial ports |
+| 4 | v2.1 | Vault | Encrypted passwords, keys and key passphrases with a device key in the OS keychain and an optional Argon2id vault passphrase, auto-lock, askpass answers from the vault (done, step 1); Windows Hello, Secure Enclave, FIDO2 and serial ports (next, via the `UnlockProvider` hook) |
 | 5 | v2.2 | Sync | Open-source self-hosted server, signed end-to-end encrypted sync, team vaults |
 | 6 | v2.x | Terminal | Splits and broadcast, shell integration, completion specs, AI with your own key, encrypted logs |
 | 7 | — | Mobile | Tauri mobile app with the embedded engine |

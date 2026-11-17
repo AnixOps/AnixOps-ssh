@@ -132,6 +132,19 @@ encrypted, with keys only you hold, in code anyone can audit".
   it (SRP-6a or OPAQUE; chosen in phase 5 with test vectors).
 - Without a server, the personal vault is protected by the device key and an
   optional passphrase.
+- As built in phase 4 step 1: host passwords, private keys and key passphrases
+  are stored in a separate `host_secrets` table (migration 0003), not in the
+  `hosts` row. The associated data is `easyssh/v1/host_secrets/{vault}/{host}/{field}`.
+  With a vault passphrase set, the device key is stored in the keychain only
+  as a blob wrapped with a key derived by Argon2id (`device-key-wrapped/v1`);
+  the raw item is removed. Locking drops the key from memory. Secrets are
+  local only and are not synced yet. Biometric and FIDO2 unlock are a TODO:
+  they plug in through `easyssh_vault::UnlockProvider`.
+- The daemon answers `SSH_ASKPASS` password and passphrase prompts from the
+  vault for the bound process (exact host and user) and reports
+  `vault_locked` when it cannot. Saved keys apply to terminal sessions on the
+  OpenSSH engine. The russh engine reads secrets through the `SecretSource`
+  trait; its code is untouched.
 - Session logs are encrypted with libsodium secretstream on write.
 
 ## 7. Storage

@@ -60,11 +60,13 @@ pub enum ProtectError {
 
 /// Whether a vault passphrase is set. Reads only the key store.
 pub fn protection(store: &dyn KeyStore) -> Result<Protection, ProtectError> {
-    Ok(if store.get(SERVICE, WRAPPED_DEVICE_KEY_ACCOUNT)?.is_some() {
-        Protection::Passphrase
-    } else {
-        Protection::DeviceOnly
-    })
+    Ok(
+        if store.get(SERVICE, WRAPPED_DEVICE_KEY_ACCOUNT)?.is_some() {
+            Protection::Passphrase
+        } else {
+            Protection::DeviceOnly
+        },
+    )
 }
 
 /// The device key. Without a passphrase set it is read from the key store
@@ -144,10 +146,7 @@ pub fn destroy_device_key(store: &dyn KeyStore) -> Result<(), ProtectError> {
     Ok(())
 }
 
-fn wrap_key(
-    passphrase: &[u8],
-    header: &KdfHeader,
-) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+fn wrap_key(passphrase: &[u8], header: &KdfHeader) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
     let secrets = derive_account_secrets(passphrase, header)?;
     let hk = Hkdf::<Sha256>::new(None, secrets.account_key.expose());
     let mut key = Zeroizing::new([0u8; 32]);
@@ -306,7 +305,10 @@ mod tests {
         let s = MemoryKeyStore::new();
         set_passphrase(&s, b"pw", FAST).unwrap();
         destroy_device_key(&s).unwrap();
-        assert!(s.get(SERVICE, WRAPPED_DEVICE_KEY_ACCOUNT).unwrap().is_none());
+        assert!(s
+            .get(SERVICE, WRAPPED_DEVICE_KEY_ACCOUNT)
+            .unwrap()
+            .is_none());
         assert!(s.get(SERVICE, DEVICE_KEY_ACCOUNT).unwrap().is_none());
     }
 }

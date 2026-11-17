@@ -14,6 +14,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import {
   attachSession,
   copyText,
+  isVaultLocked,
   loadHosts,
   openFiles,
   openExternal,
@@ -23,6 +24,7 @@ import {
   type SessionEvent,
   type SessionHandle,
 } from "@/lib/backend";
+import { requestVaultUnlock } from "@/lib/vaultUi";
 import { CompletionController, type ViewState } from "@/lib/completion/controller";
 import { completionPrefs, commandHistory, onCompletionPrefs } from "@/lib/completion/prefs";
 import { createPathLister } from "@/lib/completion/remotePaths";
@@ -309,6 +311,7 @@ export function TerminalView({
           }
         })
         .catch((reason) => {
+          if (isVaultLocked(reason)) requestVaultUnlock();
           if (!disposed) report({ state: "exited", code: null, error: String(reason) });
         });
     };

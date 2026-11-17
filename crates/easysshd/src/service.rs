@@ -9,12 +9,8 @@ use crate::terminal::{SpawnOptions, TermSession, DEFAULT_SCROLLBACK};
 use easyssh_core::security::{validate_alias, validate_connection};
 use easyssh_core::{ConfigStore, Connection, Group, OpenSsh, SshInvocation};
 use easyssh_proto as proto;
-use easyssh_store::{
-    open_app_store_with, SecretChange, SecretFlags, SecretsUpdate, Store, StoreError,
-};
-use easyssh_vault::{
-    Binding, KeyFile, StoreAccess, Vault, VaultError, VaultSecrets,
-};
+use easyssh_store::{open_app_store_with, SecretFlags, Store, StoreError};
+use easyssh_vault::{Binding, KeyFile, StoreAccess, Vault, VaultError, VaultSecrets};
 use portable_pty::CommandBuilder;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -587,7 +583,8 @@ impl Daemon {
                     .map_err(|e| fail("internal", e.to_string()))?;
                 if !answered {
                     // The vault is open now; the user types the answer as usual.
-                    self.log.info("askpass.unlock: no saved answer for the prompt");
+                    self.log
+                        .info("askpass.unlock: no saved answer for the prompt");
                 }
                 ok(Value::Null)
             }
@@ -597,8 +594,10 @@ impl Daemon {
                     let store = lock(&self.store);
                     match store.get_host(&p.host_id).map_err(store_failure)? {
                         Some(record) => {
-                            let flags = store.host_secret_flags(&p.host_id).map_err(store_failure)?;
-                            let mut binding = Binding::for_connection(&record.item.connection, None);
+                            let flags =
+                                store.host_secret_flags(&p.host_id).map_err(store_failure)?;
+                            let mut binding =
+                                Binding::for_connection(&record.item.connection, None);
                             binding.passphrase_expected = flags.passphrase;
                             Some(binding)
                         }
@@ -649,7 +648,10 @@ impl Daemon {
                 .await
                 .map_err(|e| fail("internal", e.to_string()))?
                 .map_err(vault_failure)?;
-                self.broadcast("vault.changed", json!({"unlocked": self.vault.is_unlocked()}));
+                self.broadcast(
+                    "vault.changed",
+                    json!({"unlocked": self.vault.is_unlocked()}),
+                );
                 ok(self.vault_status())
             }
             "vault.remove_passphrase" => {
@@ -678,7 +680,8 @@ impl Daemon {
                     .vault
                     .forget_all(&lock(&self.store))
                     .map_err(vault_failure)?;
-                self.log.info(&format!("forgot the saved secrets of {hosts} hosts"));
+                self.log
+                    .info(&format!("forgot the saved secrets of {hosts} hosts"));
                 self.broadcast("hosts.changed", json!({}));
                 ok(json!({"hosts": hosts}))
             }
@@ -693,7 +696,8 @@ impl Daemon {
             "secrets.set" => {
                 let p: proto::SecretsSetParams = parse(payload)?;
                 let host_id = p.host_id.clone();
-                let update = secrets_update(p)?;
+                let update = easyssh_vault::secrets_update(p.password, p.private_key, p.passphrase)
+                    .map_err(|e| fail(e.code, e.message))?;
                 let (vault, store) = (self.vault.clone(), self.store.clone());
                 let id = host_id.clone();
                 let flags = tokio::task::spawn_blocking(move || {
@@ -751,9 +755,11 @@ impl Daemon {
                     self.key_dir_root.clone(),
                 );
                 let connection = connection.clone();
-                tokio::task::spawn_blocking(move || prepare_launch(&vault, &store, &root, &connection))
-                    .await
-                    .map_err(|e| fail("internal", e.to_string()))??
+                tokio::task::spawn_blocking(move || {
+                    prepare_launch(&vault, &store, &root, &connection)
+                })
+                .await
+                .map_err(|e| fail("internal", e.to_string()))??
             }
             _ => Launch::default(),
         };
@@ -761,12 +767,19 @@ impl Daemon {
             Some(binding) => {
                 let helper = match &self.askpass_helper {
                     Some(helper) => helper.clone(),
-                    None => std::env::current_exe()
-                        .map_err(|e| fail("spawn_failed", format!("cannot find the askpass helper: {e}")))?,
+                    None => std::env::current_exe().map_err(|e| {
+                        fail(
+                            "spawn_failed",
+                            format!("cannot find the askpass helper: {e}"),
+                        )
+                    })?,
                 };
                 let context = uuid::Uuid::new_v4().simple().to_string();
                 self.askpass.bind_process(&context, binding.clone());
-                let label = connection.as_ref().map(|c| c.name.clone()).unwrap_or_default();
+                let label = connection
+                    .as_ref()
+                    .map(|c| c.name.clone())
+                    .unwrap_or_default();
                 Some((
                     crate::askpass::env(&self.askpass.endpoint(), &helper, &context, &label),
                     context,
@@ -953,54 +966,6 @@ fn flags_json(flags: SecretFlags) -> Value {
         "password": flags.password,
         "private_key": flags.private_key,
         "passphrase": flags.passphrase,
-    })
-}
-
-/// Longest password, key passphrase or key text the vault accepts.
-const MAX_SECRET_BYTES: usize = 64 * 1024;
-
-fn secrets_update(p: proto::SecretsSetParams) -> Result<SecretsUpdate, Failure> {
-    let change = |value: Option<String>| match value {
-        None => SecretChange::Keep,
-        Some(value) if value.is_empty() => SecretChange::Clear,
-        Some(value) => SecretChange::Set(easyssh_crypto::SecretText::new(value)),
-    };
-    for (name, value) in [
-        ("password", &p.password),
-        ("passphrase", &p.passphrase),
-        ("private key", &p.private_key),
-    ] {
-        if value.as_ref().is_some_and(|v| v.len() > MAX_SECRET_BYTES) {
-            return Err(fail("invalid_command", format!("the {name} is too long")));
-        }
-    }
-    // A prompt answer is one line; a NUL cannot be passed to a program.
-    for (name, value) in [("password", &p.password), ("passphrase", &p.passphrase)] {
-        if value
-            .as_ref()
-            .is_some_and(|v| v.contains(['\n', '\r', '\0']))
-        {
-            return Err(fail(
-                "invalid_command",
-                format!("the {name} must be a single line"),
-            ));
-        }
-    }
-    if let Some(key) = p.private_key.as_deref().filter(|k| !k.is_empty()) {
-        if !(key.contains("-----BEGIN ") && key.contains("PRIVATE KEY-----")) {
-            return Err(fail(
-                "invalid_key",
-                "this does not look like a PEM or OpenSSH private key",
-            ));
-        }
-        if key.contains('\0') {
-            return Err(fail("invalid_key", "the key contains a NUL byte"));
-        }
-    }
-    Ok(SecretsUpdate {
-        password: change(p.password),
-        private_key: change(p.private_key),
-        passphrase: change(p.passphrase),
     })
 }
 

@@ -191,7 +191,7 @@ pub fn tunnel_start(app: AppHandle, id: String) -> Result<(), String> {
         .find(|tunnel| tunnel.id == id)
         .ok_or("unknown tunnel")?;
     let connection = hosts::connection(&tunnel.host_id)?;
-    let env = askpass::env_for(&app, &connection.name)?;
+    let env = askpass::env_for(&app, &connection.name, Some(&connection.id))?;
     let mut child =
         spawn_tunnel(&OpenSsh, &connection, &tunnel, &env).map_err(|error| error.to_string())?;
     let stderr = child.stderr.take();

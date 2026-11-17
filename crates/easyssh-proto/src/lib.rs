@@ -78,13 +78,21 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "VaultRemovePassphraseParams",
         "VaultStatus",
     ),
-    ("vault.set_auto_lock", "VaultSetAutoLockParams", "VaultStatus"),
+    (
+        "vault.set_auto_lock",
+        "VaultSetAutoLockParams",
+        "VaultStatus",
+    ),
     (
         "vault.forget_all",
         "VaultForgetAllParams",
         "VaultForgetAllResult",
     ),
-    ("secrets.status", "SecretsStatusParams", "SecretsStatusResult"),
+    (
+        "secrets.status",
+        "SecretsStatusParams",
+        "SecretsStatusResult",
+    ),
     ("secrets.set", "SecretsSetParams", "SecretsStatusResult"),
 ];
 

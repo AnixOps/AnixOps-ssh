@@ -24,6 +24,9 @@ pub struct SecretFlags {
     pub passphrase: bool,
 }
 
+/// The three encrypted columns of one `host_secrets` row.
+type SecretBlobs = (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);
+
 impl SecretFlags {
     pub fn any(&self) -> bool {
         self.password || self.private_key || self.passphrase
@@ -174,7 +177,7 @@ impl Store {
         }
         self.in_tx(|| {
             let vault_id = self.host_vault(host_id)?;
-            let existing: (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>) = self
+            let existing: SecretBlobs = self
                 .conn
                 .query_row(
                     "SELECT password_enc, private_key_enc, passphrase_enc
@@ -214,7 +217,13 @@ impl Store {
                         password_enc = excluded.password_enc,
                         private_key_enc = excluded.private_key_enc,
                         passphrase_enc = excluded.passphrase_enc",
-                    params![host_id, fmt_ts(Utc::now()), password, private_key, passphrase],
+                    params![
+                        host_id,
+                        fmt_ts(Utc::now()),
+                        password,
+                        private_key,
+                        passphrase
+                    ],
                 )?;
             }
             Ok(())

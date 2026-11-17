@@ -220,8 +220,10 @@ fn migration_three_adds_the_table_to_a_version_two_database() {
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(include_str!("../migrations/0001_init.sql"))
             .unwrap();
-        conn.execute_batch(include_str!("../migrations/0002_host_shell_integration.sql"))
-            .unwrap();
+        conn.execute_batch(include_str!(
+            "../migrations/0002_host_shell_integration.sql"
+        ))
+        .unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
              INSERT INTO schema_migrations VALUES (1, 'init', 'x'), (2, 'host_shell_integration', 'x');",
