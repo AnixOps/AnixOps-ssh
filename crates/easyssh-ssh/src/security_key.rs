@@ -174,11 +174,17 @@ pub trait SecurityKey: Send + Sync {
 /// The authenticator backend of this build: real devices over USB HID where
 /// the platform has one, `None` otherwise.
 pub fn default_security_key() -> Option<Arc<dyn SecurityKey>> {
-    #[cfg(all(feature = "hardware-key", not(windows)))]
+    #[cfg(all(
+        feature = "hardware-key",
+        any(target_os = "linux", target_os = "macos")
+    ))]
     {
         Some(Arc::new(HidSecurityKey))
     }
-    #[cfg(not(all(feature = "hardware-key", not(windows))))]
+    #[cfg(not(all(
+        feature = "hardware-key",
+        any(target_os = "linux", target_os = "macos")
+    )))]
     {
         None
     }
@@ -187,19 +193,31 @@ pub fn default_security_key() -> Option<Arc<dyn SecurityKey>> {
 /// Whether [`default_security_key`] returns a backend. When it does not,
 /// hosts with `sk-*` keys run on OpenSSH.
 pub const fn hardware_backend_available() -> bool {
-    cfg!(all(feature = "hardware-key", not(windows)))
+    cfg!(all(
+        feature = "hardware-key",
+        any(target_os = "linux", target_os = "macos")
+    ))
 }
 
-#[cfg(all(feature = "hardware-key", not(windows)))]
+#[cfg(all(
+    feature = "hardware-key",
+    any(target_os = "linux", target_os = "macos")
+))]
 pub use crate::security_key_hid::HidSecurityKey;
 
 /// Without a hardware backend there is no `HidSecurityKey`; this keeps the
 /// public name resolvable for documentation only.
-#[cfg(not(all(feature = "hardware-key", not(windows))))]
+#[cfg(not(all(
+    feature = "hardware-key",
+    any(target_os = "linux", target_os = "macos")
+)))]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HidSecurityKey;
 
-#[cfg(not(all(feature = "hardware-key", not(windows))))]
+#[cfg(not(all(
+    feature = "hardware-key",
+    any(target_os = "linux", target_os = "macos")
+)))]
 #[async_trait]
 impl SecurityKey for HidSecurityKey {
     async fn sign(
