@@ -420,6 +420,47 @@ async fn a_daemon_of_another_build_without_sessions_is_replaced() {
 }
 
 #[tokio::test]
+async fn a_daemon_that_never_came_up_is_started_again() {
+    // A daemon spawned while its predecessor is still exiting loses the
+    // instance lock and is gone; the launcher must not wait for it forever.
+    let root = tempfile::tempdir().unwrap();
+    let rt = root.path().join("run");
+    let started: Arc<Mutex<Vec<Running>>> = Arc::new(Mutex::new(Vec::new()));
+    let calls = Arc::new(Mutex::new(0u32));
+    let link = {
+        let (started, calls) = (started.clone(), calls.clone());
+        let root = root.path().to_path_buf();
+        easysshd::launch::connect_or_spawn(
+            &rt,
+            Arc::new(Handler::default()),
+            move || {
+                let n = {
+                    let mut calls = calls.lock().unwrap();
+                    *calls += 1;
+                    *calls
+                };
+                // The first start comes to nothing.
+                if n > 1 {
+                    let (started, root) = (started.clone(), root.clone());
+                    tokio::spawn(async move {
+                        let new = start_daemon(&root, "1.0.0", None).await;
+                        started.lock().unwrap().push(new);
+                    });
+                }
+                Ok(())
+            },
+            Duration::from_secs(20),
+        )
+        .await
+        .expect("a later start answers")
+    };
+    assert_eq!(*calls.lock().unwrap(), 2);
+    drop(link);
+    let new = started.lock().unwrap().pop().expect("a daemon started");
+    new.stop().await;
+}
+
+#[tokio::test]
 async fn a_daemon_of_another_build_keeps_its_sessions_until_they_end() {
     let root = tempfile::tempdir().unwrap();
     let rt = root.path().join("run");
@@ -808,20 +849,30 @@ async fn the_log_has_lifecycle_and_no_secrets_or_terminal_content() {
     c.call("session.close", json!({"session_id": id}))
         .await
         .unwrap();
+    let read_log = || {
+        let mut log = String::new();
+        for entry in std::fs::read_dir(&logs).unwrap() {
+            let entry = entry.unwrap();
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("easysshd.log")
+            {
+                log.push_str(&std::fs::read_to_string(entry.path()).unwrap());
+            }
+        }
+        log
+    };
+    // The exit is logged when the closed shell has been reaped, which can
+    // come after the reply to session.close; wait for it before stopping.
+    eventually("the session exit is logged", || {
+        read_log().contains("ended, exit code")
+    })
+    .await;
     drop(c);
     daemon.stop().await;
 
-    let mut log = String::new();
-    for entry in std::fs::read_dir(&logs).unwrap() {
-        let entry = entry.unwrap();
-        if entry
-            .file_name()
-            .to_string_lossy()
-            .starts_with("easysshd.log")
-        {
-            log.push_str(&std::fs::read_to_string(entry.path()).unwrap());
-        }
-    }
+    let log = read_log();
     for kind in [
         "daemon created",
         "connected",

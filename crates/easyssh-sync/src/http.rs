@@ -6,8 +6,15 @@ use crate::wire::*;
 use reqwest::{Method, Url};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+
+/// Response header with the largest request body the server accepts.
+pub const MAX_BODY_HEADER: &str = "x-easyssh-max-body";
+
+/// No limit learned yet.
+const NO_LIMIT: usize = usize::MAX;
 
 /// Talks to one server. Cloning shares the session token.
 #[derive(Clone)]
@@ -15,6 +22,9 @@ pub struct HttpClient {
     base: Url,
     http: reqwest::Client,
     token: Arc<RwLock<Option<String>>>,
+    /// The server's request body limit, from its `x-easyssh-max-body`
+    /// header on an earlier response; shared by clones.
+    max_body: Arc<AtomicUsize>,
 }
 
 impl std::fmt::Debug for HttpClient {
@@ -39,6 +49,7 @@ impl HttpClient {
             base,
             http,
             token: Arc::new(RwLock::new(None)),
+            max_body: Arc::new(AtomicUsize::new(NO_LIMIT)),
         })
     }
 
@@ -75,13 +86,39 @@ impl HttpClient {
             request = request.bearer_auth(token);
         }
         if let Some(body) = body {
-            request = request.json(&body);
+            let bytes = serde_json::to_vec(&body).expect("a JSON value serializes");
+            // A server that answers an oversized body before it has been
+            // sent may reset the connection mid-upload, and the client then
+            // never sees its 413. Once the server has said what it accepts,
+            // refuse here with the same error instead.
+            let max = self.max_body.load(Ordering::Relaxed);
+            if bytes.len() > max {
+                return Err(TransportError::Api {
+                    status: 413,
+                    code: ErrorCode::TooLarge,
+                    message: format!(
+                        "request body of {} bytes exceeds the server limit of {max} bytes",
+                        bytes.len()
+                    ),
+                });
+            }
+            request = request
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(bytes);
         }
         let response = request
             .send()
             .await
             .map_err(|e| TransportError::Network(e.without_url().to_string()))?;
         let status = response.status().as_u16();
+        if let Some(max) = response
+            .headers()
+            .get(MAX_BODY_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<usize>().ok())
+        {
+            self.max_body.store(max, Ordering::Relaxed);
+        }
         let bytes = response
             .bytes()
             .await
