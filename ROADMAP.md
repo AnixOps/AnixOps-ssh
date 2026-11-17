@@ -1,7 +1,11 @@
 # Roadmap
 
-Goal: a Termius-style client that stays small. Every version ships a
-downloadable build.
+Goal: an open-source, local-first SSH client that matches the best
+commercial clients on everyday use and beats them on trust. Every version
+ships a downloadable build.
+
+The v2 direction (proposed 2026-11-17, waiting for approval) is described in
+[docs/architecture-v2.md](docs/architecture-v2.md).
 
 ## Done
 
@@ -28,24 +32,32 @@ In order of weight:
 4. **Comparison with Termius, Xshell and FinalShell**, for frequent tasks
    only.
 
-No usage telemetry: issues and diagnostics are enough, and it would not fit
-an app that refuses to handle passwords.
+Telemetry: crash reports are asked for on first start; anonymous usage
+statistics only when the user turns them on. Terminal content, host names and
+addresses are never collected.
 
 ## Next
 
-Ordered by what daily use turns up; the candidates below are the current
-best guess.
+Each phase ends with a release and `main` stays releasable. Old code is
+replaced piece by piece, and every switch must pass the end-to-end suite
+first. Details per phase are in
+[docs/architecture-v2.md](docs/architecture-v2.md#12-phases).
 
-| Version | Theme | Candidates |
-|---|---|---|
-| v1.1 | Reliability | End-to-end tests against a real OpenSSH server; fixes they and daily use find; automatic updates; a "copy diagnostics" button |
-| v1.2 | Everyday speed | Restore tabs after restart; import hosts from Xshell, FinalShell and Termius; manage `known_hosts`; terminal colour schemes |
-| v1.3 | Reach | Universal macOS build (Intel and Apple silicon); Linux arm64; Windows signing once there are users to protect |
-| Later | Only on demand | Split panes; sharing one connection between terminal and files; fewer password prompts for repeated transfers |
+| Phase | Version | Theme | Scope |
+|---|---|---|---|
+| 0 | v1.1 | Baseline | End-to-end tests against an OpenSSH server container, recorded against v1 |
+| 1 | v1.2 | Daemon | JSON Schema contract, `easysshd` with authenticated local IPC, sessions survive UI reloads |
+| 2 | v1.3 | Engine | russh engine with OpenSSH fallback; one connection for terminal, files and tunnels |
+| 3 | v1.4 | Store | SQLite with v1 migration, known hosts store, importers from every common client |
+| 4 | v1.5 | Vault | Encrypted passwords and keys, Windows Hello, Secure Enclave, FIDO2, serial ports |
+| 5 | v2.0 | Sync | Open-source self-hosted server, signed end-to-end encrypted sync, team vaults |
+| 6 | v2.x | Terminal | Splits and broadcast, shell integration, completion specs, AI with your own key, encrypted logs |
+| 7 | — | Mobile | Tauri mobile app with the embedded engine |
 
 ## Not doing
 
-Team features and accounts, our own cloud sync, storing passwords or private
-keys, our own SSH protocol implementation, mobile apps, AI assistants.
+Our own hosted-only cloud (the server is always self-hostable and open
+source), storing any secret where a server can read it, Mosh and Telnet,
+CRDT-based sync, telemetry without consent, AI through our own servers.
 
 How versions are numbered and shipped: [RELEASING.md](RELEASING.md).
