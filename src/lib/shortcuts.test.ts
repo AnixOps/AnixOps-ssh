@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveShortcut, type KeyInput } from "./shortcuts";
+import { resolveGlobalShortcut, resolveShortcut, type KeyInput } from "./shortcuts";
 
 const key = (init: Partial<KeyInput> & { key: string }): KeyInput => ({
   ctrlKey: false,
@@ -24,8 +24,8 @@ describe("shortcuts on Windows and Linux", () => {
 
   it("adds splits, broadcast and focus", () => {
     expect(pc({ key: "D" })).toBe("split-right");
-    expect(pc({ key: "D", altKey: true })).toBe("split-down");
-    expect(pc({ key: "∂", code: "KeyD", altKey: true })).toBe("split-down");
+    expect(pc({ key: "O" })).toBe("split-down");
+    expect(pc({ key: "o", code: "KeyO" })).toBe("split-down");
     expect(pc({ key: "B" })).toBe("toggle-broadcast");
     expect(pc({ key: "Enter" })).toBe("toggle-maximise");
     expect(pc({ key: "ArrowLeft" })).toBe("focus-left");
@@ -49,6 +49,7 @@ describe("shortcuts on Windows and Linux", () => {
 
   it("does not treat Alt as part of the other shortcuts", () => {
     expect(pc({ key: "W", altKey: true })).toBeNull();
+    expect(pc({ key: "D", altKey: true })).toBeNull();
     expect(pc({ key: "B", altKey: true })).toBeNull();
   });
 });
@@ -88,5 +89,44 @@ describe("shortcuts on macOS", () => {
 
   it("ignores Ctrl combinations", () => {
     expect(resolveShortcut(key({ key: "d", metaKey: true, ctrlKey: true }), true)).toBeNull();
+  });
+});
+
+describe("reserved app shortcuts", () => {
+  const pc = (init: Partial<KeyInput> & { key: string }, inTerminal: boolean) =>
+    resolveGlobalShortcut(key({ ctrlKey: true, shiftKey: inTerminal, ...init }), false, inTerminal);
+  const mac = (init: Partial<KeyInput> & { key: string }) => resolveGlobalShortcut(key({ metaKey: true, ...init }), true, false);
+
+  it("uses plain Ctrl outside the terminal", () => {
+    expect(pc({ key: "k" }, false)).toBe("search-hosts");
+    expect(pc({ key: "/" }, false)).toBe("shortcut-list");
+    expect(pc({ key: ",", code: "Comma" }, false)).toBe("settings");
+    expect(pc({ key: "1", code: "Digit1" }, false)).toBe("go-hosts");
+    expect(pc({ key: "4", code: "Digit4" }, false)).toBe("go-team");
+    expect(pc({ key: "i" }, false)).toBe("import");
+    expect(pc({ key: "n" }, false)).toBe("new-host");
+    expect(pc({ key: "f" }, false)).toBe("find");
+  });
+
+  it("leaves plain Ctrl to the shell in the terminal and uses Ctrl+Shift instead", () => {
+    expect(resolveGlobalShortcut(key({ key: "k", ctrlKey: true }), false, true)).toBeNull();
+    expect(resolveGlobalShortcut(key({ key: "n", ctrlKey: true }), false, true)).toBeNull();
+    expect(pc({ key: "K" }, true)).toBe("search-hosts");
+    expect(pc({ key: "?", code: "Slash" }, true)).toBe("shortcut-list");
+    expect(pc({ key: "<", code: "Comma" }, true)).toBe("settings");
+    expect(pc({ key: "!", code: "Digit1" }, true)).toBe("go-hosts");
+  });
+
+  it("never uses Ctrl+Alt", () => {
+    expect(pc({ key: "k", altKey: true }, false)).toBeNull();
+    expect(pc({ key: "k", altKey: true }, true)).toBeNull();
+  });
+
+  it("uses Cmd on macOS", () => {
+    expect(mac({ key: "/" })).toBe("shortcut-list");
+    expect(mac({ key: ",", code: "Comma" })).toBe("settings");
+    expect(mac({ key: "2", code: "Digit2" })).toBe("go-forwards");
+    expect(mac({ key: "i" })).toBe("import");
+    expect(mac({ key: "n" })).toBe("new-host");
   });
 });

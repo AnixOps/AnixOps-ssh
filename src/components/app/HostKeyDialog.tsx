@@ -70,26 +70,30 @@ export function HostKeyDialog() {
               </p>
               <dl className="selectable mt-4 space-y-2 text-callout">
                 <div>
-                  <dt className="text-caption font-normal text-label-3">{t.hostKeyAlgorithm}</dt>
+                  <dt className="text-callout text-label-3">{t.hostKeyAlgorithm}</dt>
                   <dd className="font-mono break-all">{current.algorithm}</dd>
                 </div>
                 <div>
-                  <dt className="text-caption font-normal text-label-3">{t.hostKeyFingerprint}</dt>
+                  <dt className="text-callout text-label-3">{t.hostKeyFingerprint}</dt>
                   <dd className="font-mono break-all">{current.fingerprint}</dd>
                 </div>
                 {changed &&
                   current.expected.map((print) => (
                     <div key={print}>
-                      <dt className="text-caption font-normal text-label-3">{t.hostKeyRecorded}</dt>
+                      <dt className="text-callout text-label-3">{t.hostKeyRecorded}</dt>
                       <dd className="font-mono break-all">{print}</dd>
                     </div>
                   ))}
               </dl>
             </div>
           </div>
+          {/* Cancel first and focused; the strongest action is last (O1, D6). Enter never accepts a key. */}
           <div className="mt-6 flex flex-wrap justify-end gap-2">
+            <Button ref={cancelRef} type="submit" variant="secondary">
+              {t.cancel}
+            </Button>
             {changed ? (
-              <Button type="button" variant="destructive" onClick={() => answer(current, "replace_and_save")}>
+              <Button type="button" variant="confirm" onClick={() => answer(current, "replace_and_save")}>
                 {t.hostKeyReplace}
               </Button>
             ) : (
@@ -102,9 +106,6 @@ export function HostKeyDialog() {
                 </Button>
               </>
             )}
-            <Button ref={cancelRef} type="submit" variant={changed ? "primary" : "secondary"}>
-              {t.cancel}
-            </Button>
           </div>
         </Overlay>
       )}

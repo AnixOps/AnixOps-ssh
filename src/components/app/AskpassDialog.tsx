@@ -2,6 +2,7 @@ import { KeyRound, ShieldQuestion } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Overlay } from "@/components/ui/overlay";
 import { onAskpass, onAskpassResolved, replyAskpass, unlockForAskpass, type AskpassPrompt } from "@/lib/backend";
@@ -87,7 +88,7 @@ export function AskpassDialog() {
                 className="mt-5"
               />
               {current.vaultLocked ? (
-                <p className="mt-2 text-caption font-normal text-label-3">{t.askpassVaultLocked}</p>
+                <p className="mt-2 text-callout text-label-3">{t.askpassVaultLocked}</p>
               ) : current.rememberable ? (
                 <label className="mt-3 flex items-start gap-2 text-callout text-label-2">
                   <input
@@ -98,16 +99,14 @@ export function AskpassDialog() {
                   />
                   <span>
                     {t.askpassRemember}
-                    <span className="block text-caption font-normal text-label-3">{t.askpassRememberHint}</span>
+                    <span className="block text-callout text-label-3">{t.askpassRememberHint}</span>
                   </span>
                 </label>
               ) : (
-                <p className="mt-2 text-caption font-normal text-label-3">{t.askpassNotSaved}</p>
+                <p className="mt-2 text-callout text-label-3">{t.askpassNotSaved}</p>
               )}
               {error && (
-                <p role="alert" className="mt-2 text-caption font-normal text-danger">
-                  {error}
-                </p>
+                <Notice className="mt-2">{error}</Notice>
               )}
             </>
           )}

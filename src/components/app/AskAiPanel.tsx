@@ -2,6 +2,8 @@ import { ArrowLeft, LoaderCircle, RotateCw, Send, ShieldCheck, Sparkles, Square,
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { AiMarkdown } from "@/components/app/AiMarkdown";
 import { Button } from "@/components/ui/button";
+import { Notice, Textarea } from "@/components/ui/form";
+import { Select } from "@/components/ui/select";
 import { Tooltip } from "@/components/ui/tooltip";
 import { aiCancel, aiConfigGet, aiPrepare, aiSend } from "@/lib/aiBackend";
 import { isVaultLocked } from "@/lib/backend";
@@ -142,11 +144,11 @@ export function AskAiPanel({
     >
       <header className="flex h-11 shrink-0 items-center gap-2 px-3">
         <Sparkles className="size-4 text-(--accent)" strokeWidth={1.5} />
-        <h2 className="flex-1 truncate text-callout font-medium">
+        <h2 className="flex-1 truncate text-title-3">
           {state.phase === "review" ? t.askAiReviewTitle : t.askAi}
         </h2>
         <Tooltip label={t.askAiClose}>
-          <Button variant="ghost" size="icon-sm" aria-label={t.askAiClose} onClick={onClose}>
+          <Button variant="quiet" size="icon-sm" aria-label={t.askAiClose} onClick={onClose}>
             <X />
           </Button>
         </Tooltip>
@@ -154,7 +156,7 @@ export function AskAiPanel({
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-3">
         {config && reason && (
-          <p className="rounded-sm bg-fill-1 px-3 py-2 text-caption font-normal text-label-2">
+          <p className="rounded-sm bg-fill-1 px-3 py-2 text-callout text-label-2">
             {reason === "off" ? t.askAiOff : t.askAiNoKey}
           </p>
         )}
@@ -162,8 +164,8 @@ export function AskAiPanel({
         {config && !reason && (state.phase === "compose" || state.phase === "preparing" || (state.phase === "failed" && !state.review)) && (
           <>
             <fieldset className="space-y-1.5" disabled={isBusy(state)}>
-              <legend className="text-caption text-label-2">{t.askAiContext}</legend>
-              <p className="text-caption font-normal text-label-3">{t.askAiContextHint}</p>
+              <legend className="text-callout text-label-2">{t.askAiContext}</legend>
+              <p className="text-callout text-label-3">{t.askAiContextHint}</p>
               <CheckRow
                 checked={choice.command && available.command}
                 disabled={!available.command}
@@ -183,26 +185,26 @@ export function AskAiPanel({
                 label={t.askAiCtxLines}
                 onChange={() => setChoice((current) => toggle(current, "lines"))}
                 trailing={
-                  <select
+                  <Select
                     aria-label={t.askAiCtxLines}
                     value={choice.lineCount}
                     disabled={!choice.lines}
                     onChange={(event) => setChoice((current) => setLineCount(current, Number(event.target.value)))}
-                    className="h-6 rounded-xs bg-fill-1 px-1.5 text-caption text-label-1 outline-none focus-visible:ring-2 focus-visible:ring-(--accent) disabled:opacity-40"
+                    className="h-7 w-auto"
                   >
                     {LINE_COUNTS.map((count) => (
                       <option key={count} value={count}>
                         {count}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 }
               />
             </fieldset>
 
             <label className="block space-y-1.5">
-              <span className="text-caption text-label-2">{t.askAiQuestion}</span>
-              <textarea
+              <span className="text-callout text-label-2">{t.askAiQuestion}</span>
+              <Textarea
                 ref={questionRef}
                 value={question}
                 rows={4}
@@ -215,7 +217,6 @@ export function AskAiPanel({
                     void prepare();
                   }
                 }}
-                className="w-full resize-none rounded-sm bg-fill-1 px-3 py-2 text-callout font-normal text-label-1 outline-none placeholder:text-label-3 focus-visible:ring-2 focus-visible:ring-(--accent)"
               />
             </label>
 
@@ -233,13 +234,13 @@ export function AskAiPanel({
             review={reviewShown}
             footer={
               <div className="flex gap-2">
-                <Button variant="primary" onClick={() => review && void send(review)}>
-                  <Send />
-                  {t.askAiSend}
-                </Button>
                 <Button variant="secondary" onClick={() => dispatch({ type: "edit" })}>
                   <ArrowLeft />
                   {t.askAiBack}
+                </Button>
+                <Button variant="primary" onClick={() => review && void send(review)}>
+                  <Send />
+                  {t.askAiSend}
                 </Button>
               </div>
             }
@@ -249,14 +250,14 @@ export function AskAiPanel({
         {answerState && (
           <section aria-label={t.askAiAnswer} aria-live="polite" className="space-y-3">
             {answerState.phase === "sending" && answerState.answer === "" && (
-              <p className="flex items-center gap-2 text-caption font-normal text-label-2">
+              <p className="flex items-center gap-2 text-callout text-label-2">
                 <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" strokeWidth={1.5} />
                 {t.askAiWaiting}
               </p>
             )}
             {answerState.answer !== "" && <AiMarkdown text={answerState.answer} onInsert={onInsert} />}
             {answerState.phase === "done" && answerState.cancelled && (
-              <p className="text-caption font-normal text-label-3">{t.askAiStopped}</p>
+              <p className="text-callout text-label-3">{t.askAiStopped}</p>
             )}
             {answerState.phase === "failed" && <ErrorNote message={answerState.message} />}
             <div className="flex flex-wrap gap-2">
@@ -274,7 +275,7 @@ export function AskAiPanel({
             </div>
             {shownReview && (
               <details className="rounded-sm bg-fill-1 px-3 py-2">
-                <summary className="cursor-pointer text-caption text-label-2">{t.askAiSentText}</summary>
+                <summary className="cursor-pointer text-callout text-label-2">{t.askAiSentText}</summary>
                 <div className="mt-2">
                   <ReviewView review={shownReview} compact />
                 </div>
@@ -289,10 +290,9 @@ export function AskAiPanel({
 
 function ErrorNote({ message }: { message: string }) {
   return (
-    <p role="alert" className="selectable rounded-sm bg-danger-soft px-3 py-2 text-caption font-normal text-danger">
-      <span className="font-medium">{t.askAiFailed}. </span>
-      {message}
-    </p>
+    <Notice>
+      {t.askAiFailed}. {message}
+    </Notice>
   );
 }
 
@@ -323,7 +323,7 @@ function CheckRow({
         />
         <span className="min-w-0">
           <span className="block text-callout font-normal text-label-1">{text}</span>
-          {hint && <span className="block text-caption font-normal text-label-3">{hint}</span>}
+          {hint && <span className="block text-callout text-label-3">{hint}</span>}
         </span>
       </label>
       {trailing}
@@ -337,9 +337,9 @@ function ReviewView({ review, footer, compact = false }: { review: Review; foote
   return (
     <div className="space-y-3">
       {!compact && (
-        <p className="rounded-sm bg-accent-soft px-3 py-2 text-caption font-normal text-label-1">{t.askAiReviewNotice}</p>
+        <p className="rounded-sm bg-accent-soft px-3 py-2 text-callout text-label-1">{t.askAiReviewNotice}</p>
       )}
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-caption">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-callout">
         <dt className="text-label-3">{t.aiProvider}</dt>
         <dd className="text-label-1">{providerName(review.provider)}</dd>
         <dt className="text-label-3">{t.aiModel}</dt>
@@ -347,10 +347,10 @@ function ReviewView({ review, footer, compact = false }: { review: Review; foote
         <dt className="text-label-3">{t.askAiEndpoint}</dt>
         <dd className="selectable min-w-0 font-mono break-all text-label-1">{review.endpoint}</dd>
       </dl>
-      <p className={cn("text-caption font-normal", removed ? "text-warning" : "text-label-3")}>
+      <p className={cn("text-callout", removed ? "text-warning" : "text-label-3")}>
         {removed ? `${t.askAiRedacted}: ${removed}` : t.askAiRedactedNone}
       </p>
-      {review.truncated > 0 && <p className="text-caption font-normal text-label-3">{t.askAiTruncated}</p>}
+      {review.truncated > 0 && <p className="text-callout text-label-3">{t.askAiTruncated}</p>}
       <PromptText title={t.askAiSystem} text={review.system} />
       <PromptText title={t.askAiMessage} text={review.user} />
       {footer}
@@ -361,10 +361,10 @@ function ReviewView({ review, footer, compact = false }: { review: Review; foote
 function PromptText({ title, text }: { title: string; text: string }) {
   return (
     <div className="space-y-1">
-      <p className="text-caption text-label-2">{title}</p>
+      <p className="text-callout text-label-2">{title}</p>
       <pre
         aria-label={title}
-        className="selectable max-h-72 overflow-auto rounded-sm bg-fill-1 p-2 font-mono text-caption font-normal whitespace-pre-wrap break-words text-label-1"
+        className="selectable max-h-72 overflow-auto rounded-sm bg-fill-1 p-2 font-mono text-callout whitespace-pre-wrap break-words text-label-1"
       >
         {text}
       </pre>

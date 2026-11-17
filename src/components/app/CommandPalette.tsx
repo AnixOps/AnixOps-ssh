@@ -3,6 +3,8 @@ import {
   CornerDownLeft,
   Columns2,
   Download,
+  Keyboard,
+  Settings,
   FolderOpen,
   Maximize2,
   Minimize2,
@@ -33,7 +35,7 @@ import {
   type Tunnel,
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
-import { shortcutHint } from "@/lib/shortcuts";
+import { shortcutHint } from "@/lib/shortcutTable";
 import { terminalFor } from "@/lib/terminals";
 import { describeTunnel } from "@/lib/tunnels";
 import { cn } from "@/lib/utils";
@@ -98,6 +100,7 @@ export function CommandPalette({
   tabBroadcast,
   globalBroadcast,
   onNav,
+  onShortcutList,
 }: {
   hosts: Host[];
   activeKey: string | null;
@@ -115,6 +118,7 @@ export function CommandPalette({
   tabBroadcast: boolean;
   globalBroadcast: boolean;
   onNav: (nav: NavKey) => void;
+  onShortcutList: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
@@ -130,11 +134,11 @@ export function CommandPalette({
   const items = useMemo<Item[]>(() => {
     const terminal = terminalFor(activeKey);
     const actions: Item[] = [
-      { id: "local", section: t.paletteActions, title: t.openLocal, icon: SquareTerminal, run: onOpenLocal },
-      { id: "new-host", section: t.paletteActions, title: t.newHost, icon: Plus, run: onNewHost },
-      { id: "import-hosts", section: t.paletteActions, title: t.importHosts, icon: Download, run: onImport },
+      { id: "local", section: t.paletteActions, title: t.openLocal, subtitle: shortcutHint("new-local"), icon: SquareTerminal, run: onOpenLocal },
+      { id: "new-host", section: t.paletteActions, title: t.newHost, subtitle: shortcutHint("new-host"), icon: Plus, run: onNewHost },
+      { id: "import-hosts", section: t.paletteActions, title: t.importHosts, subtitle: shortcutHint("import"), icon: Download, run: onImport },
       ...(activeHostTab
-        ? [{ id: "files", section: t.paletteActions, title: t.toggleFiles, icon: FolderOpen, run: onToggleFiles }]
+        ? [{ id: "files", section: t.paletteActions, title: t.toggleFiles, subtitle: shortcutHint("toggle-files"), icon: FolderOpen, run: onToggleFiles }]
         : []),
       ...(paneCount > 0
         ? ([
@@ -179,9 +183,11 @@ export function CommandPalette({
             }),
           )
         : []),
-      { id: "nav-forwards", section: t.paletteActions, title: t.navForwards, icon: ArrowLeftRight, run: () => onNav("forwards") },
-      { id: "nav-snippets", section: t.paletteActions, title: t.navSnippets, icon: SquareCode, run: () => onNav("snippets") },
-      { id: "nav-team", section: t.paletteActions, title: t.navTeam, icon: Users, run: () => onNav("team") },
+      { id: "nav-forwards", section: t.paletteActions, title: t.navForwards, subtitle: shortcutHint("go-forwards"), icon: ArrowLeftRight, run: () => onNav("forwards") },
+      { id: "nav-snippets", section: t.paletteActions, title: t.navSnippets, subtitle: shortcutHint("go-snippets"), icon: SquareCode, run: () => onNav("snippets") },
+      { id: "nav-team", section: t.paletteActions, title: t.navTeam, subtitle: shortcutHint("go-team"), icon: Users, run: () => onNav("team") },
+      { id: "nav-settings", section: t.paletteActions, title: t.navSettings, subtitle: shortcutHint("settings"), icon: Settings, run: () => onNav("settings") },
+      { id: "shortcut-list", section: t.paletteActions, title: t.shortcutList, subtitle: shortcutHint("shortcut-list"), icon: Keyboard, run: onShortcutList },
     ];
     return [
       ...hosts.map((host) => ({
@@ -232,6 +238,7 @@ export function CommandPalette({
     onToggleFiles,
     onPaneAction,
     onNav,
+    onShortcutList,
   ]);
 
   const normalized = query.trim().toLowerCase();
@@ -291,7 +298,7 @@ export function CommandPalette({
             const Icon = item.icon;
             return (
               <div key={item.id}>
-                {showSection && <p className="px-3 pt-2 pb-1 text-caption text-label-3">{item.section}</p>}
+                {showSection && <p className="px-3 pt-2 pb-1 text-callout text-label-3">{item.section}</p>}
                 <div
                   id={`palette-${item.id}`}
                   role="option"
@@ -310,7 +317,7 @@ export function CommandPalette({
                   />
                   <span className="min-w-0 flex-1 truncate text-callout text-label-1">{item.title}</span>
                   {item.subtitle && (
-                    <span className="max-w-[45%] truncate font-mono text-caption font-normal text-label-3">
+                    <span className="max-w-[45%] truncate font-mono text-callout text-label-3">
                       {item.subtitle}
                     </span>
                   )}

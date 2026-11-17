@@ -1,6 +1,7 @@
 import { CircleCheck, KeyRound, ShieldCheck, Trash2 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { SettingsRow } from "@/components/ui/settings";
 import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
@@ -33,7 +34,7 @@ export function AiSettings() {
   }, []);
 
   if (!config || !draft) {
-    return <p className="px-3 py-2 text-caption font-normal text-label-3">{error ?? "…"}</p>;
+    return <p className="px-3 py-2 text-callout text-label-3">{error ?? "…"}</p>;
   }
 
   const fail = (reason: unknown) => {
@@ -88,18 +89,18 @@ export function AiSettings() {
     <>
       <div className="flex items-start gap-2 px-3 py-2.5">
         <ShieldCheck className="mt-0.5 size-4 shrink-0 text-(--accent)" strokeWidth={1.5} />
-        <p className="text-caption font-normal text-label-2">{t.aiIntro}</p>
+        <p className="text-callout text-label-2">{t.aiIntro}</p>
       </div>
 
-      <Row label={t.aiEnable} hint={t.aiEnableHint}>
+      <SettingsRow label={t.aiEnable} hint={t.aiEnableHint}>
         <Switch
           on={config.enabled}
           label={t.aiEnable}
           onClick={() => void saveConfig({ ...draft, enabled: !config.enabled })}
         />
-      </Row>
+      </SettingsRow>
 
-      <Row label={t.aiProvider}>
+      <SettingsRow label={t.aiProvider}>
         <Segmented
           size="sm"
           label={t.aiProvider}
@@ -107,7 +108,7 @@ export function AiSettings() {
           onChange={changeProvider}
           options={PROVIDERS.map((provider) => ({ value: provider, label: providerLabel(provider) }))}
         />
-      </Row>
+      </SettingsRow>
 
       <div className="space-y-1.5 px-3 py-2">
         <label className="block space-y-1">
@@ -120,7 +121,7 @@ export function AiSettings() {
             onChange={(event) => setDraft({ ...draft, model: event.target.value })}
           />
         </label>
-        <p className="text-caption font-normal text-label-3">{t.aiModelHint}</p>
+        <p className="text-callout text-label-3">{t.aiModelHint}</p>
       </div>
 
       {hasUrl && (
@@ -136,7 +137,7 @@ export function AiSettings() {
               onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value || null })}
             />
           </label>
-          <p className="text-caption font-normal text-label-3">
+          <p className="text-callout text-label-3">
             {draft.provider === "openai" ? t.aiBaseUrlOpenai : t.aiBaseUrlOllama}
           </p>
         </div>
@@ -148,10 +149,10 @@ export function AiSettings() {
           <span className="text-callout text-label-1">{t.aiApiKey}</span>
         </div>
         {draft.provider === "ollama" ? (
-          <p className="text-caption font-normal text-label-3">{t.aiKeyNotNeeded}</p>
+          <p className="text-callout text-label-3">{t.aiKeyNotNeeded}</p>
         ) : (
           <>
-            <p className="flex items-center gap-1.5 text-caption font-normal text-label-2">
+            <p className="flex items-center gap-1.5 text-callout text-label-2">
               {draft.hasKey && <CircleCheck className="size-3.5 shrink-0 text-success" strokeWidth={1.5} />}
               {draft.hasKey ? t.aiKeySaved : keyNeeded ? t.aiKeyMissing : t.aiKeyOptional}
             </p>
@@ -176,7 +177,7 @@ export function AiSettings() {
               </Button>
             </form>
             {draft.hasKey && (
-              <Button variant="ghost" size="sm" onClick={() => void saveKey(null)}>
+              <Button variant="quiet" size="sm" onClick={() => void saveKey(null)}>
                 <Trash2 />
                 {t.aiKeyRemove}
               </Button>
@@ -189,21 +190,9 @@ export function AiSettings() {
         <Button variant="primary" size="sm" disabled={!dirty} onClick={() => void saveConfig(draft)}>
           {t.aiSave}
         </Button>
-        {error && <p role="alert" className="min-w-0 flex-1 text-caption font-normal text-danger">{error}</p>}
-        {!error && notice && <p role="status" className="text-caption font-normal text-label-2">{notice}</p>}
+        {error && <p role="alert" className="min-w-0 flex-1 text-callout text-danger">{error}</p>}
+        {!error && notice && <p role="status" className="text-callout text-label-2">{notice}</p>}
       </div>
     </>
-  );
-}
-
-function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return (
-    <div className="flex min-h-11 items-center gap-3 px-3 py-1.5">
-      <div className="min-w-0 flex-1">
-        <p className="text-callout text-label-1">{label}</p>
-        {hint && <p className="text-caption font-normal text-label-2">{hint}</p>}
-      </div>
-      {children}
-    </div>
   );
 }

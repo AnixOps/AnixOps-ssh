@@ -1,6 +1,7 @@
-import { ChevronRight, CircleAlert, FileText, LoaderCircle, ShieldCheck } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ChevronRight, FileText, LoaderCircle, ShieldCheck } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Badge, Field, Notice } from "@/components/ui/form";
 import { Overlay } from "@/components/ui/overlay";
 import { Select } from "@/components/ui/select";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -152,7 +153,7 @@ export function ImportDialog({
                 {t.importSshConfig}
               </Button>
             </div>
-            <p className="text-caption font-normal text-label-3">{t.importSshConfigHint}</p>
+            <p className="text-callout text-label-3">{t.importSshConfigHint}</p>
           </>
         ) : (
           <>
@@ -161,19 +162,19 @@ export function ImportDialog({
                 <FileText className="size-4 shrink-0 text-label-2" strokeWidth={1.5} />
                 <span className="selectable truncate font-mono">{source ? sourceName(source) : ""}</span>
               </span>
-              <span className="text-caption font-normal text-label-2">
+              <span className="text-callout text-label-2">
                 {preview.format
                   ? `${t.importDetected}: ${formatName(preview.detected)} · ${hosts.length} ${t.importFound}`
                   : t.importNotDetected}
               </span>
-              <label className="ml-auto flex items-center gap-2 text-caption text-label-2">
+              <label className="ml-auto flex items-center gap-2 text-callout text-label-2">
                 {t.importFormat}
                 <Select
                   value={override ?? ""}
                   disabled={busy !== null}
                   onChange={(event) => source && void load(source, (event.target.value || null) as ImportFormat | null)}
                   aria-label={t.importFormat}
-                  className="h-7 w-44 text-caption"
+                  className="h-7 w-44 text-callout"
                 >
                   <option value="">{t.importAuto}</option>
                   {FORMATS.map((format) => (
@@ -194,7 +195,7 @@ export function ImportDialog({
                   type="button"
                   aria-expanded={warningsOpen}
                   onClick={() => setWarningsOpen((open) => !open)}
-                  className="flex items-center gap-1 rounded-xs text-caption text-label-2 hover:text-label-1"
+                  className="flex items-center gap-1 rounded-xs text-callout text-label-2 hover:text-label-1"
                 >
                   <ChevronRight
                     className={cn("size-3.5 transition-transform duration-toggle ease-standard", warningsOpen && "rotate-90")}
@@ -208,7 +209,7 @@ export function ImportDialog({
                   )}
                 </button>
                 {warningsOpen && (
-                  <ul className="selectable mt-1.5 max-h-32 space-y-1 overflow-y-auto pl-5 text-caption font-normal text-label-2">
+                  <ul className="selectable mt-1.5 max-h-32 space-y-1 overflow-y-auto pl-5 text-callout text-label-2">
                     {preview.warnings.map((warning, index) => (
                       <li key={index} className="break-words">
                         {warning}
@@ -239,22 +240,19 @@ export function ImportDialog({
                 </Select>
               </Field>
             </div>
-            <p className="text-caption font-normal text-label-3">{t.importDuplicatesHint}</p>
+            <p className="text-callout text-label-3">{t.importDuplicatesHint}</p>
           </>
         )}
 
         {error && (
-          <p role="alert" className="flex items-start gap-2 rounded-sm bg-danger-soft px-3 py-2 text-callout text-danger">
-            <CircleAlert className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
-            <span className="selectable min-w-0 break-words">
-              {t.importFailed}: {error}
-            </span>
-          </p>
+          <Notice>
+            {t.importFailed}: {error}
+          </Notice>
         )}
       </div>
 
       <div className="flex items-center gap-2 px-6 pt-3 pb-6">
-        <p className="flex min-w-0 items-center gap-1.5 text-caption font-normal text-label-3">
+        <p className="flex min-w-0 items-center gap-1.5 text-callout text-label-3">
           <ShieldCheck className="size-4 shrink-0" strokeWidth={1.5} />
           <span>{t.importNoSecrets}</span>
         </p>
@@ -267,10 +265,10 @@ export function ImportDialog({
           <>
             {preview && (
               <>
-                <span className="hidden text-caption font-normal text-label-2 sm:inline">
+                <span className="hidden text-callout text-label-2 sm:inline">
                   {t.importCreated} {counts.create} · {t.importUpdated} {counts.update} · {t.skipped} {counts.skip}
                 </span>
-                <Button variant="ghost" disabled={busy !== null} onClick={back}>
+                <Button variant="quiet" disabled={busy !== null} onClick={back}>
                   {t.importAnother}
                 </Button>
               </>
@@ -288,15 +286,6 @@ export function ImportDialog({
         )}
       </div>
     </Overlay>
-  );
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 block text-caption text-label-2">{label}</span>
-      {children}
-    </label>
   );
 }
 
@@ -320,7 +309,7 @@ function HostTable({
     <div className="max-h-[38vh] overflow-y-auto rounded-sm ring-1 ring-separator">
       <table className="w-full table-fixed border-collapse text-left">
         <thead className="sticky top-0 bg-bg-elevated">
-          <tr className="text-caption text-label-2">
+          <tr className="text-callout text-label-2">
             <th className="w-10 px-3 py-2">
               <input
                 ref={allRef}
@@ -355,10 +344,10 @@ function HostTable({
                 <td className="selectable truncate px-2 text-callout text-label-1" title={host.label}>
                   {host.label}
                 </td>
-                <td className="selectable truncate px-2 font-mono text-caption font-normal text-label-2" title={describeTarget(host)}>
+                <td className="selectable truncate px-2 font-mono text-callout text-label-2" title={describeTarget(host)}>
                   {describeTarget(host)}
                 </td>
-                <td className="hidden truncate px-2 text-caption font-normal text-label-2 sm:table-cell" title={describeGroup(host.group_path)}>
+                <td className="hidden truncate px-2 text-callout text-label-2 sm:table-cell" title={describeGroup(host.group_path)}>
                   {describeGroup(host.group_path) || "—"}
                 </td>
                 <td className="px-2">
@@ -389,21 +378,6 @@ function HostTable({
   );
 }
 
-function Badge({ tone, children }: { tone: "neutral" | "accent" | "danger"; children: ReactNode }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex h-5 items-center whitespace-nowrap rounded-pill px-2 text-caption font-medium",
-        tone === "neutral" && "bg-fill-2 text-label-2",
-        tone === "accent" && "bg-accent-soft text-(--accent)",
-        tone === "danger" && "bg-danger-soft text-danger",
-      )}
-    >
-      {children}
-    </span>
-  );
-}
-
 function Summary({ result }: { result: HostsImportApplyResult }) {
   const rows: [string, number][] = [
     [t.importCreated, result.created],
@@ -423,7 +397,7 @@ function Summary({ result }: { result: HostsImportApplyResult }) {
         ))}
       </dl>
       {(result.rejected.length > 0 || result.warnings.length > 0) && (
-        <ul className="selectable max-h-40 space-y-1 overflow-y-auto text-caption font-normal text-label-2">
+        <ul className="selectable max-h-40 space-y-1 overflow-y-auto text-callout text-label-2">
           {result.rejected.map((entry, index) => (
             <li key={`r${index}`} className="break-words text-danger">
               {entry.label}: {entry.reason}

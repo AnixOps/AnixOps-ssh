@@ -1,47 +1,11 @@
 import type { ITheme } from "@xterm/xterm";
 
-/* ANSI colours follow the AnixOps terminal palette (guidelines/terminal.md):
-   red = danger, green = success, yellow = warning, blue = accent, muted =
-   bright black; magenta and cyan come from the chart colours. Surfaces and
-   text come from the live CSS tokens so the terminal matches the app. */
-const ansi = {
-  light: {
-    black: "#1D1D1F",
-    red: "#D70015",
-    green: "#1A7F37",
-    yellow: "#B25000",
-    blue: "#4F5BE8",
-    magenta: "#8B5CF6",
-    cyan: "#0891B2",
-    white: "#86868B",
-    brightBlack: "#6E6E73",
-    brightRed: "#B8000F",
-    brightGreen: "#16A34A",
-    brightYellow: "#A16207",
-    brightBlue: "#4350DD",
-    brightMagenta: "#DB2777",
-    brightCyan: "#0E7490",
-    brightWhite: "#3A3A3C",
-  },
-  dark: {
-    black: "#48484A",
-    red: "#FF453A",
-    green: "#30D158",
-    yellow: "#FF9F0A",
-    blue: "#818CF8",
-    magenta: "#A78BFA",
-    cyan: "#22D3EE",
-    white: "#D1D1D6",
-    brightBlack: "#8E8E93",
-    brightRed: "#FF6961",
-    brightGreen: "#4ADE80",
-    brightYellow: "#FACC15",
-    brightBlue: "#949EFA",
-    brightMagenta: "#F472B6",
-    brightCyan: "#67E8F9",
-    brightWhite: "#F5F5F7",
-  },
-} satisfies Record<string, ITheme>;
+/* The terminal palette comes from the live AnixOps tokens (guidelines/terminal.md),
+   so light and dark follow the app and no colour is written here:
+   red = --danger, green = --success, yellow = --warning, blue = --accent,
+   muted = bright black. Magenta and cyan come from the chart colours, which the
+   guidelines keep at 3:1 or more on the card. Surfaces and text are --bg and
+   --label-1. */
 
 function token(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -52,8 +16,25 @@ export function isDark(): boolean {
 }
 
 export function terminalTheme(): ITheme {
+  const dark = isDark();
   return {
-    ...(isDark() ? ansi.dark : ansi.light),
+    black: token(dark ? "--label-3" : "--label-1"),
+    red: token("--danger"),
+    green: token("--success"),
+    yellow: token("--warning"),
+    blue: token("--accent"),
+    magenta: token("--chart-3"),
+    cyan: token("--chart-2"),
+    white: token(dark ? "--label-2" : "--label-3"),
+    // Muted: hints, timestamps, autosuggestions.
+    brightBlack: token(dark ? "--label-3" : "--label-2"),
+    brightRed: token("--danger"),
+    brightGreen: token("--chart-7"),
+    brightYellow: token("--chart-6"),
+    brightBlue: token("--accent-hover"),
+    brightMagenta: token("--chart-4"),
+    brightCyan: token("--chart-2"),
+    brightWhite: token("--label-1"),
     background: token("--bg"),
     foreground: token("--label-1"),
     cursor: token("--accent"),
@@ -63,5 +44,5 @@ export function terminalTheme(): ITheme {
 }
 
 export function terminalFont(): string {
-  return token("--font-mono") || "monospace";
+  return token("--font-app-mono") || "monospace";
 }

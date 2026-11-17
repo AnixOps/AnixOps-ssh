@@ -14,7 +14,7 @@ const scenes = [
     name: "split",
     query: "",
     open: ["prod-web-01"],
-    panes: ["Control+Shift+D", "Control+Shift+Alt+D", "Control+Shift+B"],
+    panes: ["Control+Shift+D", "Control+Shift+O", "Control+Shift+B"],
     type: ["ls", "df -h"],
   },
   { name: "exited", query: "", open: ["prod-db"], type: ["exit"] },
@@ -23,7 +23,7 @@ const scenes = [
   { name: "files", query: "", open: ["prod-web-01"], type: ["ls"], files: true },
   { name: "search", query: "", search: "prod" },
   { name: "askpass", query: "askpass=1" },
-  { name: "host-editor", query: "", click: "编辑主机" },
+  { name: "host-editor", query: "", clicks: [{ name: "更多", exact: false }, { name: "编辑主机|保存到主机列表", role: "menuitem", regex: true }] },
   { name: "forwards", query: "", nav: "端口转发" },
   { name: "tunnel-editor", query: "", nav: "端口转发", click: "新建隧道" },
   { name: "palette", query: "", open: ["prod-web-01"], keys: "Control+Shift+K", typeText: "prod" },
@@ -36,18 +36,18 @@ const scenes = [
   {
     name: "import",
     query: "",
-    clicks: [{ name: "添加" }, { name: "导入主机", role: "menuitem" }, { name: "从 ~/.ssh/config 导入" }],
+    clicks: [{ name: "添加主机" }, { name: "^导入主机", role: "menuitem", regex: true }, { name: "从 ~/.ssh/config 导入" }],
     waitText: "legacy-switch",
   },
   { name: "terminal-en", query: "lang=en", open: ["prod-web-01", "home-nas"] },
 ];
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const errors = [];
 for (const colorScheme of ["light", "dark"]) {
   const context = await browser.newContext({
     viewport: { width: 1200, height: 760 },
-    deviceScaleFactor: 2,
+    deviceScaleFactor: Number(process.env.DSF || 2),
     colorScheme,
     locale: "zh-CN",
   });
@@ -94,7 +94,7 @@ for (const colorScheme of ["light", "dark"]) {
       await page.keyboard.type(scene.typeText ?? "");
     }
     for (const step of scene.clicks ?? [])
-      await page.getByRole(step.role ?? "button", { name: step.name, exact: true }).first().click();
+      await page.getByRole(step.role ?? "button", { name: step.regex ? new RegExp(step.name) : step.name, exact: step.regex ? undefined : (step.exact ?? true) }).first().click();
     if (scene.waitText) await page.getByText(scene.waitText).first().waitFor();
     if (scene.click) await page.getByRole("button", { name: scene.click, exact: true }).first().click();
     await page.mouse.move(0, 0);

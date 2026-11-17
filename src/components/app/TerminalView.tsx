@@ -496,7 +496,7 @@ export function TerminalView({
       {!askOpen && (
         <div className="absolute top-3 right-4 z-dropdown">
           <Tooltip label={t.askAi}>
-            <Button variant="ghost" size="icon-sm" aria-label={t.askAi} onClick={() => setAskOpen(true)}>
+            <Button variant="quiet" size="icon-sm" aria-label={t.askAi} onClick={() => setAskOpen(true)}>
               <Sparkles />
             </Button>
           </Tooltip>
@@ -583,7 +583,7 @@ export function TerminalView({
               <p className="text-callout font-medium text-label-1">
                 {status.error ? t.sessionFailed : t.sessionEnded}
               </p>
-              <p className="selectable line-clamp-4 break-words text-caption font-normal text-label-2">
+              <p className="selectable line-clamp-4 break-words text-callout text-label-2">
                 {status.error ? (isSerialPermissionError(status.error) ? t.serialPermissionDenied : status.error) : status.code === null ? "" : `${t.exitCode} ${status.code}`}
               </p>
             </div>
@@ -616,7 +616,7 @@ function IconButton({
 }) {
   return (
     <Tooltip label={label}>
-      <Button variant="ghost" size="icon-sm" aria-label={label} onClick={onClick}>
+      <Button variant="quiet" size="icon-sm" aria-label={label} onClick={onClick}>
         {children}
       </Button>
     </Tooltip>

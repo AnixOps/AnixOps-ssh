@@ -2,8 +2,13 @@ import type { Transition } from "motion/react";
 
 /* Motion presets from the AnixOps Design motion tokens (guidelines/motion.md):
    120 ms micro, 200 ms toggle, 280 ms overlay, 240 ms page; standard,
-   emphasized and exit easing. Only opacity and transform are animated, and
-   MotionConfig reducedMotion="user" drops transforms when the system asks. */
+   emphasized and exit easing. Only these four durations exist (M7). Only
+   opacity and transform are animated (M1), and MotionConfig
+   reducedMotion="user" drops transforms when the system asks (M3).
+
+   Selection, page and tab changes, sorting and live data do not animate
+   (M8 to M10); presets here are for overlays, disclosure, switches and
+   segmented controls. */
 
 export const ease = {
   standard: [0.25, 0.1, 0.25, 1],
@@ -13,19 +18,16 @@ export const ease = {
 
 export const duration = { micro: 0.12, toggle: 0.2, overlay: 0.28, page: 0.24 } as const;
 
-/** Selection highlights sliding between items; settles in about 250 ms. */
-export const slide: Transition = { type: "spring", stiffness: 520, damping: 44, mass: 0.9 };
-
-/** Items making room for one another (layout animations). */
-export const reflow: Transition = { type: "spring", stiffness: 420, damping: 40 };
-
+/** Overlays enter in `overlay` with the emphasized curve (M6). */
 export const enter: Transition = { duration: duration.overlay, ease: ease.emphasized };
-export const leave: Transition = { duration: 0.16, ease: ease.exit };
+/** Leaving is faster than entering: `toggle` with the exit curve (M6). */
+export const leave: Transition = { duration: duration.toggle, ease: ease.exit };
+/** Segmented control, disclosure, status changes. */
 export const toggle: Transition = { duration: duration.toggle, ease: ease.standard };
 
-/** Small things appearing in place: rows, notices, list items. */
+/** A row the user added or removed fades; neighbours do not slide (M2 table). */
 export const appear = {
-  initial: { opacity: 0, y: 4 },
-  animate: { opacity: 1, y: 0, transition: toggle },
+  initial: { opacity: 0 },
+  animate: { opacity: 1, transition: toggle },
   exit: { opacity: 0, transition: { duration: duration.micro, ease: ease.exit } },
 };

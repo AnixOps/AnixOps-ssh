@@ -2,6 +2,8 @@ import { CircleAlert, ChevronDown, ChevronRight, Plus, ShieldAlert, ShieldCheck,
 import { useCallback, useEffect, useState } from "react";
 import { SafetyNumber } from "@/components/app/SyncSettings";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
+import { Notice } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -85,20 +87,15 @@ export function TeamVaults() {
         )}
       </div>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-4">
-        {error && (
-          <p role="alert" className="flex items-start gap-2 rounded-sm bg-danger-soft px-3 py-2 text-caption font-normal text-danger">
-            <CircleAlert className="mt-px size-3.5 shrink-0" strokeWidth={1.5} />
-            <span className="selectable min-w-0 break-words">{error}</span>
-          </p>
-        )}
+        {error && <Notice>{error}</Notice>}
         {!signedIn ? (
           <div className="px-3 pt-10 text-center">
             <Users className="mx-auto mb-3 size-12 text-label-3" strokeWidth={1.5} />
-            <p className="text-callout font-semibold text-label-1">{t.teamSignInFirst}</p>
+            <p className="text-callout font-medium text-label-1">{t.teamSignInFirst}</p>
           </div>
         ) : (
           <>
-            <p className="px-1 text-caption font-normal text-label-2">{t.teamIntro}</p>
+            <p className="px-1 text-callout text-label-2">{t.teamIntro}</p>
             {creating !== null && (
               <form
                 className="flex gap-1.5"
@@ -122,7 +119,7 @@ export function TeamVaults() {
               </form>
             )}
             {vaults.length === 0 && creating === null && (
-              <p className="px-3 pt-6 text-center text-caption font-normal text-label-2">{t.teamNone}</p>
+              <p className="px-3 pt-6 text-center text-callout text-label-2">{t.teamNone}</p>
             )}
             {vaults.map((vault) => (
               <VaultCard
@@ -133,7 +130,7 @@ export function TeamVaults() {
                 onError={setError}
               />
             ))}
-            <p className="px-1 text-caption font-normal text-label-3">{t.teamRotates}</p>
+            <p className="px-1 text-callout text-label-3">{t.teamRotates}</p>
           </>
         )}
       </div>
@@ -164,7 +161,7 @@ function VaultCard({
         <Chevron className="size-4 shrink-0 text-label-2" strokeWidth={1.5} />
         <span className="min-w-0 flex-1 truncate text-callout text-label-1">{vault.name}</span>
         {vault.role && (
-          <span className="shrink-0 text-caption font-normal text-label-2">
+          <span className="shrink-0 text-callout text-label-2">
             {ROLE_LABEL[vault.role as Role] ?? vault.role}
           </span>
         )}
@@ -176,7 +173,7 @@ function VaultCard({
 
 function Members({ vault, onError }: { vault: VaultInfo; onError: (text: string | null) => void }) {
   const [members, setMembers] = useState<VaultMember[]>([]);
-  const [confirming, setConfirming] = useState<string | null>(null);
+  const confirm = useConfirm();
   const [adding, setAdding] = useState(false);
   const manage = canManageMembers(vault.role);
 
@@ -199,7 +196,7 @@ function Members({ vault, onError }: { vault: VaultInfo; onError: (text: string 
 
   return (
     <div className="divide-y divide-separator border-t border-separator">
-      <p className="px-3 pt-2 pb-1 text-caption text-label-2">{t.teamMembers}</p>
+      <p className="px-3 pt-2 pb-1 text-callout text-label-2">{t.teamMembers}</p>
       <ul>
         {members.map((member) => {
           const locked = member.trust === "self" || isLastOwner(members, member);
@@ -223,37 +220,28 @@ function Members({ vault, onError }: { vault: VaultInfo; onError: (text: string 
                     ))}
                   </Select>
                 ) : (
-                  <span className="shrink-0 text-caption font-normal text-label-2">{ROLE_LABEL[member.role]}</span>
+                  <span className="shrink-0 text-callout text-label-2">{ROLE_LABEL[member.role]}</span>
                 )}
-                {manage &&
-                  !locked &&
-                  (confirming === member.account_id ? (
+                {manage && !locked && (
+                  <Tooltip label={`${t.teamRemove}: ${member.username}`}>
                     <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => {
-                        setConfirming(null);
-                        void act(() => removeMember(vault.id, member.account_id));
+                      variant="danger"
+                      size="icon-sm"
+                      aria-label={`${t.teamRemove}: ${member.username}`}
+                      onClick={async () => {
+                        const title = t.teamRemoveTitle.replace("{name}", member.username).replace("{vault}", vault.name);
+                        const ok = await confirm({ title, body: t.teamRotates, verb: t.teamRemove, typed: member.username });
+                        if (ok) void act(() => removeMember(vault.id, member.account_id));
                       }}
                     >
-                      {t.teamRemoveConfirm}
+                      <UserMinus />
                     </Button>
-                  ) : (
-                    <Tooltip label={`${t.teamRemove}: ${member.username}`}>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`${t.teamRemove}: ${member.username}`}
-                        onClick={() => setConfirming(member.account_id)}
-                      >
-                        <UserMinus />
-                      </Button>
-                    </Tooltip>
-                  ))}
+                  </Tooltip>
+                )}
               </div>
               <p
                 className={cn(
-                  "mt-0.5 flex items-center gap-1 text-caption font-normal",
+                  "mt-0.5 flex items-center gap-1 text-callout",
                   needsAttention(member.trust) ? "text-warning" : "text-label-3",
                 )}
               >
@@ -288,7 +276,7 @@ function Members({ vault, onError }: { vault: VaultInfo; onError: (text: string 
           </div>
         )
       ) : (
-        <p className="px-3 py-2 text-caption font-normal text-label-3">{t.teamOwnerOnly}</p>
+        <p className="px-3 py-2 text-callout text-label-3">{t.teamOwnerOnly}</p>
       )}
     </div>
   );
@@ -349,7 +337,7 @@ function AddMember({ vaultId, onDone, onCancel }: { vaultId: string; onDone: () 
           aria-label={t.teamUsername}
           autoComplete="off"
           spellCheck={false}
-          className="h-8 min-w-0 flex-1 text-caption font-normal"
+          className="h-8 min-w-0 flex-1 text-callout"
         />
         <Button type="submit" variant="secondary" size="sm" className="h-8" disabled={!username.trim() || busy}>
           {t.teamLookup}
@@ -357,11 +345,11 @@ function AddMember({ vaultId, onDone, onCancel }: { vaultId: string; onDone: () 
       </form>
       {found && (
         <>
-          <p className="text-caption text-label-1">
+          <p className="text-callout text-label-1">
             {t.teamSafetyNumber}: {found.username}
           </p>
           <SafetyNumber groups={fingerprintGroups(found.fingerprint)} />
-          <p className="text-caption font-normal text-warning">{t.teamCompare}</p>
+          <p className="text-callout text-warning">{t.teamCompare}</p>
           <Select
             aria-label={t.teamRole}
             value={role}
@@ -377,13 +365,13 @@ function AddMember({ vaultId, onDone, onCancel }: { vaultId: string; onDone: () 
         </>
       )}
       {error && (
-        <p role="alert" className="flex items-start gap-2 text-caption font-normal break-words text-danger">
+        <p role="alert" className="flex items-start gap-2 text-callout break-words text-danger">
           <CircleAlert className="mt-px size-3.5 shrink-0" strokeWidth={1.5} />
           <span className="selectable min-w-0">{error}</span>
         </p>
       )}
       <div className="flex justify-end gap-1.5">
-        <Button variant="ghost" size="sm" onClick={onCancel}>
+        <Button variant="quiet" size="sm" onClick={onCancel}>
           {t.cancel}
         </Button>
         {found && (

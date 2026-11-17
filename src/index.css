@@ -24,6 +24,10 @@
   --color-border: var(--separator);
   --color-input: var(--separator-strong);
   --color-ring: var(--accent);
+  /* An installed client uses the platform's fonts, not Inter (typography.md,
+     "Client applications"). */
+  --font-sans: var(--font-app);
+  --font-mono: var(--font-app-mono);
 }
 
 /* Gutter bar per prompt (shell integration); xterm positions the element. */
@@ -63,7 +67,7 @@
     margin: 0;
     background: var(--bg);
     color: var(--label-1);
-    font-family: var(--font-sans);
+    font-family: var(--font-app);
     font-size: var(--type-body-size);
     line-height: var(--type-body-line);
     -webkit-font-smoothing: antialiased;
@@ -125,69 +129,27 @@
   }
 }
 
-/* Page change: fade in + 8px rise (guidelines/motion.md). */
-@keyframes page-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@utility animate-page-in {
-  animation: page-in var(--dur-page) var(--ease-standard);
-}
-
+/* Reduced motion (M3): no translation or scale, and only short opacity changes. */
 @media (prefers-reduced-motion: reduce) {
-  @keyframes page-in {
-    from {
-      opacity: 0;
-    }
-    to {
-      opacity: 1;
-    }
-  }
   *,
   ::before,
   ::after {
     transition-duration: 100ms !important;
+    animation-duration: 100ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  .active\:scale-\[0\.97\]:active {
+    transform: none;
   }
 }
 
-/* Tooltips scale in from their trigger and fade out (Radix keeps them
-   mounted until the closing animation ends). */
+/* Tooltips appear after 500 ms of rest and leave without a fade (M19). */
 @keyframes tooltip-in {
   from {
     opacity: 0;
-    transform: scale(0.96);
-  }
-}
-@keyframes tooltip-out {
-  to {
-    opacity: 0;
-    transform: scale(0.98);
   }
 }
 .tooltip-motion[data-state="delayed-open"],
 .tooltip-motion[data-state="instant-open"] {
-  animation: tooltip-in var(--dur-micro) var(--ease-emphasized);
-}
-.tooltip-motion[data-state="closed"] {
-  animation: tooltip-out 80ms var(--ease-exit) forwards;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  @keyframes tooltip-in {
-    from {
-      opacity: 0;
-    }
-  }
-  @keyframes tooltip-out {
-    to {
-      opacity: 0;
-    }
-  }
+  animation: tooltip-in var(--dur-micro) var(--ease-standard);
 }

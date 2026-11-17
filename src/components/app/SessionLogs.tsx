@@ -2,10 +2,15 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ChevronDown, ChevronUp, CircleAlert, Download, Eye, ScrollText, ShieldCheck, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Download, Eye, ScrollText, ShieldCheck, Trash2, X } from "lucide-react";
 import { AnimatePresence } from "motion/react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
+import { Notice } from "@/components/ui/form";
+import { Menu } from "@/components/ui/menu";
+import { Select } from "@/components/ui/select";
+import { SettingsRow } from "@/components/ui/settings";
 import { Input } from "@/components/ui/input";
 import { Overlay } from "@/components/ui/overlay";
 import { Switch } from "@/components/ui/switch";
@@ -35,7 +40,7 @@ export function SessionLogs() {
   const [entries, setEntries] = useState<SessionLogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<SessionLogEntry | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const load = useCallback(() => {
     logSettingsGet().then(setSettings).catch((reason) => setError(String(reason)));
@@ -48,94 +53,76 @@ export function SessionLogs() {
     logSettingsSave(recordByDefault, retentionDays).then(setSettings).catch((reason) => setError(String(reason)));
   };
 
-  const remove = (id: string) => {
-    setConfirmDelete(null);
-    logDelete(id)
-      .then(() => setEntries((current) => current.filter((entry) => entry.id !== id)))
+  const remove = async (entry: SessionLogEntry) => {
+    const title = t.logDeleteTitle.replace("{host}", entry.host);
+    if (!(await confirm({ title, body: t.logsDeleteConfirm, verb: t.logsDelete }))) return;
+    logDelete(entry.id)
+      .then(() => setEntries((current) => current.filter((item) => item.id !== entry.id)))
       .catch((reason) => setError(String(reason)));
   };
 
   if (!settings) {
-    return <p className="px-3 py-2 text-caption font-normal text-label-3">{error ?? "…"}</p>;
+    return <p className="px-3 py-2 text-callout text-label-3">{error ?? "…"}</p>;
   }
 
   return (
     <>
       <div className="flex items-start gap-2 px-3 py-2.5">
         <ShieldCheck className="mt-0.5 size-4 shrink-0 text-(--accent)" strokeWidth={1.5} />
-        <p className="text-caption font-normal text-label-2">{t.logsIntro}</p>
+        <p className="text-callout text-label-2">{t.logsIntro}</p>
       </div>
 
-      <Row label={t.logsDefault} hint={t.logsDefaultHint}>
+      <SettingsRow label={t.logsDefault} hint={t.logsDefaultHint}>
         <Switch
           on={settings.recordByDefault}
           label={t.logsDefault}
           onClick={() => save(!settings.recordByDefault, settings.retentionDays)}
         />
-      </Row>
-      <Row label={t.logsRetention}>
-        <select
+      </SettingsRow>
+      <SettingsRow label={t.logsRetention}>
+        <Select
           aria-label={t.logsRetention}
           value={settings.retentionDays}
           onChange={(event) => save(settings.recordByDefault, Number(event.target.value))}
-          className="h-7 rounded-xs bg-fill-1 px-2 text-callout text-label-1 outline-none focus-visible:ring-2 focus-visible:ring-(--accent)"
+          className="h-7 w-auto"
         >
           {retentionOptions(settings.retentionDays).map((days) => (
             <option key={days} value={days}>
               {days === 0 ? t.logsForever : `${days} ${t.logsDays}`}
             </option>
           ))}
-        </select>
-      </Row>
+        </Select>
+      </SettingsRow>
 
-      {error && <p role="alert" className="selectable px-3 py-2 text-caption font-normal text-danger">{error}</p>}
+      {error && <Notice className="m-3">{error}</Notice>}
 
       {entries.length === 0 ? (
-        <p className="px-3 py-2.5 text-caption font-normal text-label-3">{t.logsEmpty}</p>
+        <p className="px-3 py-2.5 text-callout text-label-3">{t.logsEmpty}</p>
       ) : (
         <ul aria-label={t.logsTitle} className="divide-y divide-separator">
-          {entries.map((entry) =>
-            confirmDelete === entry.id ? (
-              <li key={entry.id} className="space-y-2 px-3 py-2">
-                <p className="text-caption font-normal text-label-1">{t.logsDeleteConfirm}</p>
-                <div className="flex gap-2">
-                  <Button variant="destructive" size="sm" onClick={() => remove(entry.id)}>
-                    <Trash2 />
-                    {t.logsDelete}
-                  </Button>
-                  <Button variant="secondary" size="sm" onClick={() => setConfirmDelete(null)}>
-                    {t.cancel}
-                  </Button>
-                </div>
-              </li>
-            ) : (
-              <li key={entry.id} className="flex items-center gap-2 px-3 py-2">
-                <ScrollText className="size-4 shrink-0 text-label-3" strokeWidth={1.5} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-callout text-label-1">{entry.host}</p>
-                  <p className="truncate text-caption font-normal text-label-2">
-                    {new Date(entry.startedMs).toLocaleString()} · {formatDuration(entry.durationMs, units())} ·{" "}
-                    {formatSize(entry.size)}
-                  </p>
-                </div>
-                <Tooltip label={t.logsOpen}>
-                  <Button variant="ghost" size="icon-sm" aria-label={t.logsOpen} onClick={() => setViewing(entry)}>
-                    <Eye />
-                  </Button>
-                </Tooltip>
-                <Tooltip label={t.logsDelete}>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={t.logsDelete}
-                    onClick={() => setConfirmDelete(entry.id)}
-                  >
-                    <Trash2 />
-                  </Button>
-                </Tooltip>
-              </li>
-            ),
-          )}
+          {entries.map((entry) => (
+            <li key={entry.id} className="flex items-center gap-2 px-4 py-2">
+              <ScrollText className="size-4 shrink-0 text-label-3" strokeWidth={1.5} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-body text-label-1" title={entry.host}>
+                  {entry.host}
+                </p>
+                <p className="truncate text-callout text-label-2 tabular-nums">
+                  {new Date(entry.startedMs).toLocaleString()} · {formatDuration(entry.durationMs, units())} ·{" "}
+                  {formatSize(entry.size)}
+                </p>
+              </div>
+              <Tooltip label={t.logsOpen}>
+                <Button variant="quiet" size="icon-sm" aria-label={t.logsOpen} onClick={() => setViewing(entry)}>
+                  <Eye />
+                </Button>
+              </Tooltip>
+              <Menu
+                label={t.more}
+                items={[{ key: "delete", label: t.logsDelete, icon: <Trash2 />, danger: true, onSelect: () => void remove(entry) }]}
+              />
+            </li>
+          ))}
         </ul>
       )}
 
@@ -154,7 +141,7 @@ function LogViewer({ entry, onClose }: { entry: SessionLogEntry; onClose: () => 
   const [log, setLog] = useState<OpenedLog | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [confirmExport, setConfirmExport] = useState(false);
+  const confirm = useConfirm();
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -210,7 +197,7 @@ function LogViewer({ entry, onClose }: { entry: SessionLogEntry; onClose: () => 
   };
 
   const exportText = async () => {
-    setConfirmExport(false);
+    if (!(await confirm({ title: t.logsExportTitle, body: t.logsExportConfirm, verb: t.logsExport, destructive: false }))) return;
     try {
       if (await logExport(entry)) setNotice(t.logsExportDone);
     } catch (reason) {
@@ -224,8 +211,8 @@ function LogViewer({ entry, onClose }: { entry: SessionLogEntry; onClose: () => 
       <header className="flex shrink-0 flex-wrap items-center gap-2 px-4 py-3">
         <ScrollText className="size-4 text-label-2" strokeWidth={1.5} />
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-callout font-medium">{entry.host}</h2>
-          <p className="truncate text-caption font-normal text-label-2">
+          <h2 className="truncate text-title-3">{entry.host}</h2>
+          <p className="truncate text-callout text-label-2">
             {new Date(entry.startedMs).toLocaleString()} · {formatDuration(entry.durationMs, units())} · {t.logsReadOnly}
           </p>
         </div>
@@ -244,69 +231,38 @@ function LogViewer({ entry, onClose }: { entry: SessionLogEntry; onClose: () => 
           }}
         />
         <Tooltip label={t.findPrevious}>
-          <Button variant="ghost" size="icon-sm" aria-label={t.findPrevious} onClick={() => find(false)}>
+          <Button variant="quiet" size="icon-sm" aria-label={t.findPrevious} onClick={() => find(false)}>
             <ChevronUp />
           </Button>
         </Tooltip>
         <Tooltip label={t.findNext}>
-          <Button variant="ghost" size="icon-sm" aria-label={t.findNext} onClick={() => find(true)}>
+          <Button variant="quiet" size="icon-sm" aria-label={t.findNext} onClick={() => find(true)}>
             <ChevronDown />
           </Button>
         </Tooltip>
-        <Button variant="secondary" size="sm" disabled={!log} onClick={() => setConfirmExport(true)}>
+        <Button variant="secondary" size="sm" disabled={!log} onClick={() => void exportText()}>
           <Download />
           {t.logsExport}
         </Button>
         <Tooltip label={t.logsClose}>
-          <Button variant="ghost" size="icon-sm" aria-label={t.logsClose} onClick={onClose}>
+          <Button variant="quiet" size="icon-sm" aria-label={t.logsClose} onClick={onClose}>
             <X />
           </Button>
         </Tooltip>
       </header>
 
       {log && !log.complete && (
-        <p className="mx-4 mb-2 flex items-start gap-2 rounded-sm bg-warning-soft px-3 py-2 text-caption font-normal text-warning">
-          <CircleAlert className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
-          <span>
-            <span className="font-medium">{t.logsIncomplete}. </span>
-            {t.logsIncompleteHint}
-          </span>
-        </p>
+        <Notice tone="warning" className="mx-4 mb-2">
+          {t.logsIncomplete}. {t.logsIncompleteHint}
+        </Notice>
       )}
-      {confirmExport && (
-        <div role="alertdialog" aria-label={t.logsExportTitle} className="mx-4 mb-2 space-y-2 rounded-sm bg-fill-1 px-3 py-2">
-          <p className="text-caption font-medium text-label-1">{t.logsExportTitle}</p>
-          <p className="text-caption font-normal text-label-2">{t.logsExportConfirm}</p>
-          <div className="flex gap-2">
-            <Button variant="primary" size="sm" onClick={() => void exportText()}>
-              <Download />
-              {t.logsExport}
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => setConfirmExport(false)}>
-              {t.cancel}
-            </Button>
-          </div>
-        </div>
-      )}
-      {notice && <p role="status" className="mx-4 mb-2 text-caption font-normal text-label-2">{notice}</p>}
-      {error && <p role="alert" className="selectable mx-4 mb-2 rounded-sm bg-danger-soft px-3 py-2 text-caption font-normal text-danger">{error}</p>}
-      {!log && !error && <p className="mx-4 text-caption font-normal text-label-3">{t.logsLoading}…</p>}
+      {notice && <p role="status" className="mx-4 mb-2 text-callout text-label-2">{notice}</p>}
+      {error && <Notice className="mx-4 mb-2">{error}</Notice>}
+      {!log && !error && <p className="mx-4 text-callout text-label-3">{t.logsLoading}…</p>}
 
       <div className="min-h-0 flex-1 bg-bg px-3 pt-2 pb-3">
         <div ref={containerRef} className="h-full w-full" />
       </div>
     </Overlay>
-  );
-}
-
-function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return (
-    <div className="flex min-h-11 items-center gap-3 px-3 py-1.5">
-      <div className="min-w-0 flex-1">
-        <p className="text-callout text-label-1">{label}</p>
-        {hint && <p className="text-caption font-normal text-label-2">{hint}</p>}
-      </div>
-      {children}
-    </div>
   );
 }

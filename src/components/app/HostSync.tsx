@@ -48,12 +48,12 @@ export function HostHistory({ hostId, onRestored }: { hostId: string; onRestored
 
   return (
     <section aria-labelledby="host-editor-history" className="space-y-2 rounded-md bg-fill-1 p-3">
-      <h3 id="host-editor-history" className="flex items-center gap-1.5 text-caption text-label-2">
+      <h3 id="host-editor-history" className="flex items-center gap-1.5 text-callout text-label-2">
         <History className="size-4" strokeWidth={1.5} />
         {t.historyTitle}
       </h3>
       {entries.length === 0 ? (
-        <p className="text-caption font-normal text-label-3">{t.historyEmpty}</p>
+        <p className="text-callout text-label-3">{t.historyEmpty}</p>
       ) : (
         <ul className="max-h-40 divide-y divide-separator overflow-y-auto">
           {entries.map((entry) => {
@@ -63,11 +63,11 @@ export function HostHistory({ hostId, onRestored }: { hostId: string; onRestored
             return (
               <li key={entry.seq} className="flex items-center gap-2 py-1.5">
                 <div className="min-w-0 flex-1">
-                  <p className="text-caption text-label-1">{label(entry.field)}</p>
-                  <p className="selectable truncate font-mono text-caption font-normal text-label-2">
+                  <p className="text-callout text-label-1">{label(entry.field)}</p>
+                  <p className="selectable truncate font-mono text-callout text-label-2">
                     {secret ? "••••" : value || t.historyEmptyValue}
                   </p>
-                  <p className="text-caption font-normal text-label-3">
+                  <p className="text-callout text-label-3">
                     {Number.isNaN(when.getTime()) ? "" : `${agoText(when)} · `}
                     {t.historyDevice} {entry.device}
                   </p>
@@ -75,7 +75,7 @@ export function HostHistory({ hostId, onRestored }: { hostId: string; onRestored
                 <Tooltip label={`${t.historyRestore}: ${label(entry.field)}`}>
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant="quiet"
                     size="icon-sm"
                     aria-label={`${t.historyRestore}: ${label(entry.field)}`}
                     onClick={() => void restore(entry)}
@@ -89,7 +89,7 @@ export function HostHistory({ hostId, onRestored }: { hostId: string; onRestored
         </ul>
       )}
       {error && (
-        <p role="alert" className="flex items-start gap-2 text-caption font-normal break-words text-danger">
+        <p role="alert" className="flex items-start gap-2 text-callout break-words text-danger">
           <CircleAlert className="mt-px size-3.5 shrink-0" strokeWidth={1.5} />
           <span className="selectable min-w-0">{error}</span>
         </p>
@@ -140,7 +140,7 @@ export function HostVault({ hostId, onMoved }: { hostId: string; onMoved: () => 
 
   return (
     <section aria-labelledby="host-editor-vault" className="space-y-2 rounded-md bg-fill-1 p-3">
-      <h3 id="host-editor-vault" className="flex items-center gap-1.5 text-caption text-label-2">
+      <h3 id="host-editor-vault" className="flex items-center gap-1.5 text-callout text-label-2">
         <Users className="size-4" strokeWidth={1.5} />
         {t.hostVault}: {where}
       </h3>
@@ -163,9 +163,9 @@ export function HostVault({ hostId, onMoved }: { hostId: string; onMoved: () => 
           </Button>
         </div>
       )}
-      <p className="text-caption font-normal text-label-3">{t.hostVaultHint}</p>
+      <p className="text-callout text-label-3">{t.hostVaultHint}</p>
       {error && (
-        <p role="alert" className="flex items-start gap-2 text-caption font-normal break-words text-danger">
+        <p role="alert" className="flex items-start gap-2 text-callout break-words text-danger">
           <CircleAlert className="mt-px size-3.5 shrink-0" strokeWidth={1.5} />
           <span className="selectable min-w-0">{error}</span>
         </p>

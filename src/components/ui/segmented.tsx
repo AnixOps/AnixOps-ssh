@@ -1,6 +1,6 @@
 import { motion } from "motion/react";
 import { useId } from "react";
-import { slide } from "@/lib/motion";
+import { toggle } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 /** A pill segmented control whose selection slides between options. */
@@ -31,14 +31,14 @@ export function Segmented<T extends string | boolean>({
             onClick={() => onChange(option.value)}
             className={cn(
               "relative rounded-pill transition-colors duration-toggle ease-standard",
-              size === "sm" ? "h-6 px-2 text-caption" : "h-7 px-3 text-callout",
+              size === "sm" ? "h-6 px-2 text-callout" : "h-7 px-3 text-callout",
               selected ? "text-label-1" : "font-normal text-label-2 hover:text-label-1",
             )}
           >
             {selected && (
               <motion.span
                 layoutId={`segmented-${id}`}
-                transition={slide}
+                transition={toggle}
                 className="absolute inset-0 rounded-pill bg-bg-elevated shadow-1"
               />
             )}

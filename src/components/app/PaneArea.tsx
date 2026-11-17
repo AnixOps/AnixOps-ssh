@@ -13,7 +13,7 @@ import {
   type PaneState,
   type Rect,
 } from "@/lib/panes";
-import { shortcutHint } from "@/lib/shortcuts";
+import { shortcutHint } from "@/lib/shortcutTable";
 import { cn } from "@/lib/utils";
 
 const KEY_STEP = 0.02;
@@ -132,11 +132,11 @@ function PaneButton({
   return (
     <Tooltip label={`${label} (${hint})`}>
       <Button
-        variant="ghost"
+        variant="quiet"
         size="icon-sm"
         aria-label={label}
         onClick={onClick}
-        className="bg-bg-elevated/80 shadow-1 ring-1 ring-separator"
+        className="bg-bg-elevated shadow-1 ring-1 ring-separator"
       >
         {children}
       </Button>

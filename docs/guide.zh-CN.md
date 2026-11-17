@@ -96,6 +96,7 @@ Windows 10/11 在“设置 → 系统 → 可选功能 → 添加 OpenSSH 客户
 | 文件面板 | Ctrl+Shift+E | ⌘E |
 | 终端内查找 | Ctrl+Shift+F | ⌘F |
 | 复制 / 粘贴 | Ctrl+Shift+C / V | ⌘C / ⌘V |
+| 查看全部快捷键 | Ctrl+/（终端内 Ctrl+Shift+/） | ⌘/ |
 
 ## 遇到问题
 
