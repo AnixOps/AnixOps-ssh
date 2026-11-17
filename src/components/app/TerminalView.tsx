@@ -8,6 +8,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasteConfirm, BroadcastBadge } from "@/components/app/PaneOverlays";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   attachSession,
@@ -18,11 +19,12 @@ import {
   type SessionEvent,
   type SessionHandle,
 } from "@/lib/backend";
+import { pasteNeedsConfirm, type BroadcastScope, targetsFor } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
 import { duration, ease, enter, leave } from "@/lib/motion";
 import { onSettings, settings } from "@/lib/settings";
 import { appShortcut } from "@/lib/shortcuts";
-import { registerTerminal } from "@/lib/terminals";
+import { registerTerminal, terminalFor } from "@/lib/terminals";
 import { terminalFont, terminalTheme } from "@/lib/terminalTheme";
 
 export type SessionStatus =
@@ -36,6 +38,8 @@ export function TerminalView({
   sessionId,
   active,
   onStatus,
+  onSession,
+  broadcast = null,
 }: {
   tabKey: string;
   hostId: string | null;
@@ -43,6 +47,10 @@ export function TerminalView({
   sessionId?: string;
   active: boolean;
   onStatus: (key: string, status: SessionStatus) => void;
+  /** Reports the daemon session behind this view, so a layout can be restored. */
+  onSession?: (key: string, sessionId: string) => void;
+  /** Set while this pane receives broadcast input; shows the indicator. */
+  broadcast?: BroadcastScope;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -54,6 +62,8 @@ export function TerminalView({
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
   const findInputRef = useRef<HTMLInputElement>(null);
+  const [pendingPaste, setPendingPaste] = useState<{ text: string; count: number } | null>(null);
+  const pasteRef = useRef<(text: string, all: boolean) => void>(() => {});
 
   const report = useCallback(
     (next: SessionStatus) => {
@@ -106,7 +116,7 @@ export function TerminalView({
         const selection = terminal.getSelection();
         if (selection) void copyText(selection);
       } else if (shortcut === "paste") {
-        void pasteText().then((text) => text && terminal.paste(text));
+        void pasteText().then((text) => text && routePaste(text));
       } else if (shortcut === "find") {
         setFindOpen(true);
         window.requestAnimationFrame(() => findInputRef.current?.select());
@@ -114,7 +124,43 @@ export function TerminalView({
       // Other shortcuts are handled by the app's window listener.
       return false;
     });
-    terminal.onData((data) => sessionRef.current?.write(data));
+    // Broadcast: what the user types here also goes to the other panes in
+    // scope. xterm's own replies to the shell arrive through onData as well,
+    // so only data produced inside a key or input event is mirrored.
+    let typing = false;
+    let typingTimer: number | undefined;
+    const markTyping = () => {
+      typing = true;
+      window.clearTimeout(typingTimer);
+      typingTimer = window.setTimeout(() => (typing = false), 0);
+    };
+    const typingEvents = ["keydown", "keypress", "input", "compositionend"];
+    for (const type of typingEvents) container.addEventListener(type, markTyping, true);
+    const receivers = () => targetsFor(tabKey, (id) => terminalFor(id)?.connected() ?? false);
+    terminal.onData((data) => {
+      sessionRef.current?.write(data);
+      if (typing) for (const id of receivers()) terminalFor(id)?.write(data);
+    });
+    const pasteEverywhere = (text: string, all: boolean) => {
+      terminal.paste(text);
+      if (all) for (const id of receivers()) terminalFor(id)?.paste(text);
+      terminal.focus();
+    };
+    pasteRef.current = pasteEverywhere;
+    function routePaste(text: string) {
+      const count = receivers().length;
+      if (count === 0) terminal.paste(text);
+      else if (pasteNeedsConfirm(text, count)) setPendingPaste({ text, count });
+      else pasteEverywhere(text, true);
+    }
+    const onPaste = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData("text") ?? "";
+      if (!text || receivers().length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      routePaste(text);
+    };
+    container.addEventListener("paste", onPaste, true);
     terminal.onResize(({ cols, rows }) => sessionRef.current?.resize(cols, rows));
 
     // Only the first start may reattach; "Reconnect" opens a fresh session.
@@ -150,6 +196,7 @@ export function TerminalView({
             if (!attaching) session.close();
           } else if (!exited) {
             sessionRef.current = session;
+            onSession?.(tabKey, session.id);
             if (attaching) {
               // The replay was produced for whatever size the session had.
               session.resize(terminal.cols, terminal.rows);
@@ -170,6 +217,8 @@ export function TerminalView({
         if (run) sessionRef.current?.write("\r");
         terminal.focus();
       },
+      write: (data) => sessionRef.current?.write(data),
+      paste: (text) => terminal.paste(text),
       connected: () => sessionRef.current !== null,
       close() {
         sessionRef.current?.close();
@@ -200,6 +249,9 @@ export function TerminalView({
     return () => {
       disposed = true;
       unregister();
+      for (const type of typingEvents) container.removeEventListener(type, markTyping, true);
+      container.removeEventListener("paste", onPaste, true);
+      window.clearTimeout(typingTimer);
       scheme.removeEventListener("change", updateTheme);
       stopSettings();
       observer.disconnect();
@@ -210,7 +262,7 @@ export function TerminalView({
       terminal.dispose();
       terminalRef.current = null;
     };
-  }, [hostId, report, sessionId, tabKey]);
+  }, [hostId, onSession, report, sessionId, tabKey]);
 
   useEffect(() => {
     if (!active) return;
@@ -220,6 +272,12 @@ export function TerminalView({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [active]);
+
+  // The badge strip changes the usable height.
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => fitRef.current?.fit());
+    return () => window.cancelAnimationFrame(frame);
+  }, [broadcast]);
 
   const find = (forward: boolean) => {
     if (!query) return;
@@ -235,7 +293,20 @@ export function TerminalView({
 
   return (
     <div className="relative h-full min-w-0 flex-1 bg-bg">
-      <div ref={containerRef} className="absolute inset-0 py-2 pl-3" />
+      {/* Broadcasting reserves a strip below the text for its badge. */}
+      <div ref={containerRef} className={`absolute top-2 right-0 left-3 ${broadcast ? "bottom-9" : "bottom-2"}`} />
+      {broadcast && <BroadcastBadge scope={broadcast} />}
+      {pendingPaste && (
+        <PasteConfirm
+          count={pendingPaste.count}
+          onChoose={(all) => {
+            const { text } = pendingPaste;
+            setPendingPaste(null);
+            if (all !== null) pasteRef.current(text, all);
+            else terminalRef.current?.focus();
+          }}
+        />
+      )}
 
       <AnimatePresence>
       {findOpen && (
