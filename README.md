@@ -80,6 +80,7 @@ features → OpenSSH Client**. The app checks this on start and in Settings.
 | Focus pane | Ctrl+Shift+Arrow | ⌘⌥Arrow |
 | Maximise or restore pane | Ctrl+Shift+Enter | ⌘⇧Enter |
 | Broadcast input to this tab | Ctrl+Shift+B | ⌘⇧B |
+| Previous / next prompt (needs shell integration) | Ctrl+Shift+PageUp / PageDown | ⌘↑ / ⌘↓ |
 
 Close tab closes the focused pane first; the last pane closes the tab.
 Broadcasting to all tabs is in the tab bar, the snippets panel and the command
@@ -88,7 +89,20 @@ divider to resize panes, or focus it and use the arrow keys (Shift for bigger
 steps, Enter to centre).
 
 App shortcuts use Ctrl+Shift so that Ctrl+W, Ctrl+K and friends still reach
-the shell.
+the shell. Ctrl+Shift+Arrow is already pane focus, so the prompt jumps use the
+page keys on Windows and Linux; ⌘↑ and ⌘↓ are free on macOS.
+
+## Shell integration
+
+Per host, off by default (**Shell integration** in the host editor). When it is
+on, EasySSH sends a small script to the remote bash, zsh or fish after login
+(nothing is written on the host, and it is not added to the shell history). The
+shell then reports prompts, the exact command line, exit codes and the working
+directory through our own escape sequence. The terminal uses it for exact
+completion with relative paths, a margin bar per prompt (green when the command
+succeeded, red when it failed, hover for the command and exit code), and the
+prompt jumps above. What the scripts do and the sequence format are in
+[`shell-integration/README.md`](shell-integration/README.md).
 
 ## Security boundary
 

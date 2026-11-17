@@ -35,6 +35,11 @@ jobs:
       - name: Completion specs
         run: npm run check:specs 2>&1 | tee logs/check-specs.log
         shell: bash -o pipefail {0}
+      - name: Shell integration scripts
+        run: |
+          sudo apt-get install -y zsh fish
+          CHECK_SHELLS_REQUIRED=1 scripts/check-shell-integration.sh 2>&1 | tee logs/check-shell-integration.log
+        shell: bash -o pipefail {0}
       - name: Screenshots
         shell: bash -o pipefail {0}
         run: |
@@ -70,6 +75,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev
+          # The shell integration tests run the delivery against local shells.
+          sudo apt-get install -y zsh fish
       - uses: actions/setup-node@v5
         with:
           node-version: 22

@@ -182,6 +182,7 @@ impl Entity for Host {
                 scrollback_lines: row.get::<_, i64>("term_scrollback")?.max(0) as usize,
                 startup_command: row.get("term_startup_command")?,
             },
+            shell_integration: row.get::<_, i64>("shell_integration")? != 0,
             created_at: parse_ts(&row.get::<_, String>("created_at")?)?,
             updated_at: meta.updated_at,
         };
@@ -217,6 +218,7 @@ impl Entity for Host {
         fields.insert("local_directories", Field::plain(&c.local_directories));
         fields.insert("remote_directories", Field::plain(&c.remote_directories));
         fields.insert("terminal", Field::plain(&c.terminal));
+        fields.insert("shell_integration", Field::plain(c.shell_integration));
         fields.insert("tags", Field::plain(clean_tags(&c.tags)));
         fields.insert("password", Field::secret(secrets.password));
         fields.insert("private_key", Field::secret(secrets.private_key));
@@ -280,6 +282,7 @@ impl Entity for Host {
             ("remote_command", opt_text(c.remote_command.as_deref())),
             ("local_directories", json(&c.local_directories)?),
             ("remote_directories", json(&c.remote_directories)?),
+            ("shell_integration", int(i64::from(c.shell_integration))),
             (
                 "term_font_size",
                 Value::Real(f64::from(c.terminal.font_size)),

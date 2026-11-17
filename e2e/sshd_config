@@ -17,7 +17,7 @@ Match User pwuser
     PasswordAuthentication yes
     PubkeyAuthentication no
 
-# keyuser: public key only.
-Match User keyuser
+# keyuser, zshuser, fishuser: public key only.
+Match User keyuser,zshuser,fishuser
     PasswordAuthentication no
     PubkeyAuthentication yes

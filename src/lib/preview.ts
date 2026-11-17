@@ -12,7 +12,7 @@ function describe(fields: HostFields): { target: string; command: string } {
 function endpoint(target: string): HostFields {
   const [userPart, rest] = target.includes("@") ? target.split("@") : [null, target];
   const [hostname, port] = rest.split(":");
-  return { alias: null, hostname, username: userPart, port: port ? Number(port) : 22, proxyJump: null, notes: "" };
+  return { alias: null, hostname, username: userPart, port: port ? Number(port) : 22, proxyJump: null, notes: "", shellIntegration: false };
 }
 
 function makeHost(
@@ -56,7 +56,7 @@ const store: HostsSnapshot =
           makeHost(
             "ssh-config:bastion",
             "bastion",
-            { alias: "bastion", hostname: "", username: null, port: 22, proxyJump: null, notes: "" },
+            { alias: "bastion", hostname: "", username: null, port: 22, proxyJump: null, notes: "", shellIntegration: false },
             null,
             { source: "ssh_config" },
           ),
