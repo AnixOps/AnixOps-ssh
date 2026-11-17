@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/easyssh-core", "src-tauri"]
+members = ["crates/easyssh-core", "crates/easysshd", "src-tauri"]
 
 [workspace.package]
 version = "1.0.1"
@@ -11,13 +11,21 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 anyhow = "1"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde", "clock"] }
 dirs = "5"
+fs4 = { version = "0.12", features = ["sync"] }
+hmac = "0.12"
+libc = "0.2"
+rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+tempfile = "3"
 thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "signal", "sync"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+windows-sys = "0.59"
 
 [profile.release]
 opt-level = 3
