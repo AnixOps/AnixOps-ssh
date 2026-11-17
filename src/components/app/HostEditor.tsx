@@ -19,7 +19,9 @@ import {
   type SecretsInput,
   type SecretsStatus,
 } from "@/lib/backend";
+import { logHostSet, logSettingsGet } from "@/lib/aiBackend";
 import { t } from "@/lib/i18n";
+import { choiceValue, hostChoice, type HostChoice } from "@/lib/sessionLogs";
 import { requestVaultUnlock } from "@/lib/vaultUi";
 import { cn } from "@/lib/utils";
 
@@ -66,10 +68,23 @@ export function HostEditor({
     passphrase: emptyDraft,
   });
   const [keyNote, setKeyNote] = useState<string | null>(null);
+  const [logChoice, setLogChoice] = useState<HostChoice>("default");
+  const [logLoaded, setLogLoaded] = useState<HostChoice | null>(null);
 
   useEffect(() => firstRef.current?.focus(), []);
   useEffect(() => {
     if (host && saved) secretsStatus(host.id).then(setSavedSecrets).catch(console.error);
+  }, [host, saved]);
+
+  useEffect(() => {
+    if (!host || !saved) return;
+    logSettingsGet()
+      .then((settings) => {
+        const current = hostChoice(settings, host.id);
+        setLogChoice(current);
+        setLogLoaded(current);
+      })
+      .catch(console.error);
   }, [host, saved]);
 
   const draft = (name: SecretName, change: Partial<Draft>) =>
@@ -123,6 +138,15 @@ export function HostEditor({
           // The host itself is saved; only its secrets are not.
           if (isVaultLocked(reason)) requestVaultUnlock();
           setError(`${t.secretsSaveFailed}: ${String(reason)}`);
+          setBusy(false);
+          return;
+        }
+      }
+      if (logChoice !== (logLoaded ?? "default")) {
+        try {
+          await logHostSet(id, choiceValue(logChoice));
+        } catch (reason) {
+          setError(String(reason));
           setBusy(false);
           return;
         }
@@ -348,6 +372,20 @@ export function HostEditor({
               onChange={(event) => set("notes", event.target.value)}
               rows={3}
               className="w-full resize-none rounded-sm bg-fill-1 px-3 py-2 text-callout text-label-1 outline-none focus-visible:ring-2 focus-visible:ring-(--accent)"
+            />
+          </Field>
+
+          <Field label={t.logsHost} hint={t.logsHostHint}>
+            <Segmented
+              size="sm"
+              label={t.logsHost}
+              value={logChoice}
+              onChange={setLogChoice}
+              options={[
+                { value: "default", label: t.logsHostFollow },
+                { value: "on", label: t.logsHostOn },
+                { value: "off", label: t.logsHostOff },
+              ]}
             />
           </Field>
 

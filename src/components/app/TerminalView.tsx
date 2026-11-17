@@ -3,10 +3,11 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ChevronDown, ChevronUp, LoaderCircle, RotateCw, SquareArrowOutUpRight, Unplug, X } from "lucide-react";
+import { ChevronDown, ChevronUp, LoaderCircle, RotateCw, Sparkles, SquareArrowOutUpRight, Unplug, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CompletionPopup, type PopupPlacement } from "@/components/app/CompletionPopup";
+import { AskAiPanel, ASK_AI_WIDTH } from "@/components/app/AskAiPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasteConfirm, BroadcastBadge } from "@/components/app/PaneOverlays";
@@ -29,7 +30,9 @@ import { CompletionController, type ViewState } from "@/lib/completion/controlle
 import { completionPrefs, commandHistory, onCompletionPrefs } from "@/lib/completion/prefs";
 import { createPathLister } from "@/lib/completion/remotePaths";
 import { commandNames, loadSpec } from "@/lib/completion/specs";
-import { attachShellIntegration } from "@/lib/shellIntegration/attach";
+import { commandOutput, lastLines } from "@/lib/ai/buffer";
+import type { ContextSource } from "@/lib/ai/context";
+import { attachShellIntegration, type ShellIntegrationHandle } from "@/lib/shellIntegration/attach";
 import { ShellIntegrationLineSource } from "@/lib/shellIntegration/lineSource";
 import { pasteNeedsConfirm, type BroadcastScope, targetsFor } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
@@ -76,6 +79,8 @@ export function TerminalView({
   const sessionRef = useRef<SessionHandle | null>(null);
   const startRef = useRef<() => void>(() => {});
   const [status, setStatus] = useState<SessionStatus>({ state: "connecting" });
+  const integrationRef = useRef<ShellIntegrationHandle | null>(null);
+  const [askOpen, setAskOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
   const findInputRef = useRef<HTMLInputElement>(null);
@@ -136,6 +141,7 @@ export function TerminalView({
       return { x: cursor.x, y: cursor.absoluteY, cols: cursor.cols };
     });
     const integration = attachShellIntegration(terminal, lineSource);
+    integrationRef.current = integration;
     const controller = new CompletionController({
       source: lineSource,
       hostId,
@@ -359,6 +365,7 @@ export function TerminalView({
       stopView();
       stopPrefs();
       integration.dispose();
+      integrationRef.current = null;
       writeParsed.dispose();
       bufferChange.dispose();
       controller.dispose();
@@ -395,6 +402,39 @@ export function TerminalView({
     return () => window.cancelAnimationFrame(frame);
   }, [broadcast]);
 
+  // What the "Ask AI" panel may offer; read only when the person asks for it.
+  const askSource = useMemo<ContextSource>(() => {
+    const bottom = (terminal: Terminal) => terminal.buffer.active.baseY + terminal.buffer.active.cursorY;
+    return {
+      selection: () => terminalRef.current?.getSelection() ?? "",
+      lastLines: (count) => {
+        const terminal = terminalRef.current;
+        return terminal ? lastLines(terminal.buffer.active, bottom(terminal), count) : "";
+      },
+      lastCommand: () => {
+        const terminal = terminalRef.current;
+        const reported = integrationRef.current?.lastCommand();
+        if (!terminal || !reported) return null;
+        return {
+          command: reported.command,
+          exitCode: reported.exitCode,
+          output: commandOutput(terminal.buffer.active, reported.promptLine, reported.nextPromptLine, bottom(terminal)),
+        };
+      },
+    };
+  }, []);
+
+  // The panel narrows the terminal.
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => fitRef.current?.fit());
+    return () => window.cancelAnimationFrame(frame);
+  }, [askOpen]);
+
+  const closeAsk = () => {
+    setAskOpen(false);
+    terminalRef.current?.focus();
+  };
+
   const find = (forward: boolean) => {
     if (!query) return;
     if (forward) searchRef.current?.findNext(query);
@@ -410,7 +450,9 @@ export function TerminalView({
   return (
     <div ref={wrapperRef} className="relative h-full min-w-0 flex-1 bg-bg">
       {/* Broadcasting reserves a strip below the text for its badge. */}
-      <div ref={containerRef} className={`absolute top-2 right-0 left-3 ${broadcast ? "bottom-9" : "bottom-2"}`} />
+      <div ref={containerRef} className={`absolute top-2 left-3 ${broadcast ? "bottom-9" : "bottom-2"}`}
+        style={{ right: askOpen ? ASK_AI_WIDTH : 0 }}
+      />
       {broadcast && <BroadcastBadge scope={broadcast} />}
       {pendingPaste && (
         <PasteConfirm
@@ -437,13 +479,35 @@ export function TerminalView({
         />
       )}
 
+      {!askOpen && (
+        <div className="absolute top-3 right-4 z-dropdown">
+          <Tooltip label={t.askAi}>
+            <Button variant="ghost" size="icon-sm" aria-label={t.askAi} onClick={() => setAskOpen(true)}>
+              <Sparkles />
+            </Button>
+          </Tooltip>
+        </div>
+      )}
+      {askOpen && (
+        <AskAiPanel
+          source={askSource}
+          onInsert={(command) => {
+            // Fills the input line only; Enter is the person's to press.
+            terminalRef.current?.paste(command);
+            terminalRef.current?.focus();
+          }}
+          onClose={closeAsk}
+        />
+      )}
+
       <AnimatePresence>
       {findOpen && (
         <motion.div
           initial={{ opacity: 0, y: -6 }}
           animate={{ opacity: 1, y: 0, transition: { duration: duration.toggle, ease: ease.emphasized } }}
           exit={{ opacity: 0, y: -6, transition: leave }}
-          className="material-bar absolute top-3 right-4 z-dropdown flex items-center gap-1 rounded-sm p-1 shadow-2 ring-1 ring-separator"
+          style={{ right: askOpen ? `calc(${ASK_AI_WIDTH} + 1rem)` : "3.25rem" }}
+          className="material-bar absolute top-3 z-dropdown flex items-center gap-1 rounded-sm p-1 shadow-2 ring-1 ring-separator"
         >
           <Input
             ref={findInputRef}
