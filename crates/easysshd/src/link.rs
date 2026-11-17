@@ -355,6 +355,7 @@ impl Link {
         rows: u16,
         sink: SessionSink,
     ) -> Result<String, LinkError> {
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut payload = json!({"host_id": host_id, "cols": cols, "rows": rows});
         // The agent of the user's current login, not the daemon's (Unix only).
         #[cfg(unix)]
