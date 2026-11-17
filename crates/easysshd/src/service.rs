@@ -1,7 +1,9 @@
 //! The daemon's command dispatcher: validated protocol commands in, replies
 //! and events out. See `easyssh-proto` for the contract.
 
+use crate::agent::validate_agent_socket;
 use crate::askpass::{Hub, Prompt};
+use crate::log::Logger;
 use crate::server::{BoxFuture, Outbox, Service};
 use crate::terminal::{TermSession, DEFAULT_SCROLLBACK};
 use easyssh_core::security::{validate_alias, validate_connection};
@@ -11,7 +13,8 @@ use portable_pty::CommandBuilder;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -48,6 +51,17 @@ impl DaemonConfig {
     }
 }
 
+/// Settings of a [`Daemon`] that are not part of [`DaemonConfig`].
+#[derive(Clone, Default)]
+pub struct DaemonExtras {
+    /// Build version reported in `proto.hello`; this crate's version when
+    /// `None`. The app passes its own, so a daemon from another build is
+    /// recognised.
+    pub build_version: Option<String>,
+    /// Directory of `easysshd.log`; no log file when `None`.
+    pub log_dir: Option<PathBuf>,
+}
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
@@ -61,6 +75,11 @@ pub struct Daemon {
     sessions: Mutex<HashMap<String, Arc<TermSession>>>,
     clients: Clients,
     askpass: Arc<Hub>,
+    build_version: String,
+    log: Arc<Logger>,
+    /// Set by `daemon.shutdown_when_idle` (or a newer client's `proto.hello`):
+    /// no new sessions, exit when none runs.
+    draining: AtomicBool,
 }
 
 struct Failure {
@@ -89,30 +108,90 @@ fn parse<T: DeserializeOwned>(payload: Value) -> Result<T, Failure> {
 
 impl Daemon {
     pub async fn new(cfg: DaemonConfig) -> std::io::Result<Arc<Daemon>> {
+        Self::new_with(cfg, DaemonExtras::default()).await
+    }
+
+    pub async fn new_with(cfg: DaemonConfig, extras: DaemonExtras) -> std::io::Result<Arc<Daemon>> {
         let clients: Clients = Arc::new(Mutex::new(HashMap::new()));
         let notify_clients = clients.clone();
-        let askpass = Hub::bind(Arc::new(move |p: Prompt| {
-            let payload = json!({
-                "id": p.id,
-                "host": p.host,
-                "prompt": p.prompt,
-                "confirm": p.confirm,
-            });
-            // Every attached client may answer; the first reply wins.
-            let delivered = lock(&notify_clients)
-                .values()
-                .map(|outbox| outbox.event("askpass.prompt", payload.clone()))
-                .collect::<Vec<_>>();
-            delivered.contains(&true)
-        }))
+        let resolved_clients = clients.clone();
+        let log = Arc::new(match &extras.log_dir {
+            Some(dir) => Logger::open(dir),
+            None => Logger::disabled(),
+        });
+        let askpass = Hub::bind(
+            Arc::new(move |p: Prompt| {
+                let payload = json!({
+                    "id": p.id,
+                    "host": p.host,
+                    "prompt": p.prompt,
+                    "confirm": p.confirm,
+                });
+                // Every attached client may answer; the first reply wins.
+                let delivered = lock(&notify_clients)
+                    .values()
+                    .map(|outbox| outbox.event("askpass.prompt", payload.clone()))
+                    .collect::<Vec<_>>();
+                delivered.contains(&true)
+            }),
+            Arc::new(move |id: u64| {
+                // Whoever answered, every other dialog for this prompt goes away.
+                for outbox in lock(&resolved_clients).values() {
+                    outbox.event("askpass.resolved", json!({"id": id}));
+                }
+            }),
+        )
         .await?;
+        let build_version = extras
+            .build_version
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_owned());
+        log.info(&format!(
+            "daemon created, build {build_version}, schema {}",
+            proto::SCHEMA_VERSION
+        ));
         Ok(Arc::new(Daemon {
             cfg,
             store_lock: Mutex::new(()),
             sessions: Mutex::new(HashMap::new()),
             clients,
             askpass,
+            build_version,
+            log,
+            draining: AtomicBool::new(false),
         }))
+    }
+
+    pub fn log(&self) -> &Logger {
+        &self.log
+    }
+
+    pub fn is_draining(&self) -> bool {
+        self.draining.load(Ordering::SeqCst)
+    }
+
+    /// Stop accepting sessions; [`Daemon::wait_idle`] completes once none runs.
+    pub fn start_draining(&self, why: &str) {
+        if !self.draining.swap(true, Ordering::SeqCst) {
+            self.log.info(&format!(
+                "draining ({why}): exits when no session is running, {} running now",
+                self.running_sessions()
+            ));
+        }
+    }
+
+    /// Close every client connection; the daemon and its sessions stay up.
+    /// For exercising clients that reconnect.
+    pub fn drop_connections(&self) {
+        for outbox in lock(&self.clients).values() {
+            outbox.close();
+        }
+    }
+
+    /// Send an event to every connected client.
+    fn broadcast(&self, kind: &str, payload: Value) {
+        for outbox in lock(&self.clients).values() {
+            outbox.event(kind, payload.clone());
+        }
     }
 
     /// Sessions whose process is still running.
@@ -128,13 +207,24 @@ impl Daemon {
     }
 
     /// Completes once no client has been connected and no session has been
-    /// running for `idle_timeout`.
+    /// running for `idle_timeout`, or, when draining, as soon as no session
+    /// runs (connected clients do not keep a draining daemon alive).
     pub async fn wait_idle(&self) {
         let timeout = self.cfg.idle_timeout;
         let tick = (timeout / 10).clamp(Duration::from_millis(20), Duration::from_secs(5));
         let mut idle_since: Option<Instant> = None;
         loop {
-            tokio::time::sleep(tick).await;
+            let draining = self.is_draining();
+            tokio::time::sleep(if draining {
+                tick.min(Duration::from_millis(250))
+            } else {
+                tick
+            })
+            .await;
+            if self.is_draining() && self.running_sessions() == 0 {
+                self.log.info("drained: no session is running");
+                return;
+            }
             if self.client_count() == 0 && self.running_sessions() == 0 {
                 let since = *idle_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= timeout {
@@ -175,18 +265,35 @@ impl Daemon {
             } else {
                 "invalid_command"
             };
+            // The validation messages quote the offending values; log the code only.
+            self.log
+                .error(&format!("conn {conn}: rejected a message: {code}"));
             outbox.send(error_reply(id, code, &errors.join("; "))).await;
             return;
         }
         let id = msg["id"].as_str().unwrap_or(NIL_UUID).to_owned();
         let kind = msg["kind"].as_str().unwrap_or_default().to_owned();
         let payload = msg["payload"].clone();
+        // Only the kind and the session id are logged, never the payload.
+        // Keystrokes and resizes are too frequent to be worth a line.
+        let sid = payload["session_id"].as_str().map(str::to_owned);
+        if !matches!(kind.as_str(), "session.write" | "session.resize") {
+            self.log.info(&format!(
+                "conn {conn}: {kind}{}",
+                sid.as_deref()
+                    .map(|s| format!(" session {s}"))
+                    .unwrap_or_default()
+            ));
+        }
         match self.dispatch(conn, outbox, &id, &kind, payload).await {
             Ok(Outcome::Ok(value)) => {
                 outbox.send(json!({"id": id, "ok": value})).await;
             }
             Ok(Outcome::Replied) => {}
             Err(f) => {
+                // The code only: messages can quote what the client sent.
+                self.log
+                    .error(&format!("conn {conn}: {kind} failed: {}", f.code));
                 outbox.send(error_reply(&id, f.code, &f.message)).await;
             }
         }
@@ -202,7 +309,54 @@ impl Daemon {
     ) -> Handled {
         let ok = |v: Value| Ok(Outcome::Ok(v));
         match kind {
-            "proto.hello" => ok(json!({"schema_version": proto::SCHEMA_VERSION})),
+            "proto.hello" => {
+                let p: proto::ProtoHelloParams = parse(payload)?;
+                if p.schema_version != u64::from(proto::SCHEMA_VERSION) {
+                    // A newer client means this daemon is the stale one: let
+                    // it finish its sessions and go. An older client is the
+                    // one to update; the daemon stays.
+                    if p.schema_version > u64::from(proto::SCHEMA_VERSION) {
+                        self.start_draining("a client speaks a newer schema");
+                    }
+                    self.log.error(&format!(
+                        "conn {conn}: schema mismatch, client {} daemon {}",
+                        p.schema_version,
+                        proto::SCHEMA_VERSION
+                    ));
+                    return Err(fail(
+                        "schema_mismatch",
+                        format!(
+                            "this daemon speaks schema {} but the client speaks {}; \
+                             {}",
+                            proto::SCHEMA_VERSION,
+                            p.schema_version,
+                            if p.schema_version > u64::from(proto::SCHEMA_VERSION) {
+                                "the daemon will exit when its sessions end, then start the app again"
+                            } else {
+                                "update the app"
+                            }
+                        ),
+                    ));
+                }
+                if let Some(version) = &p.app_version {
+                    if *version != self.build_version {
+                        self.log.info(&format!(
+                            "conn {conn}: client build {version}, daemon build {}",
+                            self.build_version
+                        ));
+                    }
+                }
+                ok(json!({
+                    "schema_version": proto::SCHEMA_VERSION,
+                    "app_version": self.build_version,
+                    "draining": self.is_draining(),
+                }))
+            }
+            "daemon.shutdown_when_idle" => {
+                let _: proto::DaemonShutdownWhenIdleParams = parse(payload)?;
+                self.start_draining("asked by a client");
+                ok(json!({"running_sessions": self.running_sessions()}))
+            }
             "hosts.list" => {
                 let config = self.load_config()?;
                 ok(json!({"connections": config.connections, "groups": config.groups}))
@@ -210,11 +364,13 @@ impl Daemon {
             "hosts.save" => {
                 let p: proto::HostsSaveParams = parse(payload)?;
                 let id = self.save_host(p)?;
+                self.broadcast("hosts.changed", json!({}));
                 ok(json!({"id": id}))
             }
             "hosts.delete" => {
                 let p: proto::HostsDeleteParams = parse(payload)?;
                 self.delete_host(&p.id)?;
+                self.broadcast("hosts.changed", json!({}));
                 ok(Value::Null)
             }
             "session.open" => {
@@ -280,6 +436,23 @@ impl Daemon {
         req_id: &str,
         p: proto::SessionOpenParams,
     ) -> Handled {
+        if self.is_draining() {
+            return Err(fail(
+                "draining",
+                "the daemon is shutting down and takes no new sessions",
+            ));
+        }
+        let agent_sock = match p.ssh_auth_sock.as_deref().map(validate_agent_socket) {
+            Some(Ok(path)) => path,
+            Some(Err(reason)) => {
+                // A stale variable must not stop a terminal from opening:
+                // the session falls back to the daemon's own agent.
+                self.log
+                    .info(&format!("ignoring the client's SSH_AUTH_SOCK: {reason}"));
+                None
+            }
+            None => None,
+        };
         let store = self.cfg.config_store.clone();
         let shell = self.cfg.local_shell.clone();
         let host_id = p.host_id.clone();
@@ -287,9 +460,18 @@ impl Daemon {
         let scrollback = self.cfg.scrollback_bytes;
         let (cols, rows) = (p.cols, p.rows);
         let spawn_id = id.clone();
+        let exit_log = self.log.clone();
+        let on_exit: crate::terminal::ExitHook = Box::new(move |sid, code| {
+            exit_log.info(&format!("session {sid} ended, exit code {code:?}"));
+        });
         let session = tokio::task::spawn_blocking(move || {
-            let command = command_for(&store, shell.as_deref(), host_id.as_deref())?;
-            TermSession::spawn(spawn_id, host_id, command, cols, rows, scrollback)
+            let command = command_for(
+                &store,
+                shell.as_deref(),
+                host_id.as_deref(),
+                agent_sock.as_deref(),
+            )?;
+            TermSession::spawn(spawn_id, host_id, command, cols, rows, scrollback, on_exit)
                 .map_err(|e| fail("spawn_failed", e))
         })
         .await
@@ -325,6 +507,16 @@ impl Daemon {
         let _guard = lock(&self.store_lock);
         let mut config = self.load_config()?;
         let id = connection.id.clone();
+        if let Some(group) = p.group {
+            if !config.groups.iter().any(|g| g.id == group.id) {
+                let value = serde_json::to_value(&group)
+                    .map_err(|e| fail("invalid_command", e.to_string()))?;
+                config.groups.push(
+                    serde_json::from_value(value)
+                        .map_err(|e| fail("invalid_command", e.to_string()))?,
+                );
+            }
+        }
         match config.connections.iter().position(|c| c.id == id) {
             Some(index) => config.connections[index] = connection,
             None => config.connections.push(connection),
@@ -355,10 +547,12 @@ fn error_reply(id: &str, code: &str, message: &str) -> Value {
 impl Service for Daemon {
     fn connected(&self, id: u64, outbox: &Outbox) {
         lock(&self.clients).insert(id, outbox.clone());
+        self.log.info(&format!("conn {id}: connected"));
     }
 
     fn disconnected(&self, id: u64) {
         lock(&self.clients).remove(&id);
+        self.log.info(&format!("conn {id}: disconnected"));
         for session in lock(&self.sessions).values() {
             session.detach(id);
         }
@@ -389,6 +583,7 @@ fn command_for(
     store: &ConfigStore,
     shell: Option<&std::path::Path>,
     host_id: Option<&str>,
+    agent_sock: Option<&Path>,
 ) -> Result<CommandBuilder, Failure> {
     let mut command = match host_id {
         Some(host_id) => {
@@ -409,6 +604,9 @@ fn command_for(
     };
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
+    if let Some(sock) = agent_sock {
+        command.env("SSH_AUTH_SOCK", sock);
+    }
     if let Some(home) = dirs::home_dir() {
         command.cwd(home);
     }

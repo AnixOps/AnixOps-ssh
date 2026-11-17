@@ -187,8 +187,12 @@ struct Io {
     killer: Box<dyn ChildKiller + Send + Sync>,
 }
 
+/// Called once with the session id and exit code when the process has ended.
+pub type ExitHook = Box<dyn Fn(&str, Option<u32>) + Send + Sync>;
+
 /// One PTY session.
 pub struct TermSession {
+    on_exit: ExitHook,
     id: String,
     host_id: Option<String>,
     state: Mutex<State>,
@@ -204,6 +208,7 @@ impl TermSession {
         cols: u16,
         rows: u16,
         scrollback: usize,
+        on_exit: ExitHook,
     ) -> Result<Arc<TermSession>, String> {
         let pair = native_pty_system()
             .openpty(pty_size(cols, rows))
@@ -218,6 +223,7 @@ impl TermSession {
         let killer = child.clone_killer();
         let size = pty_size(cols, rows);
         let session = Arc::new(TermSession {
+            on_exit,
             id,
             host_id,
             state: Mutex::new(State {
@@ -288,6 +294,7 @@ impl TermSession {
             return;
         }
         state.exit = Some(code);
+        (self.on_exit)(&self.id, code);
         let payload = json!({"session_id": self.id, "code": code});
         for s in state.subscribers.drain(..) {
             s.outbox.event("session.exit", payload.clone());
