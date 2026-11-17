@@ -58,7 +58,10 @@ pub fn decode_nonce(s: &str) -> Result<Nonce> {
         .map_err(|_| Error::Protocol(format!("nonce must be {NONCE_LEN} bytes")))
 }
 
-/// Authenticated, sequenced frame state for one connection.
+/// Authenticated, sequenced frame state for one connection. `Clone` exists so
+/// a connection can be split into a reading and a writing half; each half then
+/// uses only its own direction's counter.
+#[derive(Clone)]
 pub struct Session {
     key: [u8; 32],
     me: Role,

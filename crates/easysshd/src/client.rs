@@ -1,4 +1,4 @@
-use crate::channel::Channel;
+use crate::channel::{Channel, ChannelReader, ChannelWriter};
 use crate::error::Result;
 use crate::runtime::{read_secret, Paths};
 use crate::transport;
@@ -27,5 +27,10 @@ impl Client {
 
     pub async fn recv(&mut self) -> Result<Value> {
         self.ch.recv().await
+    }
+
+    /// Split into a reading and a writing half for concurrent use.
+    pub fn into_split(self) -> (ChannelReader, ChannelWriter) {
+        self.ch.into_split()
     }
 }

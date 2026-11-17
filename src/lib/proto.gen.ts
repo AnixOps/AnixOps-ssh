@@ -424,6 +424,86 @@ export interface SessionCloseParams {
   session_id: string;
 }
 /**
+ * A session the daemon holds. Ended sessions stay listed (with their scrollback) until `session.close`.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SessionInfo".
+ */
+export interface SessionInfo {
+  session_id: string;
+  host_id: string | null;
+  cols: number;
+  rows: number;
+  running: boolean;
+  /**
+   * Set once the session has ended; null while running or when the status is unknown.
+   */
+  exit_code: number | null;
+  /**
+   * Offset of the oldest output still buffered.
+   */
+  first_seq: number;
+  /**
+   * Offset the next output will have (total bytes produced).
+   */
+  next_seq: number;
+}
+/**
+ * Command `session.list` payload. Reply: SessionListResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SessionListParams".
+ */
+export interface SessionListParams {}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SessionListResult".
+ */
+export interface SessionListResult {
+  sessions: SessionInfo[];
+}
+/**
+ * Command `session.attach` payload. Subscribes this connection to the session's output and exit events: the reply comes first, then the buffered output from `from_seq` as `session.output` events, then (if the session already ended) `session.exit`, then live events. Attaching again replaces the earlier subscription of the same connection. Reply: SessionAttachResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SessionAttachParams".
+ */
+export interface SessionAttachParams {
+  session_id: string;
+  /**
+   * Replay output from this offset; omitted means everything still buffered.
+   */
+  from_seq?: number;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SessionAttachResult".
+ */
+export interface SessionAttachResult {
+  /**
+   * Offset of the oldest output still buffered.
+   */
+  first_seq: number;
+  /**
+   * Offset the next output will have.
+   */
+  next_seq: number;
+  /**
+   * True when output before the first replayed byte was dropped (`from_seq`, or the start of the stream, fell before `first_seq`).
+   */
+  truncated: boolean;
+  running: boolean;
+}
+/**
+ * Command `session.detach` payload. Stops this connection's events for the session; the session keeps running. Reply: null.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SessionDetachParams".
+ */
+export interface SessionDetachParams {
+  session_id: string;
+}
+/**
  * Command `askpass.reply` payload. answer null cancels the prompt. Reply: null.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -434,7 +514,26 @@ export interface AskpassReplyParams {
   answer: string | null;
 }
 /**
- * Event `session.output` payload.
+ * Command `askpass.endpoint` payload. Reply: AskpassEndpointResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "AskpassEndpointParams".
+ */
+export interface AskpassEndpointParams {}
+/**
+ * Secret: it lets a process answer for the daemon's prompts; hand it only to OpenSSH child processes.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "AskpassEndpointResult".
+ */
+export interface AskpassEndpointResult {
+  /**
+   * `<port> <token>` for the `ANIXOPS_SSH_ASKPASS` variable of an OpenSSH child process.
+   */
+  endpoint: string;
+}
+/**
+ * Event `session.output` payload. Sent to every client attached to the session, first as replay of the buffered scrollback (from the requested offset), then live.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "SessionOutputEvent".
@@ -442,6 +541,10 @@ export interface AskpassReplyParams {
 export interface SessionOutputEvent {
   session_id: string;
   data: string;
+  /**
+   * Offset in bytes of `data` within the session's output stream (UTF-8, as sent). Optional for compatibility; the daemon always sets it. Consecutive events of one session are contiguous unless the buffer dropped output.
+   */
+  seq?: number;
 }
 /**
  * Event `session.exit` payload.

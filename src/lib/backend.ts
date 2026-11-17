@@ -62,7 +62,20 @@ export type SessionEvent = { kind: "data"; data: string } | { kind: "exit"; code
 export interface SessionHandle {
   write(data: string): void;
   resize(cols: number, rows: number): void;
+  /** Stops listening; the session keeps running in the background daemon. */
+  detach(): void;
+  /** Ends the session. */
   close(): void;
+}
+
+/** A session that outlived the window, as the background daemon reports it. */
+export interface LiveSession {
+  id: string;
+  hostId: string | null;
+  cols: number;
+  rows: number;
+  running: boolean;
+  exitCode: number | null;
 }
 
 /** False in a plain browser (vite dev, CI screenshots): use preview data. */
@@ -111,12 +124,35 @@ export async function openSession(
   const events = new Channel<SessionEvent>();
   events.onmessage = onEvent;
   const id = await invoke<string>("session_open", { hostId, cols, rows, events });
+  return sessionHandle(id);
+}
+
+function sessionHandle(id: string): SessionHandle {
   const report = (reason: unknown) => console.error(reason);
   return {
     write: (data) => void invoke("session_write", { id, data }).catch(report),
     resize: (cols, rows) => void invoke("session_resize", { id, cols, rows }).catch(report),
+    detach: () => void invoke("session_detach", { id }).catch(report),
     close: () => void invoke("session_close", { id }).catch(report),
   };
+}
+
+/** Sessions still running in the background daemon (empty outside the app). */
+export async function listSessions(): Promise<LiveSession[]> {
+  if (!isTauri) return [];
+  return invoke<LiveSession[]>("sessions_list");
+}
+
+/** Reattaches to a live session: buffered output is replayed first, then live output follows. */
+export async function attachSession(
+  id: string,
+  onEvent: (event: SessionEvent) => void,
+): Promise<SessionHandle> {
+  if (!isTauri) throw new Error("no daemon outside the app");
+  const events = new Channel<SessionEvent>();
+  events.onmessage = onEvent;
+  await invoke("session_attach", { id, events });
+  return sessionHandle(id);
 }
 
 export async function copyText(text: string): Promise<void> {

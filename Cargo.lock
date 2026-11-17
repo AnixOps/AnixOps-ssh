@@ -89,6 +89,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "easyssh-core",
+ "easysshd",
  "portable-pty",
  "serde",
  "serde_json",
@@ -1239,8 +1240,11 @@ name = "easyssh-e2e"
 version = "1.0.2"
 dependencies = [
  "easyssh-core",
+ "easysshd",
  "portable-pty",
+ "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1264,15 +1268,22 @@ name = "easysshd"
 version = "1.0.2"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
+ "dirs 5.0.1",
+ "easyssh-core",
+ "easyssh-proto",
  "fs4",
  "hmac 0.12.1",
  "libc",
+ "portable-pty",
  "rand",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "uuid",
  "windows-sys 0.59.0",
 ]
 

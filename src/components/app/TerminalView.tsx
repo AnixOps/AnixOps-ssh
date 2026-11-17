@@ -9,7 +9,15 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
-import { copyText, openExternal, openSession, pasteText, type SessionHandle } from "@/lib/backend";
+import {
+  attachSession,
+  copyText,
+  openExternal,
+  openSession,
+  pasteText,
+  type SessionEvent,
+  type SessionHandle,
+} from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { duration, ease, enter, leave } from "@/lib/motion";
 import { onSettings, settings } from "@/lib/settings";
@@ -25,11 +33,14 @@ export type SessionStatus =
 export function TerminalView({
   tabKey,
   hostId,
+  sessionId,
   active,
   onStatus,
 }: {
   tabKey: string;
   hostId: string | null;
+  /** A live session to reattach to instead of opening a new one. */
+  sessionId?: string;
   active: boolean;
   onStatus: (key: string, status: SessionStatus) => void;
 }) {
@@ -106,10 +117,13 @@ export function TerminalView({
     terminal.onData((data) => sessionRef.current?.write(data));
     terminal.onResize(({ cols, rows }) => sessionRef.current?.resize(cols, rows));
 
+    // Only the first start may reattach; "Reconnect" opens a fresh session.
+    let reattach = sessionId;
     const start = () => {
       report({ state: "connecting" });
       let connected = false;
-      openSession(hostId, terminal.cols, terminal.rows, (event) => {
+      let exited = false;
+      const onEvent = (event: SessionEvent) => {
         if (disposed) return;
         if (event.kind === "data") {
           terminal.write(event.data);
@@ -118,13 +132,33 @@ export function TerminalView({
             report({ state: "connected" });
           }
         } else {
+          exited = true;
           sessionRef.current = null;
           report({ state: "exited", code: event.code });
         }
-      })
+      };
+      const attaching = reattach;
+      reattach = undefined;
+      (attaching
+        ? attachSession(attaching, onEvent)
+        : openSession(hostId, terminal.cols, terminal.rows, onEvent)
+      )
         .then((session) => {
-          if (disposed) session.close();
-          else sessionRef.current = session;
+          if (disposed) {
+            // A session nobody ever saw is closed. A live one is left alone:
+            // the next view's own attach replaces this one's.
+            if (!attaching) session.close();
+          } else if (!exited) {
+            sessionRef.current = session;
+            if (attaching) {
+              // The replay was produced for whatever size the session had.
+              session.resize(terminal.cols, terminal.rows);
+              if (!connected) {
+                connected = true;
+                report({ state: "connected" });
+              }
+            }
+          }
         })
         .catch((reason) => {
           if (!disposed) report({ state: "exited", code: null, error: String(reason) });
@@ -137,6 +171,10 @@ export function TerminalView({
         terminal.focus();
       },
       connected: () => sessionRef.current !== null,
+      close() {
+        sessionRef.current?.close();
+        sessionRef.current = null;
+      },
     });
     startRef.current = () => {
       terminal.write("\r\n");
@@ -165,12 +203,14 @@ export function TerminalView({
       scheme.removeEventListener("change", updateTheme);
       stopSettings();
       observer.disconnect();
-      sessionRef.current?.close();
+      // Detach only: ending the session is closeTab's job, so that a reload
+      // (or this effect re-running) leaves it running in the daemon.
+      sessionRef.current?.detach();
       sessionRef.current = null;
       terminal.dispose();
       terminalRef.current = null;
     };
-  }, [hostId, report, tabKey]);
+  }, [hostId, report, sessionId, tabKey]);
 
   useEffect(() => {
     if (!active) return;
