@@ -1,0 +1,54 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "head",
+  "description": "Print the first part of files",
+  "options": [
+    {
+      "name": [
+        "-n",
+        "--lines"
+      ],
+      "description": "Output the first N lines",
+      "args": [
+        {
+          "name": "lines"
+        }
+      ]
+    },
+    {
+      "name": [
+        "-c",
+        "--bytes"
+      ],
+      "description": "Output the first N bytes",
+      "args": [
+        {
+          "name": "bytes"
+        }
+      ]
+    },
+    {
+      "name": [
+        "-q",
+        "--quiet",
+        "--silent"
+      ],
+      "description": "Never print file name headers"
+    },
+    {
+      "name": [
+        "-v",
+        "--verbose"
+      ],
+      "description": "Always print file name headers"
+    }
+  ],
+  "args": [
+    {
+      "name": "file",
+      "optional": true,
+      "variadic": true,
+      "template": "filepaths"
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { Tooltip } from "@/components/ui/tooltip";
 import { isTauri, type SshStatus } from "@/lib/backend";
+import { completionPrefs, onCompletionPrefs, updateCompletionPrefs } from "@/lib/completion/prefs";
 import { t } from "@/lib/i18n";
 import type { LocaleSetting, ThemeSetting } from "@/lib/prefsMirror";
 import { onSettings, settings, updateSettings, type Settings } from "@/lib/settings";
@@ -23,10 +24,12 @@ export function SettingsPanel({
   onDataChanged: () => void;
 }) {
   const [current, setCurrent] = useState<Settings>(settings());
+  const [prefs, setPrefs] = useState(completionPrefs());
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState("");
 
   useEffect(() => onSettings(setCurrent), []);
+  useEffect(() => onCompletionPrefs(setPrefs), []);
   useEffect(() => {
     if (isTauri) getVersion().then(setVersion).catch(console.error);
     else setVersion("preview");
@@ -109,6 +112,19 @@ export function SettingsPanel({
           </Row>
         </Group>
 
+        <Group title={t.completion}>
+          <Row label={t.completionEnabled} hint={t.completionHint}>
+            <Switch on={prefs.enabled} label={t.completionEnabled} onClick={() => updateCompletionPrefs({ enabled: !prefs.enabled })} />
+          </Row>
+          <Row label={t.rememberHistory} hint={t.rememberHistoryHint}>
+            <Switch
+              on={prefs.rememberHistory}
+              label={t.rememberHistory}
+              onClick={() => updateCompletionPrefs({ rememberHistory: !prefs.rememberHistory })}
+            />
+          </Row>
+        </Group>
+
         <Group
           title={t.sshEnvironment}
           action={
@@ -181,12 +197,38 @@ function Group({ title, action, children }: { title: string; action?: ReactNode;
   );
 }
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <div className="flex min-h-11 items-center gap-3 px-3 py-1.5">
-      <span className="min-w-0 flex-1 truncate text-callout text-label-1">{label}</span>
+      <div className="min-w-0 flex-1">
+        <p className={cn("text-callout text-label-1", !hint && "truncate")}>{label}</p>
+        {hint && <p className="text-caption font-normal text-label-2">{hint}</p>}
+      </div>
       {children}
     </div>
+  );
+}
+
+function Switch({ on, label, onClick }: { on: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      onClick={onClick}
+      className={cn(
+        "relative h-6 w-10 shrink-0 rounded-pill transition-colors duration-toggle ease-standard",
+        on ? "bg-accent-fill" : "bg-fill-3",
+      )}
+    >
+      <span
+        className={cn(
+          "absolute top-0.5 left-0.5 size-5 rounded-full bg-(--on-accent) shadow-1 transition-transform duration-toggle ease-emphasized",
+          on && "translate-x-4",
+        )}
+      />
+    </button>
   );
 }
 

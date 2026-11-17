@@ -1,0 +1,69 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "mv",
+  "description": "Move or rename files",
+  "options": [
+    {
+      "name": [
+        "-f",
+        "--force"
+      ],
+      "description": "Overwrite without asking"
+    },
+    {
+      "name": [
+        "-i",
+        "--interactive"
+      ],
+      "description": "Ask before overwriting"
+    },
+    {
+      "name": [
+        "-n",
+        "--no-clobber"
+      ],
+      "description": "Never overwrite an existing file"
+    },
+    {
+      "name": [
+        "-u",
+        "--update"
+      ],
+      "description": "Move only when the source is newer"
+    },
+    {
+      "name": [
+        "-v",
+        "--verbose"
+      ],
+      "description": "Explain what is being done"
+    },
+    {
+      "name": [
+        "-t",
+        "--target-directory"
+      ],
+      "description": "Move all sources into this directory",
+      "args": [
+        {
+          "name": "directory",
+          "template": "folders"
+        }
+      ]
+    },
+    {
+      "name": [
+        "-T",
+        "--no-target-directory"
+      ],
+      "description": "Treat the destination as a normal file"
+    }
+  ],
+  "args": [
+    {
+      "name": "source",
+      "variadic": true,
+      "template": "filepaths"
+    }
+  ]
+}

@@ -1,0 +1,125 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://anixops.github.io/EasySSH/completion/spec.schema.json",
+  "title": "EasySSH completion spec",
+  "description": "Describes one command line program so that EasySSH can complete it. One file per command.",
+  "type": "object",
+  "required": ["name", "description"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "name": { "$ref": "#/definitions/names" },
+    "description": { "$ref": "#/definitions/description" },
+    "parser": { "$ref": "#/definitions/parser" },
+    "options": { "$ref": "#/definitions/options" },
+    "subcommands": { "$ref": "#/definitions/subcommands" },
+    "args": { "$ref": "#/definitions/args" }
+  },
+  "definitions": {
+    "names": {
+      "description": "The command name, or a list of names where the first is the primary one and the rest are aliases.",
+      "oneOf": [
+        { "$ref": "#/definitions/word" },
+        { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/definitions/word" } }
+      ]
+    },
+    "word": { "type": "string", "pattern": "^[^\\s=]+$" },
+    "optionName": { "type": "string", "pattern": "^-[^\\s=]+$" },
+    "description": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "template": {
+      "description": "Where values for an argument come from, besides the static suggestions.",
+      "enum": ["filepaths", "folders", "remote-paths", "history", "hosts", "command"]
+    },
+    "parser": {
+      "description": "Directives for how the words after this command are read. They apply to this command and are inherited by its subcommands unless overridden.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "flagClustering": {
+          "description": "POSIX clustering: -xzvf is read as -x -z -v -f. Default true. Set false for programs with single dash long options such as find -name.",
+          "type": "boolean"
+        },
+        "optionsAfterDoubleDash": {
+          "description": "Whether words after -- are still read as options. Default false: -- ends the options.",
+          "type": "boolean"
+        },
+        "optionsAfterArgs": {
+          "description": "Whether options can follow the first positional argument. Default true. Set false when everything after the first argument belongs to something else (sudo, docker run IMAGE ...).",
+          "type": "boolean"
+        }
+      }
+    },
+    "suggestion": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "required": ["name"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "description": { "$ref": "#/definitions/description" }
+          }
+        }
+      ]
+    },
+    "arg": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "$ref": "#/definitions/description" },
+        "optional": { "type": "boolean" },
+        "variadic": { "description": "Takes any number of values.", "type": "boolean" },
+        "template": {
+          "oneOf": [
+            { "$ref": "#/definitions/template" },
+            { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/definitions/template" } }
+          ]
+        },
+        "suggestions": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/suggestion" } }
+      }
+    },
+    "args": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/arg" } },
+    "option": {
+      "type": "object",
+      "required": ["name", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "One name, or several (short and long forms), such as [\"-m\", \"--message\"].",
+          "oneOf": [
+            { "$ref": "#/definitions/optionName" },
+            { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/definitions/optionName" } }
+          ]
+        },
+        "description": { "$ref": "#/definitions/description" },
+        "args": { "$ref": "#/definitions/args" },
+        "repeatable": { "type": "boolean" },
+        "requiresEquals": { "description": "The value must be attached as --name=value.", "type": "boolean" },
+        "exclusiveWith": {
+          "description": "Option names that cannot be used together with this one.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/optionName" }
+        },
+        "persistent": { "description": "Also valid in every subcommand.", "type": "boolean" }
+      }
+    },
+    "options": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/option" } },
+    "subcommand": {
+      "type": "object",
+      "required": ["name", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/definitions/names" },
+        "description": { "$ref": "#/definitions/description" },
+        "parser": { "$ref": "#/definitions/parser" },
+        "options": { "$ref": "#/definitions/options" },
+        "subcommands": { "$ref": "#/definitions/subcommands" },
+        "args": { "$ref": "#/definitions/args" }
+      }
+    },
+    "subcommands": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/subcommand" } }
+  }
+}

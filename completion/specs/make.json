@@ -1,0 +1,193 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "make",
+  "description": "Build targets using a Makefile",
+  "options": [
+    {
+      "name": [
+        "-f",
+        "--file",
+        "--makefile"
+      ],
+      "description": "Read this file as the makefile",
+      "args": [
+        {
+          "name": "file",
+          "template": "filepaths"
+        }
+      ],
+      "repeatable": true
+    },
+    {
+      "name": [
+        "-C",
+        "--directory"
+      ],
+      "description": "Change to this directory first",
+      "args": [
+        {
+          "name": "dir",
+          "template": "folders"
+        }
+      ],
+      "repeatable": true
+    },
+    {
+      "name": [
+        "-j",
+        "--jobs"
+      ],
+      "description": "Run this many jobs at once",
+      "args": [
+        {
+          "name": "jobs",
+          "optional": true
+        }
+      ]
+    },
+    {
+      "name": [
+        "-n",
+        "--just-print",
+        "--dry-run",
+        "--recon"
+      ],
+      "description": "Print commands without running them"
+    },
+    {
+      "name": [
+        "-k",
+        "--keep-going"
+      ],
+      "description": "Keep going when some targets cannot be made"
+    },
+    {
+      "name": [
+        "-s",
+        "--silent",
+        "--quiet"
+      ],
+      "description": "Do not echo commands"
+    },
+    {
+      "name": [
+        "-B",
+        "--always-make"
+      ],
+      "description": "Unconditionally make all targets"
+    },
+    {
+      "name": [
+        "-i",
+        "--ignore-errors"
+      ],
+      "description": "Ignore errors from commands"
+    },
+    {
+      "name": [
+        "-e",
+        "--environment-overrides"
+      ],
+      "description": "Let environment variables override makefile ones"
+    },
+    {
+      "name": [
+        "-p",
+        "--print-data-base"
+      ],
+      "description": "Print the internal database"
+    },
+    {
+      "name": [
+        "-q",
+        "--question"
+      ],
+      "description": "Run no commands; exit status says if up to date"
+    },
+    {
+      "name": [
+        "-t",
+        "--touch"
+      ],
+      "description": "Touch targets instead of remaking them"
+    },
+    {
+      "name": [
+        "-w",
+        "--print-directory"
+      ],
+      "description": "Print the working directory before and after"
+    },
+    {
+      "name": "--no-print-directory",
+      "description": "Turn off -w"
+    },
+    {
+      "name": [
+        "-W",
+        "--what-if",
+        "--new-file",
+        "--assume-new"
+      ],
+      "description": "Consider this file to be very new",
+      "args": [
+        {
+          "name": "file",
+          "template": "filepaths"
+        }
+      ],
+      "repeatable": true
+    },
+    {
+      "name": [
+        "-I",
+        "--include-dir"
+      ],
+      "description": "Search this directory for included makefiles",
+      "args": [
+        {
+          "name": "dir",
+          "template": "folders"
+        }
+      ],
+      "repeatable": true
+    },
+    {
+      "name": [
+        "-r",
+        "--no-builtin-rules"
+      ],
+      "description": "Disable the built-in implicit rules"
+    },
+    {
+      "name": [
+        "-R",
+        "--no-builtin-variables"
+      ],
+      "description": "Disable the built-in variable settings"
+    },
+    {
+      "name": [
+        "-h",
+        "--help"
+      ],
+      "description": "Print help and exit"
+    },
+    {
+      "name": [
+        "-v",
+        "--version"
+      ],
+      "description": "Print the version and exit"
+    }
+  ],
+  "args": [
+    {
+      "name": "target",
+      "description": "Targets to build",
+      "optional": true,
+      "variadic": true,
+      "template": "history"
+    }
+  ]
+}

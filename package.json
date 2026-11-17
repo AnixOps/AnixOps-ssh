@@ -11,7 +11,8 @@
     "gen:proto": "json2ts -i crates/easyssh-proto/schema/proto.schema.json -o src/lib/proto.gen.ts --unreachableDefinitions --cwd crates/easyssh-proto/schema",
     "preview": "vite preview --port 4173 --strictPort",
     "screenshots": "node scripts/screenshots.mjs",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "check:specs": "node scripts/check-specs.mjs"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.0",
@@ -39,6 +40,7 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.5.0",
+    "ajv": "^8.20.0",
     "json-schema-to-typescript": "^15.0.4",
     "playwright": "^1.52.0",
     "tailwindcss": "^4.1.0",
