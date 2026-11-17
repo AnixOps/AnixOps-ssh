@@ -1,6 +1,6 @@
 //! Finding a running daemon or starting one detached.
 
-use crate::link::{Link, LinkHandler};
+use crate::link::{Link, LinkHandler, LinkOptions};
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
@@ -16,15 +16,30 @@ pub async fn connect_or_spawn(
     spawn: impl FnOnce() -> std::io::Result<()>,
     wait: Duration,
 ) -> Result<Link, String> {
-    if let Ok(link) = Link::connect(runtime_dir, handler.clone()).await {
-        return Ok(link);
+    connect_or_spawn_with(runtime_dir, handler, LinkOptions::default(), spawn, wait).await
+}
+
+/// [`connect_or_spawn`] with explicit [`LinkOptions`].
+pub async fn connect_or_spawn_with(
+    runtime_dir: &Path,
+    handler: Arc<dyn LinkHandler>,
+    options: LinkOptions,
+    spawn: impl FnOnce() -> std::io::Result<()>,
+    wait: Duration,
+) -> Result<Link, String> {
+    match Link::connect_with(runtime_dir, handler.clone(), options.clone()).await {
+        Ok(link) => return Ok(link),
+        // A running daemon that refuses us is not one to start another next to.
+        Err(e) if e.code == "schema_mismatch" => return Err(e.message),
+        Err(_) => {}
     }
     spawn().map_err(|e| format!("could not start the daemon: {e}"))?;
     let deadline = Instant::now() + wait;
     loop {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        match Link::connect(runtime_dir, handler.clone()).await {
+        match Link::connect_with(runtime_dir, handler.clone(), options.clone()).await {
             Ok(link) => return Ok(link),
+            Err(e) if e.code == "schema_mismatch" => return Err(e.message),
             Err(e) if Instant::now() >= deadline => {
                 return Err(format!(
                     "the daemon did not accept a connection within {wait:?}: {e}"

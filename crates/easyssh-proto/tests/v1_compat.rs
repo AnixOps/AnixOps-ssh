@@ -414,7 +414,20 @@ fn command_and_event_payloads_follow_their_kind() {
     validate_command(&command("proto.hello", json!({ "schema_version": 1 }))).unwrap();
 
     assert!(validate_command(&command("session.write", json!({ "session_id": "s" }))).is_err());
-    assert!(validate_command(&command("proto.hello", json!({ "schema_version": 2 }))).is_err());
+    // Any version number is a valid hello: the daemon answers a version it
+    // does not speak with the `schema_mismatch` error instead of a schema one.
+    validate_command(&command(
+        "proto.hello",
+        json!({ "schema_version": 2, "app_version": "1.0.2" }),
+    ))
+    .unwrap();
+    assert!(validate_command(&command("proto.hello", json!({ "schema_version": "1" }))).is_err());
+    assert!(validate_command(&command(
+        "proto.hello",
+        json!({ "schema_version": 1, "unknown": true })
+    ))
+    .is_err());
+    validate_command(&command("daemon.shutdown_when_idle", json!({}))).unwrap();
     assert!(validate_command(&command("nope.nothing", json!({}))).is_err());
 
     let event = |kind: &str, payload: Value, seq: u64| json!({ "kind": kind, "payload": payload, "seq": seq });
