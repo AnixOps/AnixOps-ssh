@@ -9,7 +9,12 @@ use crate::terminal::{SpawnOptions, TermSession, DEFAULT_SCROLLBACK};
 use easyssh_core::security::{validate_alias, validate_connection};
 use easyssh_core::{ConfigStore, Connection, Group, OpenSsh, SshInvocation};
 use easyssh_proto as proto;
-use easyssh_store::{open_app_store, Store, StoreError};
+use easyssh_store::{
+    open_app_store_with, SecretChange, SecretFlags, SecretsUpdate, Store, StoreError,
+};
+use easyssh_vault::{
+    Binding, KeyFile, StoreAccess, Vault, VaultError, VaultSecrets,
+};
 use portable_pty::CommandBuilder;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -63,6 +68,16 @@ pub struct DaemonExtras {
     pub build_version: Option<String>,
     /// Directory of `easysshd.log`; no log file when `None`.
     pub log_dir: Option<PathBuf>,
+    /// The vault for saved passwords and keys. The operating system keychain
+    /// when `None`; tests pass one over a `MemoryKeyStore`.
+    pub vault: Option<Arc<Vault>>,
+    /// The per-user runtime directory; saved private keys are written to its
+    /// `keys` folder for the life of an `ssh` process. The default runtime
+    /// directory when `None`.
+    pub runtime_dir: Option<PathBuf>,
+    /// The program OpenSSH runs for `SSH_ASKPASS`: this executable when
+    /// `None` (it calls `askpass::run_helper_if_requested` first thing).
+    pub askpass_helper: Option<PathBuf>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -71,11 +86,39 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 type Clients = Arc<Mutex<HashMap<u64, Outbox>>>;
 
+fn os_vault() -> Vault {
+    Vault::os()
+}
+
+/// Locks the vault when it has been idle for the auto-lock time and tells
+/// the clients. Ends with the vault.
+fn spawn_auto_lock(vault: &Arc<Vault>, clients: &Clients, log: &Arc<Logger>) {
+    let vault = Arc::downgrade(vault);
+    let clients = clients.clone();
+    let log = log.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(20));
+        loop {
+            tick.tick().await;
+            let Some(vault) = vault.upgrade() else { return };
+            if vault.tick() {
+                log.info("vault locked: idle");
+                for outbox in lock(&clients).values() {
+                    outbox.event("vault.changed", json!({"unlocked": false}));
+                }
+            }
+        }
+    });
+}
+
 pub struct Daemon {
     cfg: DaemonConfig,
     /// The app database. One connection, used one command at a time; other
     /// processes (the app's in-process fallback) open their own.
-    store: Mutex<Store>,
+    store: Arc<Mutex<Store>>,
+    vault: Arc<Vault>,
+    key_dir_root: PathBuf,
+    askpass_helper: Option<PathBuf>,
     sessions: Mutex<HashMap<String, Arc<TermSession>>>,
     clients: Clients,
     askpass: Arc<Hub>,
@@ -130,6 +173,8 @@ impl Daemon {
                     "host": p.host,
                     "prompt": p.prompt,
                     "confirm": p.confirm,
+                    "rememberable": p.rememberable,
+                    "vault_locked": p.vault_locked,
                 });
                 // Every attached client may answer; the first reply wins.
                 let delivered = lock(&notify_clients)
@@ -153,8 +198,10 @@ impl Daemon {
             "daemon created, build {build_version}, schema {}",
             proto::SCHEMA_VERSION
         ));
-        let opened = open_app_store(cfg.config_store.path())
+        let vault = extras.vault.clone().unwrap_or_else(|| Arc::new(os_vault()));
+        let opened = open_app_store_with(cfg.config_store.path(), vault.cipher())
             .map_err(|e| std::io::Error::other(format!("cannot open the database: {e}")))?;
+        vault.load_settings(&opened.store);
         match (&opened.migration, &opened.migration_error) {
             (Some(report), _) => log.info(&format!(
                 "migrated the v1 configuration: {} hosts, {} groups, {} snippets, {} tunnels",
@@ -168,9 +215,19 @@ impl Daemon {
             }
             (None, None) => {}
         }
+        let store = Arc::new(Mutex::new(opened.store));
+        let access: Arc<dyn StoreAccess> = store.clone();
+        askpass.set_answers(Arc::new(VaultSecrets::new(vault.clone(), access)));
+        spawn_auto_lock(&vault, &clients, &log);
         Ok(Arc::new(Daemon {
             cfg,
-            store: Mutex::new(opened.store),
+            store,
+            vault,
+            key_dir_root: extras
+                .runtime_dir
+                .clone()
+                .unwrap_or_else(crate::runtime::default_runtime_dir),
+            askpass_helper: extras.askpass_helper.clone(),
             sessions: Mutex::new(HashMap::new()),
             clients,
             askpass,
@@ -186,6 +243,22 @@ impl Daemon {
 
     pub fn is_draining(&self) -> bool {
         self.draining.load(Ordering::SeqCst)
+    }
+
+    /// The vault of this daemon.
+    pub fn vault(&self) -> &Arc<Vault> {
+        &self.vault
+    }
+
+    fn vault_status(&self) -> Value {
+        let status = self.vault.status();
+        json!({
+            "passphrase_set": status.passphrase_set,
+            "unlocked": status.unlocked,
+            "auto_lock_minutes": status.auto_lock_minutes,
+            "keychain_available": status.keychain_available,
+            "keychain_error": status.keychain_error,
+        })
     }
 
     /// Stop accepting sessions; [`Daemon::wait_idle`] completes once none runs.
@@ -495,8 +568,144 @@ impl Daemon {
             }
             "askpass.reply" => {
                 let p: proto::AskpassReplyParams = parse(payload)?;
-                self.askpass.reply(p.id, p.answer);
+                self.askpass
+                    .reply(p.id, p.answer, p.remember.unwrap_or(false));
                 ok(Value::Null)
+            }
+            "askpass.unlock" => {
+                let p: proto::AskpassUnlockParams = parse(payload)?;
+                let vault = self.vault.clone();
+                let passphrase = zeroize::Zeroizing::new(p.passphrase);
+                tokio::task::spawn_blocking(move || vault.unlock(&passphrase))
+                    .await
+                    .map_err(|e| fail("internal", e.to_string()))?
+                    .map_err(vault_failure)?;
+                self.broadcast("vault.changed", json!({"unlocked": true}));
+                let hub = self.askpass.clone();
+                let answered = tokio::task::spawn_blocking(move || hub.answer_from_vault(p.id))
+                    .await
+                    .map_err(|e| fail("internal", e.to_string()))?;
+                if !answered {
+                    // The vault is open now; the user types the answer as usual.
+                    self.log.info("askpass.unlock: no saved answer for the prompt");
+                }
+                ok(Value::Null)
+            }
+            "askpass.bind" => {
+                let p: proto::AskpassBindParams = parse(payload)?;
+                let binding = {
+                    let store = lock(&self.store);
+                    match store.get_host(&p.host_id).map_err(store_failure)? {
+                        Some(record) => {
+                            let flags = store.host_secret_flags(&p.host_id).map_err(store_failure)?;
+                            let mut binding = Binding::for_connection(&record.item.connection, None);
+                            binding.passphrase_expected = flags.passphrase;
+                            Some(binding)
+                        }
+                        None => None,
+                    }
+                };
+                // An unknown host (a `~/.ssh/config` alias) simply has nothing saved.
+                if let Some(binding) = binding {
+                    self.askpass.bind_process(&p.context, binding);
+                }
+                ok(Value::Null)
+            }
+            "askpass.unbind" => {
+                let p: proto::AskpassUnbindParams = parse(payload)?;
+                self.askpass.unbind_process(&p.context);
+                ok(Value::Null)
+            }
+            "vault.status" => {
+                let _: proto::VaultStatusParams = parse(payload)?;
+                ok(self.vault_status())
+            }
+            "vault.unlock" => {
+                let p: proto::VaultUnlockParams = parse(payload)?;
+                let vault = self.vault.clone();
+                let passphrase = zeroize::Zeroizing::new(p.passphrase);
+                tokio::task::spawn_blocking(move || vault.unlock(&passphrase))
+                    .await
+                    .map_err(|e| fail("internal", e.to_string()))?
+                    .map_err(vault_failure)?;
+                self.broadcast("vault.changed", json!({"unlocked": true}));
+                ok(self.vault_status())
+            }
+            "vault.lock" => {
+                let _: proto::VaultLockParams = parse(payload)?;
+                self.vault.lock();
+                self.broadcast("vault.changed", json!({"unlocked": false}));
+                ok(self.vault_status())
+            }
+            "vault.set_passphrase" => {
+                let p: proto::VaultSetPassphraseParams = parse(payload)?;
+                let vault = self.vault.clone();
+                let new = zeroize::Zeroizing::new(p.passphrase);
+                let current = p.current.map(zeroize::Zeroizing::new);
+                tokio::task::spawn_blocking(move || match current {
+                    Some(current) => vault.change_passphrase(&current, &new),
+                    None => vault.set_passphrase(&new),
+                })
+                .await
+                .map_err(|e| fail("internal", e.to_string()))?
+                .map_err(vault_failure)?;
+                self.broadcast("vault.changed", json!({"unlocked": self.vault.is_unlocked()}));
+                ok(self.vault_status())
+            }
+            "vault.remove_passphrase" => {
+                let p: proto::VaultRemovePassphraseParams = parse(payload)?;
+                let vault = self.vault.clone();
+                let passphrase = zeroize::Zeroizing::new(p.passphrase);
+                tokio::task::spawn_blocking(move || vault.remove_passphrase(&passphrase))
+                    .await
+                    .map_err(|e| fail("internal", e.to_string()))?
+                    .map_err(vault_failure)?;
+                self.broadcast("vault.changed", json!({"unlocked": true}));
+                ok(self.vault_status())
+            }
+            "vault.set_auto_lock" => {
+                let p: proto::VaultSetAutoLockParams = parse(payload)?;
+                let minutes = u32::try_from(p.minutes)
+                    .map_err(|_| fail("invalid_command", "minutes out of range"))?;
+                self.vault
+                    .save_auto_lock(&lock(&self.store), minutes)
+                    .map_err(vault_failure)?;
+                ok(self.vault_status())
+            }
+            "vault.forget_all" => {
+                let _: proto::VaultForgetAllParams = parse(payload)?;
+                let hosts = self
+                    .vault
+                    .forget_all(&lock(&self.store))
+                    .map_err(vault_failure)?;
+                self.log.info(&format!("forgot the saved secrets of {hosts} hosts"));
+                self.broadcast("hosts.changed", json!({}));
+                ok(json!({"hosts": hosts}))
+            }
+            "secrets.status" => {
+                let p: proto::SecretsStatusParams = parse(payload)?;
+                let flags = self
+                    .vault
+                    .flags(&lock(&self.store), &p.host_id)
+                    .map_err(vault_failure)?;
+                ok(flags_json(flags))
+            }
+            "secrets.set" => {
+                let p: proto::SecretsSetParams = parse(payload)?;
+                let host_id = p.host_id.clone();
+                let update = secrets_update(p)?;
+                let (vault, store) = (self.vault.clone(), self.store.clone());
+                let id = host_id.clone();
+                let flags = tokio::task::spawn_blocking(move || {
+                    let store = lock(&store);
+                    vault.set_host_secrets(&store, &id, &update)?;
+                    vault.flags(&store, &id)
+                })
+                .await
+                .map_err(|e| fail("internal", e.to_string()))?
+                .map_err(vault_failure)?;
+                self.broadcast("hosts.changed", json!({}));
+                ok(flags_json(flags))
             }
             "askpass.endpoint" => ok(json!({"endpoint": self.askpass.endpoint()})),
             other => Err(fail("unknown_command", format!("unknown command {other}"))),
@@ -531,6 +740,40 @@ impl Daemon {
             Some(host_id) => Some(self.resolve_host(host_id)?),
             None => None,
         };
+        // Saved secrets: a private key becomes a 0600 file for this ssh
+        // process, and password and passphrase prompts are answered from the
+        // vault for exactly this host.
+        let launch = match &connection {
+            Some(connection) if !p.host_id.as_deref().is_some_and(is_ssh_config_id) => {
+                let (vault, store, root) = (
+                    self.vault.clone(),
+                    self.store.clone(),
+                    self.key_dir_root.clone(),
+                );
+                let connection = connection.clone();
+                tokio::task::spawn_blocking(move || prepare_launch(&vault, &store, &root, &connection))
+                    .await
+                    .map_err(|e| fail("internal", e.to_string()))??
+            }
+            _ => Launch::default(),
+        };
+        let askpass = match &launch.binding {
+            Some(binding) => {
+                let helper = match &self.askpass_helper {
+                    Some(helper) => helper.clone(),
+                    None => std::env::current_exe()
+                        .map_err(|e| fail("spawn_failed", format!("cannot find the askpass helper: {e}")))?,
+                };
+                let context = uuid::Uuid::new_v4().simple().to_string();
+                self.askpass.bind_process(&context, binding.clone());
+                let label = connection.as_ref().map(|c| c.name.clone()).unwrap_or_default();
+                Some((
+                    crate::askpass::env(&self.askpass.endpoint(), &helper, &context, &label),
+                    context,
+                ))
+            }
+            None => None,
+        };
         let shell = self.cfg.local_shell.clone();
         let host_id = p.host_id.clone();
         let id = uuid::Uuid::new_v4().simple().to_string();
@@ -538,12 +781,35 @@ impl Daemon {
         let (cols, rows) = (p.cols, p.rows);
         let spawn_id = id.clone();
         let exit_log = self.log.clone();
+        let exit_hub = self.askpass.clone();
+        let (askpass_env, askpass_context) = match askpass {
+            Some((env, context)) => (env, Some(context)),
+            None => (Vec::new(), None),
+        };
+        // The key file lives exactly as long as the ssh process: the exit
+        // hook (or a failed spawn, which drops the hook) deletes it.
+        let key_file = Arc::new(Mutex::new(launch.key_file));
+        let hook_key_file = key_file.clone();
+        let hook_context = askpass_context.clone();
         let on_exit: crate::terminal::ExitHook = Box::new(move |sid, code| {
             exit_log.info(&format!("session {sid} ended, exit code {code:?}"));
+            if let Some(context) = &hook_context {
+                exit_hub.unbind_process(context);
+            }
+            drop(lock(&hook_key_file).take());
         });
+        let unbind_hub = self.askpass.clone();
         let session = tokio::task::spawn_blocking(move || {
-            let (command, shell_integration) =
-                command_for(shell.as_deref(), connection, agent_sock.as_deref())?;
+            let identity = lock(&key_file).as_ref().map(|k| k.path().to_owned());
+            let (mut command, shell_integration) = command_for(
+                shell.as_deref(),
+                connection,
+                agent_sock.as_deref(),
+                identity.as_deref(),
+            )?;
+            for (name, value) in &askpass_env {
+                command.env(name, value);
+            }
             TermSession::spawn(
                 spawn_id,
                 host_id,
@@ -559,7 +825,17 @@ impl Daemon {
             .map_err(|e| fail("spawn_failed", e))
         })
         .await
-        .map_err(|e| fail("internal", e.to_string()))??;
+        .map_err(|e| fail("internal", e.to_string()))
+        .and_then(|result| result);
+        let session = match session {
+            Ok(session) => session,
+            Err(failure) => {
+                if let Some(context) = &askpass_context {
+                    unbind_hub.unbind_process(context);
+                }
+                return Err(failure);
+            }
+        };
         lock(&self.sessions).insert(id.clone(), session.clone());
         // The reply must precede the session's events on this connection:
         // queue it first, then subscribe (which replays whatever the child
@@ -617,6 +893,117 @@ impl Daemon {
     }
 }
 
+fn is_ssh_config_id(id: &str) -> bool {
+    id.starts_with(SSH_CONFIG_ID_PREFIX)
+}
+
+/// What a session needs from the vault before `ssh` starts.
+#[derive(Default)]
+struct Launch {
+    key_file: Option<KeyFile>,
+    binding: Option<Binding>,
+}
+
+/// Looks at what `connection` has saved. Nothing saved: no change to how the
+/// session starts. A saved key is written to its temporary file (which needs
+/// the vault open; a locked one fails the open with `vault_locked` so the UI
+/// can ask for the passphrase and retry).
+fn prepare_launch(
+    vault: &Vault,
+    store: &Mutex<Store>,
+    runtime_dir: &Path,
+    connection: &Connection,
+) -> Result<Launch, Failure> {
+    let store = lock(store);
+    let flags = store
+        .host_secret_flags(&connection.id)
+        .map_err(store_failure)?;
+    if !flags.any() {
+        return Ok(Launch::default());
+    }
+    let mut key_file = None;
+    if flags.private_key {
+        let secrets = vault
+            .host_secrets(&store, &connection.id)
+            .map_err(vault_failure)?;
+        if let Some(key) = &secrets.private_key {
+            key_file = Some(
+                KeyFile::write(runtime_dir, key)
+                    .map_err(|e| fail("io_error", format!("cannot write the key file: {e}")))?,
+            );
+        }
+    }
+    let key_path = key_file
+        .as_ref()
+        .map(|file| file.path().to_string_lossy().into_owned());
+    let mut binding = Binding::for_connection(connection, key_path);
+    binding.passphrase_expected = flags.passphrase;
+    Ok(Launch {
+        key_file,
+        binding: Some(binding),
+    })
+}
+
+fn vault_failure(error: VaultError) -> Failure {
+    fail(error.code(), error.to_string())
+}
+
+fn flags_json(flags: SecretFlags) -> Value {
+    json!({
+        "password": flags.password,
+        "private_key": flags.private_key,
+        "passphrase": flags.passphrase,
+    })
+}
+
+/// Longest password, key passphrase or key text the vault accepts.
+const MAX_SECRET_BYTES: usize = 64 * 1024;
+
+fn secrets_update(p: proto::SecretsSetParams) -> Result<SecretsUpdate, Failure> {
+    let change = |value: Option<String>| match value {
+        None => SecretChange::Keep,
+        Some(value) if value.is_empty() => SecretChange::Clear,
+        Some(value) => SecretChange::Set(easyssh_crypto::SecretText::new(value)),
+    };
+    for (name, value) in [
+        ("password", &p.password),
+        ("passphrase", &p.passphrase),
+        ("private key", &p.private_key),
+    ] {
+        if value.as_ref().is_some_and(|v| v.len() > MAX_SECRET_BYTES) {
+            return Err(fail("invalid_command", format!("the {name} is too long")));
+        }
+    }
+    // A prompt answer is one line; a NUL cannot be passed to a program.
+    for (name, value) in [("password", &p.password), ("passphrase", &p.passphrase)] {
+        if value
+            .as_ref()
+            .is_some_and(|v| v.contains(['\n', '\r', '\0']))
+        {
+            return Err(fail(
+                "invalid_command",
+                format!("the {name} must be a single line"),
+            ));
+        }
+    }
+    if let Some(key) = p.private_key.as_deref().filter(|k| !k.is_empty()) {
+        if !(key.contains("-----BEGIN ") && key.contains("PRIVATE KEY-----")) {
+            return Err(fail(
+                "invalid_key",
+                "this does not look like a PEM or OpenSSH private key",
+            ));
+        }
+        if key.contains('\0') {
+            return Err(fail("invalid_key", "the key contains a NUL byte"));
+        }
+    }
+    Ok(SecretsUpdate {
+        password: change(p.password),
+        private_key: change(p.private_key),
+        passphrase: change(p.passphrase),
+    })
+}
+
 /// Upper bound for a `known_hosts` file the daemon agrees to import.
 const MAX_KNOWN_HOSTS_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -657,6 +1044,7 @@ fn command_for(
     shell: Option<&std::path::Path>,
     connection: Option<Connection>,
     agent_sock: Option<&Path>,
+    identity: Option<&Path>,
 ) -> Result<(CommandBuilder, bool), Failure> {
     let mut shell_integration = false;
     let mut command = match connection {
@@ -665,6 +1053,13 @@ fn command_for(
             let invocation = SshInvocation::for_connection(&OpenSsh, &connection)
                 .map_err(|e| fail("invalid_host", e.to_string()))?;
             let mut command = CommandBuilder::new(invocation.executable);
+            if let Some(identity) = identity {
+                // The saved key, and only it: a saved key must not be mixed
+                // with whatever the agent offers first.
+                command.args(["-i"]);
+                command.arg(identity);
+                command.args(["-o", "IdentitiesOnly=yes"]);
+            }
             command.args(invocation.args);
             command
         }

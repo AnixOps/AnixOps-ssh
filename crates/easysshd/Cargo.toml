@@ -12,8 +12,10 @@ chrono.workspace = true
 dirs.workspace = true
 easyssh-core = { path = "../easyssh-core" }
 easyssh-proto = { path = "../easyssh-proto" }
+easyssh-crypto = { path = "../easyssh-crypto" }
 easyssh-store = { path = "../easyssh-store" }
 easyssh-telemetry = { path = "../easyssh-telemetry" }
+easyssh-vault = { path = "../easyssh-vault", features = ["os-keyring"] }
 fs4.workspace = true
 hmac.workspace = true
 portable-pty = "0.9"
@@ -24,6 +26,7 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
+zeroize = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
@@ -38,4 +41,5 @@ windows-sys = { workspace = true, features = [
 
 [dev-dependencies]
 uuid.workspace = true
+zeroize = "1"
 tempfile.workspace = true

@@ -7,7 +7,7 @@
 //! processes may hold the database open at once: it runs in WAL mode with a
 //! busy timeout (see [`Store::open`]), and a migration is one transaction.
 
-use crate::cipher::NotConfigured;
+use crate::cipher::{FieldCipher, NotConfigured};
 use crate::entities::Host;
 use crate::error::{Result, StoreError};
 use crate::store::{Entity, Store};
@@ -52,11 +52,21 @@ pub struct AppStore {
 /// not been migrated into it yet, imports it (keeping `<stem>.v1-backup.json`).
 /// Calling this again, or from another process, never migrates twice.
 pub fn open_app_store(v1_config_path: &Path) -> Result<AppStore> {
+    open_app_store_with(v1_config_path, Arc::new(NotConfigured))
+}
+
+/// Like [`open_app_store`], with the cipher that seals saved secrets. The
+/// app passes the vault's cipher; with [`NotConfigured`] every secret is
+/// refused.
+pub fn open_app_store_with(
+    v1_config_path: &Path,
+    cipher: Arc<dyn FieldCipher>,
+) -> Result<AppStore> {
     let db = db_path_for(v1_config_path);
     let dir = db.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(dir)?;
     let device = device_id(dir)?;
-    let store = Store::open(&db, device, Arc::new(NotConfigured))?;
+    let store = Store::open(&db, device, cipher)?;
     let mut opened = AppStore {
         store,
         migration: None,
@@ -152,6 +162,7 @@ impl Store {
     pub fn remove_host(&self, id: &str) -> Result<bool> {
         self.in_tx(|| {
             let existed = self.soft_delete_host(id)?;
+            self.clear_host_secrets(id)?;
             let recent = self.recent_connection_ids();
             if recent.iter().any(|recent| recent == id) {
                 let kept: Vec<String> = recent.into_iter().filter(|r| r != id).collect();

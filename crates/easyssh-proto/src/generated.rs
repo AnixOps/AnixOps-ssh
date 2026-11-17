@@ -35,6 +35,13 @@ pub struct AppConfig {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub workspace: ::std::option::Option<Workspace>,
 }
+///Command `askpass.bind` payload: tell the daemon that the OpenSSH process using askpass `context` connects to saved host `host_id`, so its password and passphrase prompts for exactly that host and user may be answered from the vault. Reply: null.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct AskpassBindParams {
+    pub context: ::std::string::String,
+    pub host_id: ::std::string::String,
+}
 ///Command `askpass.endpoint` payload. Reply: AskpassEndpointResult.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +61,12 @@ pub struct AskpassPromptEvent {
     pub host: ::std::string::String,
     pub id: u64,
     pub prompt: ::std::string::String,
+    ///The prompt asks for the saved password or key passphrase of a saved host: the dialog may offer "Remember in vault".
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub rememberable: ::std::option::Option<bool>,
+    ///A saved answer exists but the vault is locked: the dialog may offer to unlock it (`askpass.unlock`).
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub vault_locked: ::std::option::Option<bool>,
 }
 ///Command `askpass.reply` payload. answer null cancels the prompt. Reply: null.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -62,12 +75,28 @@ pub struct AskpassReplyParams {
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub answer: ::std::option::Option<::std::string::String>,
     pub id: u64,
+    ///Save the answer in the vault for this host. Only honoured for a prompt the event marked `rememberable`.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub remember: ::std::option::Option<bool>,
 }
 ///Event `askpass.resolved` payload. The prompt `id` was answered, cancelled or timed out; clients close any dialog for it.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct AskpassResolvedEvent {
     pub id: u64,
+}
+///Command `askpass.unbind` payload: the process is over. Reply: null.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct AskpassUnbindParams {
+    pub context: ::std::string::String,
+}
+///Command `askpass.unlock` payload: unlock the vault and answer prompt `id` from it. Reply: null. Fails with `wrong_passphrase`.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct AskpassUnlockParams {
+    pub id: u64,
+    pub passphrase: ::std::string::String,
 }
 ///UI -> daemon request.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -478,6 +507,35 @@ impl ::std::str::FromStr for SchemaVersion {
     fn from_str(value: &str) -> ::std::result::Result<Self, Self::Err> {
         Ok(Self(value.parse()?))
     }
+}
+///Command `secrets.set` payload. Reply: SecretsStatusResult. Fails with `vault_locked` when a passphrase vault is locked.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SecretsSetParams {
+    pub host_id: ::std::string::String,
+    ///Key passphrase. Absent keeps; empty clears.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub passphrase: ::std::option::Option<::std::string::String>,
+    ///Absent keeps the saved value; an empty string clears it.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub password: ::std::option::Option<::std::string::String>,
+    ///Key text (PEM or OpenSSH). Absent keeps; empty clears.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub private_key: ::std::option::Option<::std::string::String>,
+}
+///Command `secrets.status` payload. Reply: SecretsStatusResult. Needs no unlock.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SecretsStatusParams {
+    pub host_id: ::std::string::String,
+}
+///Which secrets a host has saved. Never the values.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SecretsStatusResult {
+    pub passphrase: bool,
+    pub password: bool,
+    pub private_key: bool,
 }
 ///Command `session.attach` payload. Subscribes this connection to the session's output and exit events: the reply comes first, then the buffered output from `from_seq` as `session.output` events, then (if the session already ended) `session.exit`, then live events. Attaching again replaces the earlier subscription of the same connection. Reply: SessionAttachResult.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -1006,6 +1064,69 @@ impl ::std::convert::TryFrom<::std::string::String> for TunnelKind {
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
+}
+///Event `vault.changed` payload. Sent to every client when the vault locks or unlocks (also by auto-lock).
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultChangedEvent {
+    pub unlocked: bool,
+}
+///Command `vault.forget_all` payload: delete every saved password, key and passphrase. Works while locked. Reply: VaultForgetAllResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct VaultForgetAllParams {}
+///`VaultForgetAllResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultForgetAllResult {
+    pub hosts: u64,
+}
+///Command `vault.lock` payload ("lock now"). Reply: VaultStatus.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct VaultLockParams {}
+///Command `vault.remove_passphrase` payload: go back to keychain-only protection. Reply: VaultStatus.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultRemovePassphraseParams {
+    pub passphrase: ::std::string::String,
+}
+///Command `vault.set_auto_lock` payload. Reply: VaultStatus.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultSetAutoLockParams {
+    pub minutes: i64,
+}
+///Command `vault.set_passphrase` payload: set the vault passphrase, or change it when `current` is given. Reply: VaultStatus.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultSetPassphraseParams {
+    ///Required to change an existing passphrase.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub current: ::std::option::Option<::std::string::String>,
+    pub passphrase: ::std::string::String,
+}
+///The vault state. No secret is ever part of it.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultStatus {
+    ///0 = never.
+    pub auto_lock_minutes: u64,
+    pub keychain_available: bool,
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub keychain_error: ::std::option::Option<::std::string::String>,
+    pub passphrase_set: bool,
+    pub unlocked: bool,
+}
+///Command `vault.status` payload. Reply: VaultStatus.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct VaultStatusParams {}
+///Command `vault.unlock` payload. Reply: VaultStatus. Fails with `wrong_passphrase`.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultUnlockParams {
+    pub passphrase: ::std::string::String,
 }
 ///files/snippets/forwarding are legacy values kept so schema 5 metadata still deserializes.
 #[derive(

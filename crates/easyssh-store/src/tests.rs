@@ -789,7 +789,7 @@ fn not_configured_refuses_to_store_secrets() {
         h.secrets = Some(secrets);
         let error = store.upsert_host(&h).unwrap_err();
         assert!(
-            matches!(error, StoreError::Cipher(CipherError::NotConfigured)),
+            matches!(error, StoreError::Cipher(CryptoError::NotConfigured)),
             "{error:?}"
         );
     }
@@ -798,7 +798,7 @@ fn not_configured_refuses_to_store_secrets() {
     secret_note.connection.notes = "the vault code is 1234".into();
     assert!(matches!(
         store.upsert_host(&secret_note),
-        Err(StoreError::Cipher(CipherError::NotConfigured))
+        Err(StoreError::Cipher(CryptoError::NotConfigured))
     ));
     assert_eq!(count(&store, "hosts"), 0, "nothing was written");
     assert_eq!(count(&store, "record_history"), 0);
@@ -908,7 +908,7 @@ fn ciphertext_is_bound_to_its_record() {
         .unwrap();
     assert!(matches!(
         store.get_host(&b.meta.id),
-        Err(StoreError::Cipher(CipherError::Failed(_)))
+        Err(StoreError::Cipher(CryptoError::Authentication))
     ));
 }
 

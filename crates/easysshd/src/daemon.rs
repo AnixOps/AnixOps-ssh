@@ -23,6 +23,8 @@ pub async fn run(options: Options) -> Result<()> {
     let extras = DaemonExtras {
         build_version: options.build_version,
         log_dir: Some(options.runtime_dir.clone()),
+        runtime_dir: Some(options.runtime_dir.clone()),
+        ..DaemonExtras::default()
     };
     let daemon = Daemon::new_with(options.config, extras).await?;
     let server = match Server::start_service(&options.runtime_dir, daemon.clone()) {
@@ -32,6 +34,14 @@ pub async fn run(options: Options) -> Result<()> {
             return Err(e);
         }
     };
+    // This daemon owns the runtime directory now, so key files an earlier,
+    // crashed daemon left behind are safe to remove.
+    let swept = easyssh_vault::sweep(&options.runtime_dir);
+    if swept > 0 {
+        daemon
+            .log()
+            .info(&format!("removed {swept} leftover key files"));
+    }
     daemon.log().info("serving");
     let idle = daemon.clone();
     let shutdown = async move {

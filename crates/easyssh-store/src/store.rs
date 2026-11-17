@@ -183,7 +183,7 @@ impl Store {
 
     // ---- secrets -------------------------------------------------------
 
-    fn aad(table: &str, vault_id: &str, id: &str, field: &str) -> Vec<u8> {
+    pub(crate) fn aad(table: &str, vault_id: &str, id: &str, field: &str) -> Vec<u8> {
         format!("easyssh/v1/{table}/{vault_id}/{id}/{field}").into_bytes()
     }
 

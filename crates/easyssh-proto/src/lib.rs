@@ -62,6 +62,30 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "AskpassEndpointParams",
         "AskpassEndpointResult",
     ),
+    ("askpass.unlock", "AskpassUnlockParams", ""),
+    ("askpass.bind", "AskpassBindParams", ""),
+    ("askpass.unbind", "AskpassUnbindParams", ""),
+    ("vault.status", "VaultStatusParams", "VaultStatus"),
+    ("vault.unlock", "VaultUnlockParams", "VaultStatus"),
+    ("vault.lock", "VaultLockParams", "VaultStatus"),
+    (
+        "vault.set_passphrase",
+        "VaultSetPassphraseParams",
+        "VaultStatus",
+    ),
+    (
+        "vault.remove_passphrase",
+        "VaultRemovePassphraseParams",
+        "VaultStatus",
+    ),
+    ("vault.set_auto_lock", "VaultSetAutoLockParams", "VaultStatus"),
+    (
+        "vault.forget_all",
+        "VaultForgetAllParams",
+        "VaultForgetAllResult",
+    ),
+    ("secrets.status", "SecretsStatusParams", "SecretsStatusResult"),
+    ("secrets.set", "SecretsSetParams", "SecretsStatusResult"),
 ];
 
 /// The event set: `(kind, payload schema)`.
@@ -71,6 +95,7 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("askpass.prompt", "AskpassPromptEvent"),
     ("askpass.resolved", "AskpassResolvedEvent"),
     ("hosts.changed", "HostsChangedEvent"),
+    ("vault.changed", "VaultChangedEvent"),
 ];
 
 fn validators() -> &'static HashMap<String, Validator> {
