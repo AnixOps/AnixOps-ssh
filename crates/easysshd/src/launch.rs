@@ -6,14 +6,20 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// How long a spawned daemon gets to answer before another is started.
+const RESPAWN_AFTER: Duration = Duration::from_secs(1);
+
 /// Connect to the daemon in `runtime_dir`; when none answers, call `spawn` to
 /// start one and keep trying for `wait`. Two apps racing to start a daemon is
-/// fine: the instance lock lets one win and both connect to it. The error
-/// says why the daemon could not be reached.
+/// fine: the instance lock lets one win and both connect to it. A spawned
+/// daemon that never comes up (it lost the lock to a predecessor that was
+/// still exiting, or crashed) is replaced: `spawn` is called again every
+/// [`RESPAWN_AFTER`] while nobody answers. The error says why the daemon
+/// could not be reached.
 pub async fn connect_or_spawn(
     runtime_dir: &Path,
     handler: Arc<dyn LinkHandler>,
-    spawn: impl FnOnce() -> std::io::Result<()>,
+    spawn: impl FnMut() -> std::io::Result<()>,
     wait: Duration,
 ) -> Result<Link, String> {
     connect_or_spawn_with(runtime_dir, handler, LinkOptions::default(), spawn, wait).await
@@ -24,7 +30,7 @@ pub async fn connect_or_spawn_with(
     runtime_dir: &Path,
     handler: Arc<dyn LinkHandler>,
     options: LinkOptions,
-    spawn: impl FnOnce() -> std::io::Result<()>,
+    mut spawn: impl FnMut() -> std::io::Result<()>,
     wait: Duration,
 ) -> Result<Link, String> {
     match Link::connect_with(runtime_dir, handler.clone(), options.clone()).await {
@@ -34,7 +40,8 @@ pub async fn connect_or_spawn_with(
         Err(_) => {}
     }
     spawn().map_err(|e| format!("could not start the daemon: {e}"))?;
-    let deadline = Instant::now() + wait;
+    let mut spawned_at = Instant::now();
+    let deadline = spawned_at + wait;
     loop {
         tokio::time::sleep(Duration::from_millis(100)).await;
         match Link::connect_with(runtime_dir, handler.clone(), options.clone()).await {
@@ -45,7 +52,14 @@ pub async fn connect_or_spawn_with(
                     "the daemon did not accept a connection within {wait:?}: {e}"
                 ))
             }
-            Err(_) => {}
+            Err(_) => {
+                // A daemon started while its predecessor was still exiting
+                // fails on the instance lock and is gone; start another.
+                if spawned_at.elapsed() >= RESPAWN_AFTER {
+                    spawn().map_err(|e| format!("could not start the daemon: {e}"))?;
+                    spawned_at = Instant::now();
+                }
+            }
         }
     }
 }
