@@ -1,8 +1,14 @@
 //! Interactive sessions: a PTY running the system `ssh` (or a local shell),
 //! streamed to the frontend over a Tauri channel. The app only relays bytes;
 //! authentication stays with OpenSSH and the SSH agent.
+//!
+//! Normally the PTYs live in `easysshd` (see daemon.rs) and these commands are
+//! thin proxies, so sessions survive a reload of the window. When the daemon
+//! is unavailable the same commands fall back to PTYs owned by this process.
 
+use crate::daemon::DaemonState;
 use crate::hosts;
+use easysshd::link::{SessionMsg, SessionSink};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -82,12 +88,109 @@ fn lock_error<T>(_: T) -> String {
     "session state is unavailable".to_owned()
 }
 
+/// Forwards daemon messages for one session to a webview channel. Dropping
+/// the sink (channel gone, e.g. after a reload) leaves the session running.
+fn sink_for(events: Channel<SessionEvent>) -> SessionSink {
+    Box::new(move |message| match message {
+        SessionMsg::Data { data, .. } => events.send(SessionEvent::Data { data }).is_ok(),
+        SessionMsg::Exit { code } => {
+            let _ = events.send(SessionEvent::Exit { code });
+            false
+        }
+    })
+}
+
+/// Whether `id` names a session owned by this process.
+fn is_local(sessions: &Sessions, id: &str) -> bool {
+    sessions
+        .0
+        .lock()
+        .map(|sessions| sessions.contains_key(id))
+        .unwrap_or(false)
+}
+
 /// Starts a session for `host_id`, or a local shell when it is `None`, and
 /// returns its id. Output and the exit status arrive on `events`.
 #[tauri::command]
-pub fn session_open(
+pub async fn session_open(
     app: AppHandle,
     sessions: State<'_, Sessions>,
+    daemon: State<'_, DaemonState>,
+    host_id: Option<String>,
+    cols: u16,
+    rows: u16,
+    events: Channel<SessionEvent>,
+) -> Result<String, String> {
+    if let Some(link) = daemon.link() {
+        return link
+            .open_session(host_id.as_deref(), cols, rows, sink_for(events))
+            .await
+            .map_err(|error| error.to_string());
+    }
+    open_in_process(app, &sessions, host_id, cols, rows, events)
+}
+
+/// A session the daemon holds, as the UI needs it to rebuild its tabs.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveSession {
+    id: String,
+    host_id: Option<String>,
+    cols: u16,
+    rows: u16,
+    running: bool,
+    exit_code: Option<i64>,
+}
+
+/// Sessions that outlived the window. Empty without a daemon.
+#[tauri::command]
+pub async fn sessions_list(daemon: State<'_, DaemonState>) -> Result<Vec<LiveSession>, String> {
+    let Some(link) = daemon.link() else {
+        return Ok(Vec::new());
+    };
+    let sessions = link
+        .list_sessions()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(sessions
+        .into_iter()
+        .map(|info| LiveSession {
+            id: info.session_id,
+            host_id: info.host_id,
+            cols: info.cols,
+            rows: info.rows,
+            running: info.running,
+            exit_code: info.exit_code,
+        })
+        .collect())
+}
+
+/// Reattaches `events` to a session: its buffered output is replayed first,
+/// then live output follows.
+#[tauri::command]
+pub async fn session_attach(
+    daemon: State<'_, DaemonState>,
+    id: String,
+    events: Channel<SessionEvent>,
+) -> Result<(), String> {
+    let link = daemon.link().ok_or("the session daemon is not running")?;
+    link.attach_session(&id, None, sink_for(events))
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Stops sending a session's output to this window; the session keeps running.
+#[tauri::command]
+pub fn session_detach(daemon: State<'_, DaemonState>, id: String) {
+    if let Some(link) = daemon.link() {
+        link.detach_session(&id);
+    }
+}
+
+fn open_in_process(
+    app: AppHandle,
+    sessions: &Sessions,
     host_id: Option<String>,
     cols: u16,
     rows: u16,
@@ -162,9 +265,16 @@ fn pump(
 #[tauri::command]
 pub fn session_write(
     sessions: State<'_, Sessions>,
+    daemon: State<'_, DaemonState>,
     id: String,
     data: String,
 ) -> Result<(), String> {
+    if !is_local(&sessions, &id) {
+        let link = daemon.link().ok_or("session has ended")?;
+        return link
+            .write_session(&id, &data)
+            .map_err(|error| error.to_string());
+    }
     let mut sessions = sessions.0.lock().map_err(lock_error)?;
     let session = sessions.get_mut(&id).ok_or("session has ended")?;
     session
@@ -177,10 +287,19 @@ pub fn session_write(
 #[tauri::command]
 pub fn session_resize(
     sessions: State<'_, Sessions>,
+    daemon: State<'_, DaemonState>,
     id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
+    if !is_local(&sessions, &id) {
+        if let Some(link) = daemon.link() {
+            return link
+                .resize_session(&id, cols, rows)
+                .map_err(|error| error.to_string());
+        }
+        return Ok(());
+    }
     let sessions = sessions.0.lock().map_err(lock_error)?;
     let Some(session) = sessions.get(&id) else {
         return Ok(());
@@ -192,7 +311,17 @@ pub fn session_resize(
 }
 
 #[tauri::command]
-pub fn session_close(sessions: State<'_, Sessions>, id: String) -> Result<(), String> {
+pub fn session_close(
+    sessions: State<'_, Sessions>,
+    daemon: State<'_, DaemonState>,
+    id: String,
+) -> Result<(), String> {
+    if !is_local(&sessions, &id) {
+        if let Some(link) = daemon.link() {
+            link.close_session(&id);
+        }
+        return Ok(());
+    }
     let session = sessions.0.lock().map_err(lock_error)?.remove(&id);
     if let Some(mut session) = session {
         let _ = session.killer.kill();

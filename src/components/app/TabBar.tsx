@@ -13,6 +13,8 @@ export interface Tab {
   key: string;
   /** null for a local shell. */
   hostId: string | null;
+  /** Set for a session that outlived a reload: the view reattaches instead of opening one. */
+  sessionId?: string;
   title: string;
   color: string | null;
   status: SessionStatus;

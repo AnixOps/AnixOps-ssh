@@ -14,11 +14,20 @@ import { SnippetsPanel } from "@/components/app/SnippetsPanel";
 import { TabBar, type Tab } from "@/components/app/TabBar";
 import { TerminalView, type SessionStatus } from "@/components/app/TerminalView";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { loadHosts, setFavorite, sshStatus, type Host, type HostsSnapshot, type SshStatus } from "@/lib/backend";
+import {
+  listSessions,
+  loadHosts,
+  setFavorite,
+  sshStatus,
+  type Host,
+  type HostsSnapshot,
+  type SshStatus,
+} from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { duration, ease } from "@/lib/motion";
 import { loadSettings } from "@/lib/settings";
 import { appShortcut } from "@/lib/shortcuts";
+import { terminalFor } from "@/lib/terminals";
 
 let nextTab = 1;
 
@@ -85,8 +94,38 @@ export function App() {
 
   const openLocal = useCallback(() => addTab(null, t.localTerminal, null), [addTab]);
 
+  // Sessions that outlived a window reload come back as tabs, once.
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current) return;
+    restored.current = true;
+    Promise.all([loadHosts(), listSessions()])
+      .then(([hosts, live]) => {
+        if (live.length === 0) return;
+        const byId = new Map(hosts.hosts.map((host) => [host.id, host]));
+        const restoredTabs: Tab[] = live.map((session) => {
+          const host = session.hostId ? byId.get(session.hostId) : undefined;
+          return {
+            key: `tab-${nextTab++}`,
+            hostId: session.hostId,
+            sessionId: session.id,
+            title: host?.name ?? (session.hostId ? session.hostId.replace(/^ssh-config:/, "") : t.localTerminal),
+            color: host?.color ?? null,
+            status: { state: "connecting" },
+            filesOpen: false,
+            filesMounted: false,
+          };
+        });
+        // Keep tabs the user opened while this was loading.
+        setTabs((current) => [...restoredTabs, ...current]);
+        setActiveKey((current) => current ?? restoredTabs[0].key);
+      })
+      .catch((reason) => console.error(reason));
+  }, []);
+
   const closeTab = useCallback(
     (key: string) => {
+      terminalFor(key)?.close();
       const index = tabs.findIndex((tab) => tab.key === key);
       const next = tabs.filter((tab) => tab.key !== key);
       setTabs(next);
@@ -188,6 +227,7 @@ export function App() {
                 <TerminalView
                   tabKey={tab.key}
                   hostId={tab.hostId}
+                  sessionId={tab.sessionId}
                   active={tab.key === activeKey}
                   onStatus={updateStatus}
                 />

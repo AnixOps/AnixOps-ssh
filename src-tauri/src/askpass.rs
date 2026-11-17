@@ -4,6 +4,10 @@
 //! prompt to the running app over a loopback socket guarded by a random
 //! token, the app shows a dialog, and the answer goes back to OpenSSH on the
 //! helper's standard output. Answers are never stored.
+//!
+//! This is the in-process bridge, used when `easysshd` is not available. With
+//! the daemon running, the same helper talks to the daemon's bridge instead
+//! (`easysshd::askpass`) and `env_for` points OpenSSH there.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -14,9 +18,10 @@ use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-const ENV_ENDPOINT: &str = "ANIXOPS_SSH_ASKPASS";
-const ENV_CONTEXT: &str = "ANIXOPS_SSH_ASKPASS_CONTEXT";
-const ENV_HOST: &str = "ANIXOPS_SSH_ASKPASS_HOST";
+use crate::daemon::DaemonState;
+pub use easysshd::askpass::run_helper_if_requested;
+use easysshd::askpass::{ENV_CONTEXT, ENV_ENDPOINT, ENV_HOST};
+
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Serialize, Deserialize)]
@@ -46,44 +51,18 @@ pub struct Askpass {
     next: AtomicU64,
 }
 
-/// Runs this executable as the askpass helper when OpenSSH started it for a
-/// prompt, and exits. Returns normally on ordinary app startup.
-pub fn run_helper_if_requested() {
-    let Ok(endpoint) = std::env::var(ENV_ENDPOINT) else {
-        return;
-    };
-    let prompt = std::env::args().nth(1).unwrap_or_default();
-    let code = match ask(&endpoint, prompt) {
-        Some(answer) => {
-            let mut stdout = std::io::stdout();
-            let _ = writeln!(stdout, "{answer}");
-            let _ = stdout.flush();
-            0
-        }
-        None => 1,
-    };
-    std::process::exit(code);
-}
-
-fn ask(endpoint: &str, prompt: String) -> Option<String> {
-    let (port, token) = endpoint.split_once(' ')?;
-    let port: u16 = port.parse().ok()?;
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
-    let request = Request {
-        token: token.to_owned(),
-        context: std::env::var(ENV_CONTEXT).unwrap_or_default(),
-        host: std::env::var(ENV_HOST).unwrap_or_default(),
-        prompt,
-    };
-    serde_json::to_writer(&mut stream, &request).ok()?;
-    stream.write_all(b"\n").ok()?;
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line).ok()?;
-    serde_json::from_str::<Option<String>>(line.trim()).ok()?
-}
-
 /// Environment for an `sftp` process so its prompts come to this app.
 pub fn env_for(app: &AppHandle, host: &str) -> Result<Vec<(String, String)>, String> {
+    if let Some(link) = app.state::<DaemonState>().link() {
+        let helper = std::env::current_exe().map_err(io_error)?;
+        let context = uuid::Uuid::new_v4().simple().to_string();
+        return Ok(easysshd::askpass::env(
+            link.askpass_endpoint(),
+            &helper,
+            &context,
+            host,
+        ));
+    }
     let askpass = app.state::<Askpass>();
     let endpoint = askpass.endpoint(app)?;
     let helper = std::env::current_exe().map_err(io_error)?;
@@ -171,9 +150,13 @@ fn serve(app: &AppHandle, stream: &TcpStream, token: &str) -> Option<()> {
 #[tauri::command]
 pub fn askpass_reply(
     askpass: State<'_, Askpass>,
+    daemon: State<'_, DaemonState>,
     id: u64,
     answer: Option<String>,
 ) -> Result<(), String> {
+    if let Some(link) = daemon.link() {
+        let _ = link.askpass_reply(id, answer.clone());
+    }
     if let Some(sender) = askpass.pending.lock().map_err(lock_error)?.remove(&id) {
         let _ = sender.send(answer);
     }
