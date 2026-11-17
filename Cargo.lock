@@ -1526,6 +1526,7 @@ dependencies = [
  "easyssh-sync",
  "ed25519-dalek 3.0.0",
  "hmac 0.12.1",
+ "http-body-util",
  "opaque-ke",
  "rand_core 0.6.4",
  "rusqlite",

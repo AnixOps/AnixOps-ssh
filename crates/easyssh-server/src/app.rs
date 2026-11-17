@@ -9,10 +9,11 @@ use axum::extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, MatchedPath
 use axum::http::header;
 use axum::http::request::Parts;
 use axum::middleware::{from_fn, from_fn_with_state, Next};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 use easyssh_sync::auth::OpaqueSuite;
+use http_body_util::BodyExt;
 use opaque_ke::{ServerLogin, ServerSetup};
 use rand_core::{OsRng, RngCore};
 use rusqlite::OptionalExtension;
@@ -176,6 +177,52 @@ async fn log_request(request: Request, next: Next) -> Response {
     response
 }
 
+/// Response header carrying the largest request body the server accepts, in
+/// bytes. Clients may refuse locally before sending more.
+pub const MAX_BODY_HEADER: &str = easyssh_sync::http::MAX_BODY_HEADER;
+
+/// How much of an oversized body is read and thrown away before answering
+/// 413, as a multiple of the limit. Bigger announced bodies are refused at
+/// once; their sender may see the connection reset instead of the 413.
+const DRAIN_FACTOR: usize = 4;
+
+/// How long an oversized body may take to arrive while being discarded.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Announces the body limit on every response and answers an oversized
+/// request with a clean 413.
+///
+/// Answering without reading the body makes hyper close the connection while
+/// the client is still writing, and the client can then see a reset (macOS
+/// does) instead of the response. So a body that announces up to
+/// `DRAIN_FACTOR` times the limit is read and discarded first, frame by
+/// frame and never stored, which bounds the memory it costs (none) and the
+/// bandwidth (`DRAIN_FACTOR` times the limit) a refused request can use.
+async fn enforce_body_limit(State(max): State<usize>, request: Request, next: Next) -> Response {
+    let announced = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok());
+    let mut response = match announced {
+        Some(len) if len > max => {
+            if len <= max.saturating_mul(DRAIN_FACTOR) {
+                let mut body = request.into_body();
+                let _ = tokio::time::timeout(DRAIN_TIMEOUT, async {
+                    while let Some(Ok(_frame)) = body.frame().await {}
+                })
+                .await;
+            }
+            ApiError::too_large("request body too large").into_response()
+        }
+        _ => next.run(request).await,
+    };
+    if let Ok(value) = header::HeaderValue::from_str(&max.to_string()) {
+        response.headers_mut().insert(MAX_BODY_HEADER, value);
+    }
+    response
+}
+
 async fn healthz() -> &'static str {
     "ok"
 }
@@ -214,6 +261,10 @@ pub fn router(state: AppState) -> Router {
         .merge(auth)
         .merge(api)
         .layer(DefaultBodyLimit::max(state.config.max_body_bytes))
+        .layer(from_fn_with_state(
+            state.config.max_body_bytes,
+            enforce_body_limit,
+        ))
         .layer(from_fn(log_request))
         .with_state(state)
 }
