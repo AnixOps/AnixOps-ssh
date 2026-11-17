@@ -19,6 +19,19 @@ pub enum Decision {
     ReplaceAndSave,
 }
 
+/// Everything the engine knows about a host key it has to ask about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostKeyDetails {
+    pub host: String,
+    pub port: u16,
+    /// The key's algorithm, e.g. `ssh-ed25519`.
+    pub algorithm: String,
+    /// `SHA256:...`
+    pub fingerprint: String,
+    /// `Unknown` or `Changed` (with the recorded fingerprints).
+    pub status: KnownHostStatus,
+}
+
 /// One prompt of a keyboard-interactive round.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KbdPrompt {
@@ -41,6 +54,20 @@ pub trait Interaction: Send + Sync {
         key_fingerprint_sha256: &str,
         known: KnownHostStatus,
     ) -> Decision;
+
+    /// Like [`Interaction::verify_host_key`] with the key's algorithm and,
+    /// for a changed key, the recorded fingerprints. The engine calls this
+    /// one; the default forwards to `verify_host_key`, so implementations
+    /// that do not need the details stay as they are.
+    async fn verify_host_key_details(&self, details: &HostKeyDetails) -> Decision {
+        self.verify_host_key(
+            &details.host,
+            details.port,
+            &details.fingerprint,
+            details.status.clone(),
+        )
+        .await
+    }
 
     /// The login password, e.g. `"pwuser@example.com's password"`.
     async fn password(&self, prompt: &str) -> Option<String>;

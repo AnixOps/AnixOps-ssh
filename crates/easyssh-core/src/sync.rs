@@ -257,6 +257,7 @@ impl SyncConnection {
             terminal: Default::default(),
             created_at: now,
             updated_at: now,
+            engine: None,
         }
     }
 }

@@ -13,6 +13,7 @@ use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::time::Duration;
+use tokio::sync::mpsc as async_mpsc;
 
 /// Default scrollback per session, in bytes of UTF-8 text.
 pub const DEFAULT_SCROLLBACK: usize = 1024 * 1024;
@@ -190,13 +191,29 @@ struct Io {
 /// Called once with the session id and exit code when the process has ended.
 pub type ExitHook = Box<dyn Fn(&str, Option<u32>) + Send + Sync>;
 
-/// One PTY session.
+/// What the task that owns a built-in engine shell is told to do.
+enum RemoteCmd {
+    Write(Vec<u8>),
+    Resize(u16, u16),
+    Close,
+}
+
+enum Backend {
+    /// A child process on a PTY (the system `ssh`, or a local shell).
+    Pty(Mutex<Io>),
+    /// A shell channel of the built-in engine, owned by a tokio task.
+    Remote(async_mpsc::UnboundedSender<RemoteCmd>),
+}
+
+/// One terminal session.
 pub struct TermSession {
     on_exit: ExitHook,
     id: String,
     host_id: Option<String>,
     state: Mutex<State>,
-    io: Mutex<Io>,
+    io: Backend,
+    /// Which engine runs it and why; absent for a local shell.
+    engine: Mutex<Option<(String, String)>>,
 }
 
 impl TermSession {
@@ -233,11 +250,12 @@ impl TermSession {
                 cols: size.cols,
                 rows: size.rows,
             }),
-            io: Mutex::new(Io {
+            io: Backend::Pty(Mutex::new(Io {
                 master: Some(pair.master),
                 writer: Some(writer),
                 killer,
-            }),
+            })),
+            engine: Mutex::new(None),
         });
 
         let (exit_tx, exit_rx) = mpsc::channel();
@@ -248,17 +266,107 @@ impl TermSession {
             // On Windows the ConPTY keeps the reader open after the child
             // exits; dropping the PTY ends it. Elsewhere the reader has its
             // own handle and still drains what is buffered.
-            let mut io = lock(&waiter.io);
-            io.writer = None;
-            io.master = None;
+            if let Backend::Pty(io) = &waiter.io {
+                let mut io = lock(io);
+                io.writer = None;
+                io.master = None;
+            }
         });
         let pump = session.clone();
         std::thread::spawn(move || pump.pump(reader, &exit_rx));
         Ok(session)
     }
 
+    /// A session whose shell is a channel of the built-in engine. A task
+    /// owns `shell`: it forwards its output, applies writes and resizes and
+    /// ends the session when the shell ends. `keep` is held until then (the
+    /// connection lease).
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_remote(
+        id: String,
+        host_id: Option<String>,
+        shell: easyssh_ssh::ShellHandle,
+        keep: Box<dyn std::any::Any + Send>,
+        cols: u16,
+        rows: u16,
+        scrollback: usize,
+        on_exit: ExitHook,
+    ) -> Arc<TermSession> {
+        let (commands, receiver) = async_mpsc::unbounded_channel();
+        let size = pty_size(cols, rows);
+        let session = Arc::new(TermSession {
+            on_exit,
+            id,
+            host_id,
+            state: Mutex::new(State {
+                scrollback: Scrollback::new(scrollback),
+                subscribers: Vec::new(),
+                exit: None,
+                cols: size.cols,
+                rows: size.rows,
+            }),
+            io: Backend::Remote(commands),
+            engine: Mutex::new(None),
+        });
+        let owner = session.clone();
+        tokio::spawn(async move {
+            let code = owner.run_remote(shell, receiver).await;
+            drop(keep);
+            owner.finish(code);
+        });
+        session
+    }
+
+    async fn run_remote(
+        &self,
+        mut shell: easyssh_ssh::ShellHandle,
+        mut commands: async_mpsc::UnboundedReceiver<RemoteCmd>,
+    ) -> Option<u32> {
+        let mut decoder = Utf8Stream::default();
+        loop {
+            tokio::select! {
+                chunk = shell.read() => match chunk {
+                    Some(bytes) => {
+                        let text = decoder.push(&bytes);
+                        if !text.is_empty() {
+                            self.output(&text);
+                        }
+                    }
+                    None => break,
+                },
+                command = commands.recv() => match command {
+                    Some(RemoteCmd::Write(data)) => {
+                        if shell.write(&data).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(RemoteCmd::Resize(cols, rows)) => {
+                        let _ = shell.resize(u32::from(cols), u32::from(rows)).await;
+                    }
+                    Some(RemoteCmd::Close) | None => {
+                        let _ = shell.close().await;
+                        return None;
+                    }
+                },
+            }
+        }
+        match tokio::time::timeout(Duration::from_secs(3), shell.wait_exit()).await {
+            Ok(status) => status.code(),
+            Err(_) => None,
+        }
+    }
+
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Records which engine runs the session and why.
+    pub fn set_engine(&self, engine: &str, reason: &str) {
+        *lock(&self.engine) = Some((engine.to_owned(), reason.to_owned()));
+    }
+
+    pub fn engine(&self) -> Option<(String, String)> {
+        lock(&self.engine).clone()
     }
 
     fn pump(&self, mut reader: Box<dyn Read + Send>, exit: &mpsc::Receiver<Option<u32>>) {
@@ -303,7 +411,15 @@ impl TermSession {
 
     /// `session.write`: raw bytes to the child's terminal input.
     pub fn write(&self, data: &[u8]) -> Result<(), String> {
-        let mut io = lock(&self.io);
+        let io = match &self.io {
+            Backend::Pty(io) => io,
+            Backend::Remote(commands) => {
+                return commands
+                    .send(RemoteCmd::Write(data.to_vec()))
+                    .map_err(|_| "session has ended".to_owned());
+            }
+        };
+        let mut io = lock(io);
         let writer = io.writer.as_mut().ok_or("session has ended")?;
         writer
             .write_all(data)
@@ -313,12 +429,18 @@ impl TermSession {
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
         let size = pty_size(cols, rows);
-        {
-            let io = lock(&self.io);
-            let Some(master) = io.master.as_ref() else {
-                return Ok(());
-            };
-            master.resize(size).map_err(|e| e.to_string())?;
+        match &self.io {
+            Backend::Pty(io) => {
+                let io = lock(io);
+                let Some(master) = io.master.as_ref() else {
+                    return Ok(());
+                };
+                master.resize(size).map_err(|e| e.to_string())?;
+            }
+            Backend::Remote(commands) => {
+                // A shell that ended no longer cares.
+                let _ = commands.send(RemoteCmd::Resize(size.cols, size.rows));
+            }
         }
         let mut state = lock(&self.state);
         state.cols = size.cols;
@@ -328,7 +450,14 @@ impl TermSession {
 
     /// Kill the child. The exit event follows when the process is gone.
     pub fn kill(&self) {
-        let _ = lock(&self.io).killer.kill();
+        match &self.io {
+            Backend::Pty(io) => {
+                let _ = lock(io).killer.kill();
+            }
+            Backend::Remote(commands) => {
+                let _ = commands.send(RemoteCmd::Close);
+            }
+        }
     }
 
     pub fn is_running(&self) -> bool {
@@ -337,8 +466,9 @@ impl TermSession {
 
     /// The `SessionInfo` entity.
     pub fn info(&self) -> Value {
+        let engine = self.engine();
         let state = lock(&self.state);
-        json!({
+        let mut info = json!({
             "session_id": self.id,
             "host_id": self.host_id,
             "cols": state.cols,
@@ -347,7 +477,12 @@ impl TermSession {
             "exit_code": state.exit.flatten(),
             "first_seq": state.scrollback.first(),
             "next_seq": state.scrollback.next(),
-        })
+        });
+        if let Some((engine, reason)) = engine {
+            info["engine"] = json!(engine);
+            info["engine_reason"] = json!(reason);
+        }
+        info
     }
 
     /// Subscribe `conn` to this session. Under one lock it queues, in this

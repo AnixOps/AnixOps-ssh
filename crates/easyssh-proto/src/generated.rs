@@ -21,6 +21,9 @@ pub struct AppConfig {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub sidebar: ::std::option::Option<SidebarPreferences>,
     pub snippets: ::std::vec::Vec<CommandSnippet>,
+    ///Absent means openssh.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub ssh_engine: ::std::option::Option<SshEngine>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub sync: ::std::option::Option<SyncPreferences>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
@@ -49,9 +52,78 @@ pub struct AskpassEndpointResult {
 #[serde(deny_unknown_fields)]
 pub struct AskpassPromptEvent {
     pub confirm: bool,
+    ///Whether the answer may be shown while typing (keyboard-interactive prompts).
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub echo: ::std::option::Option<bool>,
     pub host: ::std::string::String,
     pub id: u64,
+    ///What the prompt asks for; absent for OpenSSH's askpass prompts.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub kind: ::std::option::Option<AskpassPromptEventKind>,
     pub prompt: ::std::string::String,
+}
+///What the prompt asks for; absent for OpenSSH's askpass prompts.
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum AskpassPromptEventKind {
+    #[serde(rename = "password")]
+    Password,
+    #[serde(rename = "passphrase")]
+    Passphrase,
+    #[serde(rename = "keyboard_interactive")]
+    KeyboardInteractive,
+    #[serde(rename = "confirm")]
+    Confirm,
+}
+impl ::std::fmt::Display for AskpassPromptEventKind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Password => f.write_str("password"),
+            Self::Passphrase => f.write_str("passphrase"),
+            Self::KeyboardInteractive => f.write_str("keyboard_interactive"),
+            Self::Confirm => f.write_str("confirm"),
+        }
+    }
+}
+impl ::std::str::FromStr for AskpassPromptEventKind {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "password" => Ok(Self::Password),
+            "passphrase" => Ok(Self::Passphrase),
+            "keyboard_interactive" => Ok(Self::KeyboardInteractive),
+            "confirm" => Ok(Self::Confirm),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for AskpassPromptEventKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for AskpassPromptEventKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
 }
 ///Command `askpass.reply` payload. answer null cancels the prompt. Reply: null.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -92,6 +164,9 @@ pub struct Connection {
     pub color: ::std::option::Option<::std::string::String>,
     pub created_at: ::chrono::DateTime<::chrono::offset::Utc>,
     pub dynamic_forwards: ::std::vec::Vec<::std::string::String>,
+    ///Absent means auto.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub engine: ::std::option::Option<EnginePreference>,
     pub favorite: bool,
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub group_id: ::std::option::Option<::std::string::String>,
@@ -215,6 +290,99 @@ impl ::std::convert::From<::serde_json::Value> for EasySshProtocol {
         Self(value)
     }
 }
+///`EngineConnection`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct EngineConnection {
+    pub host_id: ::std::string::String,
+    pub jump: ::std::vec::Vec<::std::string::String>,
+    pub leases: u64,
+    pub target: ::std::string::String,
+}
+///Command `engine.connections` payload (debug). Reply: EngineConnectionsResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct EngineConnectionsParams {}
+///`opened` counts every connection the russh engine has opened since the daemon started.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct EngineConnectionsResult {
+    pub connections: ::std::vec::Vec<EngineConnection>,
+    pub live: u64,
+    pub opened: u64,
+}
+///Rust: domain::EnginePreference. Per-host override of the global engine; `auto` follows the global setting.
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum EnginePreference {
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "russh")]
+    Russh,
+    #[serde(rename = "openssh")]
+    Openssh,
+}
+impl ::std::fmt::Display for EnginePreference {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Auto => f.write_str("auto"),
+            Self::Russh => f.write_str("russh"),
+            Self::Openssh => f.write_str("openssh"),
+        }
+    }
+}
+impl ::std::str::FromStr for EnginePreference {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "auto" => Ok(Self::Auto),
+            "russh" => Ok(Self::Russh),
+            "openssh" => Ok(Self::Openssh),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for EnginePreference {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for EnginePreference {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///Command `engine.resolve` payload. Reply: EngineResolveResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct EngineResolveParams {
+    pub host_id: ::std::string::String,
+}
+///`EngineResolveResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct EngineResolveResult {
+    pub engine: SshEngine,
+    pub reason: ::std::string::String,
+}
 ///Daemon -> UI notification.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
@@ -246,6 +414,151 @@ pub struct Group {
     pub name: ::std::string::String,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub parent_id: ::std::option::Option<::std::string::String>,
+}
+///`replace_and_save` is the only way to accept a changed key; any other answer to a changed key refuses the connection.
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum HostKeyDecision {
+    #[serde(rename = "reject")]
+    Reject,
+    #[serde(rename = "accept_once")]
+    AcceptOnce,
+    #[serde(rename = "accept_and_save")]
+    AcceptAndSave,
+    #[serde(rename = "replace_and_save")]
+    ReplaceAndSave,
+}
+impl ::std::fmt::Display for HostKeyDecision {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Reject => f.write_str("reject"),
+            Self::AcceptOnce => f.write_str("accept_once"),
+            Self::AcceptAndSave => f.write_str("accept_and_save"),
+            Self::ReplaceAndSave => f.write_str("replace_and_save"),
+        }
+    }
+}
+impl ::std::str::FromStr for HostKeyDecision {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "reject" => Ok(Self::Reject),
+            "accept_once" => Ok(Self::AcceptOnce),
+            "accept_and_save" => Ok(Self::AcceptAndSave),
+            "replace_and_save" => Ok(Self::ReplaceAndSave),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for HostKeyDecision {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for HostKeyDecision {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`HostKeyStatus`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum HostKeyStatus {
+    #[serde(rename = "unknown")]
+    Unknown,
+    #[serde(rename = "changed")]
+    Changed,
+}
+impl ::std::fmt::Display for HostKeyStatus {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Unknown => f.write_str("unknown"),
+            Self::Changed => f.write_str("changed"),
+        }
+    }
+}
+impl ::std::str::FromStr for HostKeyStatus {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "unknown" => Ok(Self::Unknown),
+            "changed" => Ok(Self::Changed),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for HostKeyStatus {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for HostKeyStatus {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///Event `hostkey.prompt` payload: the engine needs a decision about a host key. Answer with `hostkey.reply`.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostkeyPromptEvent {
+    pub algorithm: ::std::string::String,
+    ///Fingerprints on record when the key changed.
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub expected: ::std::vec::Vec<::std::string::String>,
+    pub fingerprint: ::std::string::String,
+    pub host: ::std::string::String,
+    pub id: u64,
+    pub port: u16,
+    pub status: HostKeyStatus,
+}
+///Command `hostkey.reply` payload.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostkeyReplyParams {
+    pub decision: HostKeyDecision,
+    pub id: u64,
+}
+///Event `hostkey.resolved` payload: the prompt was answered, cancelled or timed out; close its dialog.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostkeyResolvedEvent {
+    pub id: u64,
 }
 ///Event `hosts.changed` payload. Sent to every connected client after `hosts.save` or `hosts.delete`; clients refresh their host list.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
@@ -460,6 +773,12 @@ pub struct SessionExitEvent {
 #[serde(deny_unknown_fields)]
 pub struct SessionInfo {
     pub cols: u16,
+    ///The engine the session runs on; absent for a local shell.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub engine: ::std::option::Option<SshEngine>,
+    ///Why that engine was chosen, in English, for display in a tooltip.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub engine_reason: ::std::option::Option<::std::string::String>,
     ///Set once the session has ended; null while running or when the status is unknown.
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub exit_code: ::std::option::Option<i64>,
@@ -499,6 +818,12 @@ pub struct SessionOpenParams {
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct SessionOpenResult {
+    ///The engine the session runs on; absent for a local shell.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub engine: ::std::option::Option<SshEngine>,
+    ///Why that engine was chosen, in English, for display in a tooltip.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub engine_reason: ::std::option::Option<::std::string::String>,
     pub session_id: ::std::string::String,
 }
 ///Event `session.output` payload. Sent to every client attached to the session, first as replay of the buffered scrollback (from the requested offset), then live.
@@ -540,6 +865,136 @@ pub struct SessionResizeParams {
 pub struct SessionWriteParams {
     pub data: ::std::string::String,
     pub session_id: ::std::string::String,
+}
+///Command `sftp.close` payload.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SftpCloseParams {
+    pub sftp_id: ::std::string::String,
+}
+///`modified` is Unix seconds.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SftpEntry {
+    pub kind: SftpEntryKind,
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub modified: ::std::option::Option<u64>,
+    pub name: ::std::string::String,
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub permissions: ::std::option::Option<u64>,
+    pub size: u64,
+}
+///`SftpEntryKind`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum SftpEntryKind {
+    #[serde(rename = "file")]
+    File,
+    #[serde(rename = "dir")]
+    Dir,
+    #[serde(rename = "symlink")]
+    Symlink,
+    #[serde(rename = "other")]
+    Other,
+}
+impl ::std::fmt::Display for SftpEntryKind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::File => f.write_str("file"),
+            Self::Dir => f.write_str("dir"),
+            Self::Symlink => f.write_str("symlink"),
+            Self::Other => f.write_str("other"),
+        }
+    }
+}
+impl ::std::str::FromStr for SftpEntryKind {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "file" => Ok(Self::File),
+            "dir" => Ok(Self::Dir),
+            "symlink" => Ok(Self::Symlink),
+            "other" => Ok(Self::Other),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for SftpEntryKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for SftpEntryKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///Command `sftp.list` payload. Reply: SftpListResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SftpListParams {
+    pub path: ::std::string::String,
+    pub sftp_id: ::std::string::String,
+}
+///`SftpListResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SftpListResult {
+    pub entries: ::std::vec::Vec<SftpEntry>,
+}
+///Command `sftp.mkdir` payload.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SftpMkdirParams {
+    pub path: ::std::string::String,
+    pub sftp_id: ::std::string::String,
+}
+///Command `sftp.open` payload (russh engine). Reply: SftpOpenResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SftpOpenParams {
+    pub host_id: ::std::string::String,
+}
+///`SftpOpenResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SftpOpenResult {
+    pub home: ::std::string::String,
+    pub sftp_id: ::std::string::String,
+}
+///Command `sftp.remove` payload.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SftpRemoveParams {
+    pub directory: bool,
+    pub path: ::std::string::String,
+    pub sftp_id: ::std::string::String,
+}
+///Command `sftp.rename` payload.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SftpRenameParams {
+    pub from: ::std::string::String,
+    pub sftp_id: ::std::string::String,
+    pub to: ::std::string::String,
 }
 ///`SidebarNavigation`
 #[derive(
@@ -617,6 +1072,61 @@ pub struct SidebarPreferences {
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub selected_tag: ::std::option::Option<::std::string::String>,
     pub width: f64,
+}
+///Rust: domain::SshEngine. The global engine setting, and the engine a session actually runs on.
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum SshEngine {
+    #[serde(rename = "openssh")]
+    Openssh,
+    #[serde(rename = "russh")]
+    Russh,
+}
+impl ::std::fmt::Display for SshEngine {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Openssh => f.write_str("openssh"),
+            Self::Russh => f.write_str("russh"),
+        }
+    }
+}
+impl ::std::str::FromStr for SshEngine {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "openssh" => Ok(Self::Openssh),
+            "russh" => Ok(Self::Russh),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for SshEngine {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for SshEngine {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
 }
 ///Rust: domain::SyncPreferences.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -723,6 +1233,12 @@ pub struct Transfer {
     pub started_at: ::std::option::Option<::chrono::DateTime<::chrono::offset::Utc>>,
     pub status: TransferStatus,
 }
+///Command `transfer.cancel` payload.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferCancelParams {
+    pub transfer_id: ::std::string::String,
+}
 ///`TransferDirection`
 #[derive(
     ::serde::Deserialize,
@@ -777,6 +1293,98 @@ impl ::std::convert::TryFrom<::std::string::String> for TransferDirection {
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
+}
+///Event `transfer.done` payload.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferDoneEvent {
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub error: ::std::option::Option<::std::string::String>,
+    pub status: TransferDoneEventStatus,
+    pub transfer_id: ::std::string::String,
+}
+///`TransferDoneEventStatus`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum TransferDoneEventStatus {
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+}
+impl ::std::fmt::Display for TransferDoneEventStatus {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Completed => f.write_str("completed"),
+            Self::Failed => f.write_str("failed"),
+            Self::Cancelled => f.write_str("cancelled"),
+        }
+    }
+}
+impl ::std::str::FromStr for TransferDoneEventStatus {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for TransferDoneEventStatus {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for TransferDoneEventStatus {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///Event `transfer.progress` payload: bytes moved so far.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferProgressEvent {
+    pub bytes: u64,
+    pub transfer_id: ::std::string::String,
+}
+///Command `transfer.start` payload. Both paths are final (an upload names the remote file, not its directory). Progress and the end arrive as events. Reply: TransferStartResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferStartParams {
+    pub direction: TransferDirection,
+    pub local_path: ::std::string::String,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub recursive: ::std::option::Option<bool>,
+    pub remote_path: ::std::string::String,
+    pub sftp_id: ::std::string::String,
+}
+///`TransferStartResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferStartResult {
+    pub transfer_id: ::std::string::String,
 }
 ///`TransferStatus`
 #[derive(
@@ -931,6 +1539,121 @@ impl ::std::convert::TryFrom<::std::string::String> for TunnelKind {
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
+}
+///Command `tunnel.list` payload. Reply: TunnelListResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct TunnelListParams {}
+///`TunnelListResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TunnelListResult {
+    pub tunnels: ::std::vec::Vec<TunnelState>,
+}
+///Command `tunnel.start` payload (russh engine). Reply: TunnelStartResult; later changes arrive as `tunnel.status`.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TunnelStartParams {
+    pub tunnel: Tunnel,
+}
+///`TunnelStartResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TunnelStartResult {
+    pub bind_port: u16,
+    pub id: ::std::string::String,
+}
+///`TunnelState`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TunnelState {
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub bind_port: ::std::option::Option<u16>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub error: ::std::option::Option<::std::string::String>,
+    pub host_id: ::std::string::String,
+    pub id: ::std::string::String,
+    pub state: TunnelStateName,
+}
+///`TunnelStateName`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum TunnelStateName {
+    #[serde(rename = "starting")]
+    Starting,
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "stopped")]
+    Stopped,
+    #[serde(rename = "failed")]
+    Failed,
+}
+impl ::std::fmt::Display for TunnelStateName {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Starting => f.write_str("starting"),
+            Self::Running => f.write_str("running"),
+            Self::Stopped => f.write_str("stopped"),
+            Self::Failed => f.write_str("failed"),
+        }
+    }
+}
+impl ::std::str::FromStr for TunnelStateName {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "starting" => Ok(Self::Starting),
+            "running" => Ok(Self::Running),
+            "stopped" => Ok(Self::Stopped),
+            "failed" => Ok(Self::Failed),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for TunnelStateName {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for TunnelStateName {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///Event `tunnel.status` payload.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TunnelStatusEvent {
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub bind_port: ::std::option::Option<u16>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub error: ::std::option::Option<::std::string::String>,
+    pub id: ::std::string::String,
+    pub state: TunnelStateName,
+}
+///Command `tunnel.stop` payload.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TunnelStopParams {
+    pub id: ::std::string::String,
 }
 ///files/snippets/forwarding are legacy values kept so schema 5 metadata still deserializes.
 #[derive(

@@ -7,6 +7,7 @@ pub mod askpass;
 pub mod channel;
 mod client;
 pub mod daemon;
+pub mod engine;
 mod error;
 pub mod frame;
 pub mod launch;

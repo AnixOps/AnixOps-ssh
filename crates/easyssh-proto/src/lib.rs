@@ -51,6 +51,24 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "AskpassEndpointParams",
         "AskpassEndpointResult",
     ),
+    ("hostkey.reply", "HostkeyReplyParams", ""),
+    ("engine.resolve", "EngineResolveParams", "EngineResolveResult"),
+    (
+        "engine.connections",
+        "EngineConnectionsParams",
+        "EngineConnectionsResult",
+    ),
+    ("sftp.open", "SftpOpenParams", "SftpOpenResult"),
+    ("sftp.list", "SftpListParams", "SftpListResult"),
+    ("sftp.mkdir", "SftpMkdirParams", ""),
+    ("sftp.remove", "SftpRemoveParams", ""),
+    ("sftp.rename", "SftpRenameParams", ""),
+    ("sftp.close", "SftpCloseParams", ""),
+    ("transfer.start", "TransferStartParams", "TransferStartResult"),
+    ("transfer.cancel", "TransferCancelParams", ""),
+    ("tunnel.start", "TunnelStartParams", "TunnelStartResult"),
+    ("tunnel.stop", "TunnelStopParams", ""),
+    ("tunnel.list", "TunnelListParams", "TunnelListResult"),
 ];
 
 /// The event set: `(kind, payload schema)`.
@@ -60,6 +78,11 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("askpass.prompt", "AskpassPromptEvent"),
     ("askpass.resolved", "AskpassResolvedEvent"),
     ("hosts.changed", "HostsChangedEvent"),
+    ("hostkey.prompt", "HostkeyPromptEvent"),
+    ("hostkey.resolved", "HostkeyResolvedEvent"),
+    ("transfer.progress", "TransferProgressEvent"),
+    ("transfer.done", "TransferDoneEvent"),
+    ("tunnel.status", "TunnelStatusEvent"),
 ];
 
 fn validators() -> &'static HashMap<String, Validator> {

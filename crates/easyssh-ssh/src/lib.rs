@@ -26,7 +26,7 @@ pub use auth::{load_identity, plan as plan_auth, security_key_type, Stage, Stage
 pub use channels::{ExecOutput, ExitStatus, ShellHandle, ShellOptions};
 pub use error::{AuthMethod, Error, Result};
 pub use forward::{Forward, ForwardKind};
-pub use interaction::{Decision, DenyAll, Interaction, KbdPrompt};
+pub use interaction::{Decision, DenyAll, HostKeyDetails, Interaction, KbdPrompt};
 pub use known_hosts::{KnownHostStatus, KnownHosts, KnownHostsFile, MemoryKnownHosts};
 pub use params::{AgentSource, ConnectParams};
 pub use session::Session;

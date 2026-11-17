@@ -191,6 +191,10 @@
         "updated_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "engine": {
+          "$ref": "#/$defs/EnginePreference",
+          "description": "Absent means auto."
         }
       },
       "required": [
@@ -747,6 +751,10 @@
         },
         "experimental": {
           "$ref": "#/$defs/ExperimentalFeatures"
+        },
+        "ssh_engine": {
+          "$ref": "#/$defs/SshEngine",
+          "description": "Absent means openssh."
         }
       },
       "required": [
@@ -1023,6 +1031,14 @@
       "properties": {
         "session_id": {
           "type": "string"
+        },
+        "engine": {
+          "$ref": "#/$defs/SshEngine",
+          "description": "The engine the session runs on; absent for a local shell."
+        },
+        "engine_reason": {
+          "type": "string",
+          "description": "Why that engine was chosen, in English, for display in a tooltip."
         }
       },
       "required": [
@@ -1134,6 +1150,14 @@
           "type": "integer",
           "minimum": 0,
           "description": "Offset the next output will have (total bytes produced)."
+        },
+        "engine": {
+          "$ref": "#/$defs/SshEngine",
+          "description": "The engine the session runs on; absent for a local shell."
+        },
+        "engine_reason": {
+          "type": "string",
+          "description": "Why that engine was chosen, in English, for display in a tooltip."
         }
       },
       "required": [
@@ -1338,6 +1362,20 @@
         },
         "confirm": {
           "type": "boolean"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "password",
+            "passphrase",
+            "keyboard_interactive",
+            "confirm"
+          ],
+          "description": "What the prompt asks for; absent for OpenSSH's askpass prompts."
+        },
+        "echo": {
+          "type": "boolean",
+          "description": "Whether the answer may be shown while typing (keyboard-interactive prompts)."
         }
       },
       "required": [
@@ -1390,6 +1428,652 @@
       ],
       "additionalProperties": false,
       "description": "Event `askpass.resolved` payload. The prompt `id` was answered, cancelled or timed out; clients close any dialog for it."
+    },
+    "SshEngine": {
+      "type": "string",
+      "enum": [
+        "openssh",
+        "russh"
+      ],
+      "description": "Rust: domain::SshEngine. The global engine setting, and the engine a session actually runs on."
+    },
+    "EnginePreference": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "russh",
+        "openssh"
+      ],
+      "description": "Rust: domain::EnginePreference. Per-host override of the global engine; `auto` follows the global setting."
+    },
+    "HostKeyStatus": {
+      "type": "string",
+      "enum": [
+        "unknown",
+        "changed"
+      ]
+    },
+    "HostKeyDecision": {
+      "type": "string",
+      "enum": [
+        "reject",
+        "accept_once",
+        "accept_and_save",
+        "replace_and_save"
+      ],
+      "description": "`replace_and_save` is the only way to accept a changed key; any other answer to a changed key refuses the connection."
+    },
+    "HostkeyPromptEvent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "algorithm": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/HostKeyStatus"
+        },
+        "expected": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Fingerprints on record when the key changed."
+        }
+      },
+      "required": [
+        "id",
+        "host",
+        "port",
+        "algorithm",
+        "fingerprint",
+        "status"
+      ],
+      "additionalProperties": false,
+      "description": "Event `hostkey.prompt` payload: the engine needs a decision about a host key. Answer with `hostkey.reply`."
+    },
+    "HostkeyResolvedEvent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false,
+      "description": "Event `hostkey.resolved` payload: the prompt was answered, cancelled or timed out; close its dialog."
+    },
+    "HostkeyReplyParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "decision": {
+          "$ref": "#/$defs/HostKeyDecision"
+        }
+      },
+      "required": [
+        "id",
+        "decision"
+      ],
+      "additionalProperties": false,
+      "description": "Command `hostkey.reply` payload."
+    },
+    "EngineResolveParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `engine.resolve` payload. Reply: EngineResolveResult."
+    },
+    "EngineResolveResult": {
+      "type": "object",
+      "properties": {
+        "engine": {
+          "$ref": "#/$defs/SshEngine"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "engine",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "EngineConnectionsParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `engine.connections` payload (debug). Reply: EngineConnectionsResult."
+    },
+    "EngineConnection": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "jump": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "leases": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "host_id",
+        "target",
+        "jump",
+        "leases"
+      ],
+      "additionalProperties": false
+    },
+    "EngineConnectionsResult": {
+      "type": "object",
+      "properties": {
+        "opened": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "live": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "connections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EngineConnection"
+          }
+        }
+      },
+      "required": [
+        "opened",
+        "live",
+        "connections"
+      ],
+      "additionalProperties": false,
+      "description": "`opened` counts every connection the russh engine has opened since the daemon started."
+    },
+    "SftpEntryKind": {
+      "type": "string",
+      "enum": [
+        "file",
+        "dir",
+        "symlink",
+        "other"
+      ]
+    },
+    "SftpEntry": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/SftpEntryKind"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "modified": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "permissions": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "size",
+        "modified",
+        "permissions"
+      ],
+      "additionalProperties": false,
+      "description": "`modified` is Unix seconds."
+    },
+    "SftpOpenParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `sftp.open` payload (russh engine). Reply: SftpOpenResult."
+    },
+    "SftpOpenResult": {
+      "type": "object",
+      "properties": {
+        "sftp_id": {
+          "type": "string"
+        },
+        "home": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sftp_id",
+        "home"
+      ],
+      "additionalProperties": false
+    },
+    "SftpListParams": {
+      "type": "object",
+      "properties": {
+        "sftp_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sftp_id",
+        "path"
+      ],
+      "additionalProperties": false,
+      "description": "Command `sftp.list` payload. Reply: SftpListResult."
+    },
+    "SftpListResult": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SftpEntry"
+          }
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    "SftpMkdirParams": {
+      "type": "object",
+      "properties": {
+        "sftp_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sftp_id",
+        "path"
+      ],
+      "additionalProperties": false,
+      "description": "Command `sftp.mkdir` payload."
+    },
+    "SftpRemoveParams": {
+      "type": "object",
+      "properties": {
+        "sftp_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "directory": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sftp_id",
+        "path",
+        "directory"
+      ],
+      "additionalProperties": false,
+      "description": "Command `sftp.remove` payload."
+    },
+    "SftpRenameParams": {
+      "type": "object",
+      "properties": {
+        "sftp_id": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sftp_id",
+        "from",
+        "to"
+      ],
+      "additionalProperties": false,
+      "description": "Command `sftp.rename` payload."
+    },
+    "SftpCloseParams": {
+      "type": "object",
+      "properties": {
+        "sftp_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sftp_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `sftp.close` payload."
+    },
+    "TransferStartParams": {
+      "type": "object",
+      "properties": {
+        "sftp_id": {
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/TransferDirection"
+        },
+        "local_path": {
+          "type": "string"
+        },
+        "remote_path": {
+          "type": "string"
+        },
+        "recursive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sftp_id",
+        "direction",
+        "local_path",
+        "remote_path"
+      ],
+      "additionalProperties": false,
+      "description": "Command `transfer.start` payload. Both paths are final (an upload names the remote file, not its directory). Progress and the end arrive as events. Reply: TransferStartResult."
+    },
+    "TransferStartResult": {
+      "type": "object",
+      "properties": {
+        "transfer_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "transfer_id"
+      ],
+      "additionalProperties": false
+    },
+    "TransferCancelParams": {
+      "type": "object",
+      "properties": {
+        "transfer_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "transfer_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `transfer.cancel` payload."
+    },
+    "TransferProgressEvent": {
+      "type": "object",
+      "properties": {
+        "transfer_id": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "transfer_id",
+        "bytes"
+      ],
+      "additionalProperties": false,
+      "description": "Event `transfer.progress` payload: bytes moved so far."
+    },
+    "TransferDoneEvent": {
+      "type": "object",
+      "properties": {
+        "transfer_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "transfer_id",
+        "status"
+      ],
+      "additionalProperties": false,
+      "description": "Event `transfer.done` payload."
+    },
+    "TunnelStartParams": {
+      "type": "object",
+      "properties": {
+        "tunnel": {
+          "$ref": "#/$defs/Tunnel"
+        }
+      },
+      "required": [
+        "tunnel"
+      ],
+      "additionalProperties": false,
+      "description": "Command `tunnel.start` payload (russh engine). Reply: TunnelStartResult; later changes arrive as `tunnel.status`."
+    },
+    "TunnelStartResult": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "bind_port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "id",
+        "bind_port"
+      ],
+      "additionalProperties": false
+    },
+    "TunnelStopParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `tunnel.stop` payload."
+    },
+    "TunnelListParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `tunnel.list` payload. Reply: TunnelListResult."
+    },
+    "TunnelStateName": {
+      "type": "string",
+      "enum": [
+        "starting",
+        "running",
+        "stopped",
+        "failed"
+      ]
+    },
+    "TunnelState": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/TunnelStateName"
+        },
+        "bind_port": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "host_id",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "TunnelListResult": {
+      "type": "object",
+      "properties": {
+        "tunnels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TunnelState"
+          }
+        }
+      },
+      "required": [
+        "tunnels"
+      ],
+      "additionalProperties": false
+    },
+    "TunnelStatusEvent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/TunnelStateName"
+        },
+        "bind_port": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "state"
+      ],
+      "additionalProperties": false,
+      "description": "Event `tunnel.status` payload."
     }
   }
 }

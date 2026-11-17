@@ -184,6 +184,7 @@ impl Entity for Host {
             },
             created_at: parse_ts(&row.get::<_, String>("created_at")?)?,
             updated_at: meta.updated_at,
+            engine: None,
         };
         Ok(Self {
             connection,

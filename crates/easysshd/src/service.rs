@@ -3,19 +3,23 @@
 
 use crate::agent::validate_agent_socket;
 use crate::askpass::{Hub, Prompt};
+use crate::engine::interact::{parse_decision, Broadcast};
+use crate::engine::{self, plan, Engine, KnownHostsPaths};
 use crate::log::Logger;
 use crate::server::{BoxFuture, Outbox, Service};
 use crate::terminal::{TermSession, DEFAULT_SCROLLBACK};
 use easyssh_core::security::{validate_alias, validate_connection};
-use easyssh_core::{AppConfig, ConfigStore, Connection, OpenSsh, SshInvocation};
+use easyssh_core::{AppConfig, ConfigStore, Connection, OpenSsh, SshEngine, SshInvocation};
 use easyssh_proto as proto;
+use easyssh_ssh::Error as SshError;
 use portable_pty::CommandBuilder;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::future::Future;
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
 /// Hosts discovered in `~/.ssh/config` have no saved record, so their id is
@@ -69,6 +73,9 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 type Clients = Arc<Mutex<HashMap<u64, Outbox>>>;
 
 pub struct Daemon {
+    /// For tasks that outlive one request (connecting may wait for the user).
+    me: Weak<Daemon>,
+    engine: Arc<Engine>,
     cfg: DaemonConfig,
     /// Serialises read-modify-write of the host file.
     store_lock: Mutex<()>,
@@ -121,12 +128,18 @@ impl Daemon {
         });
         let askpass = Hub::bind(
             Arc::new(move |p: Prompt| {
-                let payload = json!({
+                let mut payload = json!({
                     "id": p.id,
                     "host": p.host,
                     "prompt": p.prompt,
                     "confirm": p.confirm,
                 });
+                if let Some(kind) = p.kind {
+                    payload["kind"] = json!(kind);
+                }
+                if let Some(echo) = p.echo {
+                    payload["echo"] = json!(echo);
+                }
                 // Every attached client may answer; the first reply wins.
                 let delivered = lock(&notify_clients)
                     .values()
@@ -149,7 +162,31 @@ impl Daemon {
             "daemon created, build {build_version}, schema {}",
             proto::SCHEMA_VERSION
         ));
-        Ok(Arc::new(Daemon {
+        let broadcast_clients = clients.clone();
+        let broadcast: Broadcast = Arc::new(move |kind: &str, payload: Value| {
+            lock(&broadcast_clients)
+                .values()
+                .filter(|outbox| outbox.event(kind, payload.clone()))
+                .count()
+        });
+        let known_hosts = KnownHostsPaths {
+            app: cfg
+                .config_store
+                .path()
+                .parent()
+                .map(|dir| dir.join("known_hosts"))
+                .unwrap_or_else(|| PathBuf::from("known_hosts")),
+            user: dirs::home_dir().map(|home| home.join(".ssh").join("known_hosts")),
+        };
+        let engine = Engine::new(
+            askpass.clone(),
+            broadcast,
+            known_hosts,
+            engine::registry::DEFAULT_LINGER,
+        );
+        Ok(Arc::new_cyclic(|me| Daemon {
+            me: me.clone(),
+            engine,
             cfg,
             store_lock: Mutex::new(()),
             sessions: Mutex::new(HashMap::new()),
@@ -159,6 +196,19 @@ impl Daemon {
             log,
             draining: AtomicBool::new(false),
         }))
+    }
+
+    /// Where the built-in engine keeps and reads host keys (default: a
+    /// `known_hosts` file beside the host list, and `~/.ssh/known_hosts` as
+    /// a read-only fallback).
+    pub fn set_known_hosts(&self, app: PathBuf, user: Option<PathBuf>) {
+        self.engine.set_known_hosts(KnownHostsPaths { app, user });
+    }
+
+    /// How long a shared connection stays up after its last user left
+    /// (default 30 seconds).
+    pub fn set_connection_linger(&self, linger: Duration) {
+        self.engine.set_linger(linger);
     }
 
     pub fn log(&self) -> &Logger {
@@ -240,6 +290,10 @@ impl Daemon {
     pub fn shutdown(&self) {
         for session in lock(&self.sessions).values() {
             session.kill();
+        }
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let engine = self.engine.clone();
+            runtime.spawn(async move { engine.shutdown().await });
         }
     }
 

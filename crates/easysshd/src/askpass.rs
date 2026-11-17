@@ -116,6 +116,11 @@ pub struct Prompt {
     pub prompt: String,
     /// A yes/no question, such as accepting a new host key.
     pub confirm: bool,
+    /// What a prompt of the built-in engine asks for (`password`,
+    /// `passphrase`, `keyboard_interactive`); `None` for OpenSSH's.
+    pub kind: Option<&'static str>,
+    /// Whether the answer may be shown while typing.
+    pub echo: Option<bool>,
 }
 
 /// Delivers a prompt to whoever can answer it; `false` when nobody can.
@@ -185,6 +190,47 @@ impl Hub {
         format!("{} {}", self.port, self.token)
     }
 
+    /// A prompt of the built-in engine: shown to the attached clients like an
+    /// OpenSSH one, answered with `askpass.reply`. `None` when the user
+    /// cancelled, nobody could be asked, or nobody answered in time.
+    pub async fn prompt(
+        &self,
+        host: &str,
+        prompt: &str,
+        kind: &'static str,
+        echo: bool,
+    ) -> Option<String> {
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        let (sender, receiver) = oneshot::channel();
+        lock(&self.pending).insert(id, sender);
+        let shown = (self.notify)(Prompt {
+            id,
+            host: host.to_owned(),
+            prompt: prompt.to_owned(),
+            confirm: false,
+            kind: Some(kind),
+            echo: Some(echo),
+        });
+        if !shown {
+            lock(&self.pending).remove(&id);
+            return None;
+        }
+        let answer = tokio::time::timeout(self.answer_timeout, receiver)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten();
+        lock(&self.pending).remove(&id);
+        (self.resolved)(id);
+        answer
+    }
+
+    /// Allocates an id that no askpass prompt uses, for other kinds of
+    /// questions (host keys) that share the clients' dialogs.
+    pub fn next_id(&self) -> u64 {
+        self.next.fetch_add(1, Ordering::Relaxed)
+    }
+
     /// `askpass.reply`: deliver the user's answer (`None` cancels). Unknown or
     /// already answered ids are ignored.
     pub fn reply(&self, id: u64, answer: Option<String>) {
@@ -223,6 +269,8 @@ impl Hub {
             host: request.host,
             confirm: request.prompt.contains("(yes/no"),
             prompt: request.prompt,
+            kind: None,
+            echo: None,
         };
         if !(self.notify)(prompt) {
             lock(&self.pending).remove(&id);
