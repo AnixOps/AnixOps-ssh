@@ -31,6 +31,8 @@ export interface HostFields {
   port: number;
   proxyJump: string | null;
   notes: string;
+  /** Opt-in: send the shell integration script after login. */
+  shellIntegration: boolean;
 }
 
 export interface HostInput {

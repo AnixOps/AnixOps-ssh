@@ -19,7 +19,9 @@ export type AppShortcut =
   | "focus-up"
   | "focus-down"
   | "toggle-broadcast"
-  | "toggle-maximise";
+  | "toggle-maximise"
+  | "prev-prompt"
+  | "next-prompt";
 
 const letters: Record<string, AppShortcut> = {
   k: "search-hosts",
@@ -51,14 +53,20 @@ export interface KeyInput {
  *
  *  Windows and Linux: Ctrl+Shift+key; Alt added for "split down".
  *  macOS: Cmd+key; Cmd+Shift+D splits down, Cmd+Option+Arrow moves focus,
- *  Cmd+Shift+B toggles broadcast. */
+ *  Cmd+Shift+B toggles broadcast. Prompt jumps: Ctrl+Shift+PageUp/PageDown, or
+ *  Cmd+Up/Down on macOS. */
 export function resolveShortcut(input: KeyInput, mac: boolean): AppShortcut | null {
   const { shiftKey, altKey } = input;
   const letter = input.key.toLowerCase();
   const isD = letter === "d" || input.code === "KeyD";
   if (mac) {
     if (!input.metaKey || input.ctrlKey) return null;
-    if (arrows[input.key]) return altKey && !shiftKey ? arrows[input.key] : null;
+    if (arrows[input.key]) {
+      if (altKey && !shiftKey) return arrows[input.key];
+      // ⌘↑ / ⌘↓ jump between prompts (shell integration).
+      if (!altKey && !shiftKey) return input.key === "ArrowUp" ? "prev-prompt" : input.key === "ArrowDown" ? "next-prompt" : null;
+      return null;
+    }
     if (altKey) return null;
     if (isD) return shiftKey ? "split-down" : "split-right";
     if (letter === "b") return shiftKey ? "toggle-broadcast" : null;
@@ -71,6 +79,9 @@ export function resolveShortcut(input: KeyInput, mac: boolean): AppShortcut | nu
   if (isD) return altKey ? "split-down" : "split-right";
   if (altKey) return null;
   if (arrows[input.key]) return arrows[input.key];
+  // Ctrl+Shift+Arrow already moves pane focus, so prompts use the page keys.
+  if (input.key === "PageUp") return "prev-prompt";
+  if (input.key === "PageDown") return "next-prompt";
   if (letter === "b") return "toggle-broadcast";
   if (input.key === "Enter") return "toggle-maximise";
   return letters[letter] ?? null;
@@ -92,6 +103,8 @@ const labels: Partial<Record<AppShortcut, { pc: string; mac: string }>> = {
   "toggle-broadcast": { pc: "Ctrl+Shift+B", mac: "⌘⇧B" },
   "toggle-maximise": { pc: "Ctrl+Shift+Enter", mac: "⌘⇧↵" },
   "close-tab": { pc: "Ctrl+Shift+W", mac: "⌘W" },
+  "prev-prompt": { pc: "Ctrl+Shift+PageUp", mac: "⌘↑" },
+  "next-prompt": { pc: "Ctrl+Shift+PageDown", mac: "⌘↓" },
 };
 
 export function shortcutHint(shortcut: AppShortcut | "focus-pane"): string {

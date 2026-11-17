@@ -32,6 +32,14 @@ describe("shortcuts on Windows and Linux", () => {
     expect(pc({ key: "ArrowUp" })).toBe("focus-up");
   });
 
+  it("jumps between prompts with the page keys, not the pane-focus arrows", () => {
+    expect(pc({ key: "PageUp" })).toBe("prev-prompt");
+    expect(pc({ key: "PageDown" })).toBe("next-prompt");
+    expect(pc({ key: "ArrowUp" })).toBe("focus-up");
+    expect(resolveShortcut(key({ key: "PageUp", ctrlKey: true }), false)).toBeNull();
+    expect(pc({ key: "PageUp", altKey: true })).toBeNull();
+  });
+
   it("leaves plain Ctrl shortcuts to the shell", () => {
     expect(resolveShortcut(key({ key: "d", ctrlKey: true }), false)).toBeNull();
     expect(resolveShortcut(key({ key: "w", ctrlKey: true }), false)).toBeNull();
@@ -47,6 +55,14 @@ describe("shortcuts on Windows and Linux", () => {
 
 describe("shortcuts on macOS", () => {
   const mac = (init: Partial<KeyInput> & { key: string }) => resolveShortcut(key({ metaKey: true, ...init }), true);
+
+  it("jumps between prompts with Cmd+Up and Cmd+Down", () => {
+    expect(mac({ key: "ArrowUp" })).toBe("prev-prompt");
+    expect(mac({ key: "ArrowDown" })).toBe("next-prompt");
+    expect(mac({ key: "ArrowUp", altKey: true })).toBe("focus-up");
+    expect(mac({ key: "ArrowLeft" })).toBeNull();
+    expect(mac({ key: "ArrowUp", shiftKey: true })).toBeNull();
+  });
 
   it("keeps the existing shortcuts", () => {
     expect(mac({ key: "k" })).toBe("search-hosts");

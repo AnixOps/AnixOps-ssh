@@ -9,6 +9,7 @@ mod client;
 pub mod daemon;
 mod error;
 pub mod frame;
+pub mod integration;
 pub mod launch;
 pub mod link;
 pub mod log;

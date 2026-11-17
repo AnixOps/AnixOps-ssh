@@ -20,6 +20,13 @@ or `unknown_command` for an unknown kind) and the connection stays open.
 - `session.open|write|resize|close`: a PTY running the system `ssh` exactly as
   v1 builds it (or the local shell for a null host). `session.list`,
   `session.attach {session_id, from_seq?}` and `session.detach` add reattach.
+- `shell_integration` on a saved host (opt-in, default off): once the session
+  shows a shell prompt, the daemon types the scripts of `shell-integration/`
+  (leading space, hidden from the output and the scrollback, never into an
+  authentication prompt or after the user typed) and the shell reports prompts,
+  command lines, exit codes and the working directory as `OSC 6973`. The daemon,
+  not the UI, does this so it works for every engine and survives UI reloads;
+  see `src/integration.rs` and `shell-integration/README.md`.
 - Output is UTF-8 text; every byte has an offset in the session's stream.
   `session.output` events carry it as `seq`. Each session keeps the last 1 MiB
   (ring buffer). `session.attach` replies, then replays the buffer from

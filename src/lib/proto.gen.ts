@@ -133,6 +133,10 @@ export interface Connection {
   local_directories: string[];
   remote_directories: string[];
   terminal: TerminalPreferences;
+  /**
+   * Opt-in shell integration: after the shell starts, the daemon sends a small script that reports prompts, working directory and exit codes through OSC 6973. Absent means off.
+   */
+  shell_integration?: boolean;
   created_at: string;
   updated_at: string;
 }
