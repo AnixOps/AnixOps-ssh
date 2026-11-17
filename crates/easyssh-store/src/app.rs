@@ -201,92 +201,75 @@ impl Store {
         Ok(config)
     }
 
-    /// Makes the store hold exactly `config`: records in it are saved (unchanged
-    /// ones write nothing), stored records missing from it are removed, and
-    /// every setting is set. One transaction. Ids that are not UUIDs (a v1
-    /// leftover) become the same UUIDs the migration gives them.
-    pub fn save_app_config(&self, config: &AppConfig) -> Result<()> {
+    /// Saves one snippet. Touches nothing else.
+    pub fn save_snippet(&self, snippet: &CommandSnippet) -> Result<()> {
+        self.put(&CommandSnippet {
+            id: store_id(&snippet.id),
+            ..snippet.clone()
+        })
+    }
+
+    /// Removes a snippet; returns whether it existed.
+    pub fn remove_snippet(&self, id: &str) -> Result<bool> {
+        self.set_deleted::<CommandSnippet>(&store_id(id), true)
+    }
+
+    /// Saves one tunnel. Touches nothing else.
+    pub fn save_tunnel(&self, tunnel: &Tunnel) -> Result<()> {
+        self.put(&Tunnel {
+            id: store_id(&tunnel.id),
+            host_id: store_id(&tunnel.host_id),
+            ..tunnel.clone()
+        })
+    }
+
+    /// Removes a tunnel; returns whether it existed.
+    pub fn remove_tunnel(&self, id: &str) -> Result<bool> {
+        self.set_deleted::<Tunnel>(&store_id(id), true)
+    }
+
+    /// Stores the Git sync settings. Touches nothing else.
+    pub fn save_sync_preferences(&self, sync: &SyncPreferences) -> Result<()> {
+        self.set_setting_as("sync", sync)
+    }
+
+    /// Adds or updates every group, host, snippet and tunnel in `config`
+    /// (unchanged ones write nothing) and removes nothing: a record that is
+    /// stored but missing from `config` stays. For merging an import.
+    pub fn upsert_records(&self, config: &AppConfig) -> Result<()> {
         self.in_tx(|| {
             self.conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
-
-            let group_ids: BTreeSet<String> =
-                config.groups.iter().map(|g| store_id(&g.id)).collect();
-            let known_group = |id: &Option<String>| {
-                id.as_deref()
-                    .map(store_id)
-                    .filter(|id| group_ids.contains(id))
-            };
-            let mut groups = Vec::new();
-            for group in &config.groups {
-                let mut group = group.clone();
-                group.id = store_id(&group.id);
-                group.parent_id = known_group(&group.parent_id).filter(|p| *p != group.id);
-                groups.push(group);
+            let records = Records::of(config);
+            for item in &records.groups {
+                self.put(item)?;
             }
-            self.sync_records(groups)?;
-
-            let mut hosts = Vec::new();
-            for connection in &config.connections {
-                let mut connection = connection.clone();
-                connection.id = store_id(&connection.id);
-                connection.group_id = known_group(&connection.group_id);
-                hosts.push(Host::new(connection));
+            for item in &records.hosts {
+                self.put(item)?;
             }
-            self.sync_records(hosts)?;
-
-            self.sync_records(
-                config
-                    .snippets
-                    .iter()
-                    .map(|snippet| CommandSnippet {
-                        id: store_id(&snippet.id),
-                        ..snippet.clone()
-                    })
-                    .collect(),
-            )?;
-            self.sync_records(
-                config
-                    .tunnels
-                    .iter()
-                    .map(|tunnel| Tunnel {
-                        id: store_id(&tunnel.id),
-                        host_id: store_id(&tunnel.host_id),
-                        ..tunnel.clone()
-                    })
-                    .collect(),
-            )?;
-
-            let mut sidebar = serde_json::to_value(&config.sidebar)?;
-            sidebar["collapsed_group_ids"] = config
-                .sidebar
-                .collapsed_group_ids
-                .iter()
-                .map(|id| store_id(id))
-                .collect::<Vec<_>>()
-                .into();
-            let recent: Vec<String> = config
-                .recent_connection_ids
-                .iter()
-                .map(|id| store_id(id))
-                .collect();
-            let entries = [
-                ("theme", serde_json::to_value(config.theme)?),
-                ("locale", serde_json::to_value(config.locale)?),
-                (
-                    "display_density",
-                    serde_json::to_value(config.display_density)?,
-                ),
-                ("terminal", serde_json::to_value(&config.terminal)?),
-                ("workspace", serde_json::to_value(config.workspace)?),
-                ("sidebar", sidebar),
-                ("sync", serde_json::to_value(&config.sync)?),
-                ("experimental", serde_json::to_value(&config.experimental)?),
-                ("recent_connection_ids", serde_json::to_value(recent)?),
-            ];
-            for (key, value) in entries {
-                self.set_setting(key, &value)?;
+            for item in &records.snippets {
+                self.put(item)?;
+            }
+            for item in &records.tunnels {
+                self.put(item)?;
             }
             Ok(())
+        })
+    }
+
+    /// Makes the groups, hosts, snippets and tunnels in the store exactly
+    /// those of `config`: stored records missing from it are removed. One
+    /// transaction. This is the only call that can remove a record it was not
+    /// told about, so use it for an explicit replacement (a restore, a sync
+    /// pull) and never for an ordinary edit, which would drop whatever another
+    /// process saved since `config` was loaded. Settings are not touched.
+    pub fn replace_all(&self, config: &AppConfig) -> Result<()> {
+        self.in_tx(|| {
+            self.conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+            let records = Records::of(config);
+            self.sync_records(records.groups)?;
+            self.sync_records(records.hosts)?;
+            self.sync_records(records.snippets)?;
+            self.sync_records(records.tunnels)
         })
     }
 
@@ -302,6 +285,66 @@ impl Store {
             }
         }
         Ok(())
+    }
+}
+
+/// The records of an `AppConfig` as the store keeps them: ids that are not
+/// UUIDs (a v1 leftover) become the UUIDs the migration gives them, and a
+/// reference to a group that is not in `config` is dropped.
+struct Records {
+    groups: Vec<Group>,
+    hosts: Vec<Host>,
+    snippets: Vec<CommandSnippet>,
+    tunnels: Vec<Tunnel>,
+}
+
+impl Records {
+    fn of(config: &AppConfig) -> Self {
+        let group_ids: BTreeSet<String> = config.groups.iter().map(|g| store_id(&g.id)).collect();
+        let known_group = |id: &Option<String>| {
+            id.as_deref()
+                .map(store_id)
+                .filter(|id| group_ids.contains(id))
+        };
+        Self {
+            groups: config
+                .groups
+                .iter()
+                .map(|group| {
+                    let mut group = group.clone();
+                    group.id = store_id(&group.id);
+                    group.parent_id = known_group(&group.parent_id).filter(|p| *p != group.id);
+                    group
+                })
+                .collect(),
+            hosts: config
+                .connections
+                .iter()
+                .map(|connection| {
+                    let mut connection = connection.clone();
+                    connection.id = store_id(&connection.id);
+                    connection.group_id = known_group(&connection.group_id);
+                    Host::new(connection)
+                })
+                .collect(),
+            snippets: config
+                .snippets
+                .iter()
+                .map(|snippet| CommandSnippet {
+                    id: store_id(&snippet.id),
+                    ..snippet.clone()
+                })
+                .collect(),
+            tunnels: config
+                .tunnels
+                .iter()
+                .map(|tunnel| Tunnel {
+                    id: store_id(&tunnel.id),
+                    host_id: store_id(&tunnel.host_id),
+                    ..tunnel.clone()
+                })
+                .collect(),
+        }
     }
 }
 
