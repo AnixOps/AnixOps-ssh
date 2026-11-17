@@ -661,7 +661,10 @@ mod key_files {
         std::env::set_var("PATH", &new_path);
 
         let s = start(dir.path()).await;
-        let host = endpoint_host("db", "alice", "db.example.test");
+        // These tests are about the key file OpenSSH gets, so the host is
+        // pinned to it (the built-in engine never writes a key file).
+        let mut host = endpoint_host("db", "alice", "db.example.test");
+        host.engine = Some(easyssh_core::EnginePreference::Openssh);
         save_host(&s, &host).await;
         s.call(
             "secrets.set",
@@ -716,7 +719,10 @@ mod key_files {
         std::env::set_var("PATH", &new_path);
 
         let s = start(dir.path()).await;
-        let host = endpoint_host("db", "alice", "db.example.test");
+        // These tests are about the key file OpenSSH gets, so the host is
+        // pinned to it (the built-in engine never writes a key file).
+        let mut host = endpoint_host("db", "alice", "db.example.test");
+        host.engine = Some(easyssh_core::EnginePreference::Openssh);
         save_host(&s, &host).await;
         s.call(
             "secrets.set",

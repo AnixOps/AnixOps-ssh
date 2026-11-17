@@ -2,6 +2,8 @@
 //! prompts forwarded to the client, and the fallback to OpenSSH.
 #![cfg(unix)]
 
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine as _;
 use easyssh_core::{AppConfig, ConfigStore, Connection, SshEngine};
 use easyssh_e2e::russh_support::{echo_roundtrip, wait_for_port_open, within, within_for};
 use easyssh_e2e::{E2e, ECHO_PORT, PW_PASSWORD, TARGET_PORT};
@@ -125,8 +127,46 @@ impl Rig {
         )
     }
 
-    fn known_hosts(&self) -> std::path::PathBuf {
-        self.e2e.dir.path().join("daemon").join("known_hosts")
+    fn config_path(&self) -> std::path::PathBuf {
+        self.e2e.dir.path().join("daemon").join("connections.json")
+    }
+
+    /// The host keys the daemon keeps in the app database (they sync with
+    /// the vault), as `known_hosts` lines. Read through a second connection
+    /// to the same database, as the app does.
+    fn stored_host_keys(&self) -> Vec<String> {
+        let opened = easyssh_store::open_app_store(&self.config_path()).expect("open the database");
+        opened
+            .store
+            .list_known_hosts()
+            .expect("list known hosts")
+            .iter()
+            .map(|record| {
+                format!(
+                    "{} {} {}",
+                    record.item.host,
+                    record.item.key_type,
+                    B64.encode(&record.item.key_blob)
+                )
+            })
+            .collect()
+    }
+
+    /// Replaces whatever is stored for the target with `key`, the way a
+    /// server that was reinstalled would look to the daemon.
+    fn store_other_host_key(&self, key: &str) {
+        let opened = easyssh_store::open_app_store(&self.config_path()).expect("open the database");
+        for record in opened.store.list_known_hosts().expect("list known hosts") {
+            opened
+                .store
+                .soft_delete_known_host(&record.item.id)
+                .expect("remove the entry");
+        }
+        let report = opened
+            .store
+            .import_known_hosts(&format!("[127.0.0.1]:{TARGET_PORT} ssh-ed25519 {key}\n"))
+            .expect("store the other key");
+        assert_eq!(report.imported, 1);
     }
 
     async fn connections(&self) -> Value {
@@ -355,11 +395,19 @@ async fn unknown_host_key_is_asked_once_then_remembered() {
         assert_eq!(prompts[0].port, TARGET_PORT);
         assert!(prompts[0].fingerprint.starts_with("SHA256:"));
     }
-    let stored = std::fs::read_to_string(rig.known_hosts()).expect("known_hosts written");
+    let stored = rig.stored_host_keys().join("\n");
     assert!(
         stored.contains(&format!("[127.0.0.1]:{TARGET_PORT}")),
         "{stored}"
     );
+    // The app-owned file of earlier versions is not written any more.
+    assert!(!rig
+        .e2e
+        .dir
+        .path()
+        .join("daemon")
+        .join("known_hosts")
+        .exists());
 
     // The connection goes away, a new one finds the key on record.
     rig.link.close_session(&id);
@@ -383,13 +431,12 @@ async fn changed_host_key_is_refused_until_explicitly_replaced() {
     rig.link.close_session(&id);
     rig.wait_live(0).await;
 
-    let path = rig.known_hosts();
-    let stored = std::fs::read_to_string(&path).unwrap();
-    let mut fields: Vec<&str> = stored.split_whitespace().collect();
-    assert_eq!(fields.len(), 3, "{stored}");
+    let stored = rig.stored_host_keys();
+    assert_eq!(stored.len(), 1, "{stored:?}");
+    let fields: Vec<&str> = stored[0].split_whitespace().collect();
+    assert_eq!(fields.len(), 3, "{stored:?}");
     assert_ne!(fields[2], OTHER_KEY);
-    fields[2] = OTHER_KEY;
-    std::fs::write(&path, format!("{}\n", fields.join(" "))).unwrap();
+    rig.store_other_host_key(OTHER_KEY);
 
     // Neither "accept and save" nor "reject" lets a changed key through.
     for decision in ["accept_and_save", "accept_once", "reject"] {
@@ -409,12 +456,12 @@ async fn changed_host_key_is_refused_until_explicitly_replaced() {
         assert!(prompts.iter().skip(1).all(|p| p.status == "changed"));
         assert!(!prompts.last().unwrap().expected.is_empty());
     }
-    assert!(std::fs::read_to_string(&path).unwrap().contains(OTHER_KEY));
+    assert!(rig.stored_host_keys().join("\n").contains(OTHER_KEY));
 
     // Only an explicit replacement works.
     rig.client.answer_host_keys("replace_and_save");
     let id = shell_says(&rig, &hosts[0], "echo replaced-$((3+4))", "replaced-7").await;
-    assert!(!std::fs::read_to_string(&path).unwrap().contains(OTHER_KEY));
+    assert!(!rig.stored_host_keys().join("\n").contains(OTHER_KEY));
     rig.link.close_session(&id);
     rig.finish().await;
 }

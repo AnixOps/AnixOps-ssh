@@ -4,6 +4,7 @@ use crate::known_hosts::{KnownHosts, MemoryKnownHosts};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use zeroize::Zeroizing;
 
 /// Where the SSH agent lives.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -17,6 +18,52 @@ pub enum AgentSource {
     /// A Unix socket path, or a Windows named pipe name (for example the
     /// 1Password agent).
     Path(PathBuf),
+}
+
+/// A private key the caller holds in memory (for example one saved in the
+/// vault). The engine decodes it for the login and never writes it to disk.
+/// The text and the passphrase are zeroized when the last copy is dropped.
+#[derive(Clone)]
+pub struct MemoryIdentity {
+    /// Names the key in prompts and error messages; never a real path.
+    pub label: String,
+    key: Arc<Zeroizing<String>>,
+    passphrase: Option<Arc<Zeroizing<String>>>,
+}
+
+impl MemoryIdentity {
+    /// `pem` is the key in OpenSSH or PEM text form. `passphrase` unlocks it
+    /// when it is encrypted; without one an encrypted key asks the
+    /// [`crate::Interaction`].
+    pub fn new(
+        label: impl Into<String>,
+        pem: impl Into<String>,
+        passphrase: Option<String>,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            key: Arc::new(Zeroizing::new(pem.into())),
+            passphrase: passphrase
+                .filter(|p| !p.is_empty())
+                .map(|p| Arc::new(Zeroizing::new(p))),
+        }
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        self.key.as_str()
+    }
+
+    pub(crate) fn passphrase(&self) -> Option<&str> {
+        self.passphrase.as_ref().map(|p| p.as_str())
+    }
+}
+
+impl std::fmt::Debug for MemoryIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryIdentity")
+            .field("label", &self.label)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone)]
@@ -33,6 +80,9 @@ pub struct ConnectParams {
     /// Private key files in OpenSSH (or PEM) format, tried in order after the
     /// agent. Never defaulted from `~/.ssh`: the caller decides.
     pub identity_files: Vec<PathBuf>,
+    /// Keys held in memory, tried before `identity_files`. Never written to
+    /// disk by the engine.
+    pub memory_identities: Vec<MemoryIdentity>,
     pub keyboard_interactive: bool,
     pub password: bool,
     /// How often the password prompt is shown when the server refuses it.
@@ -54,6 +104,7 @@ impl ConnectParams {
             connect_timeout: Duration::from_secs(30),
             agent: AgentSource::default(),
             identity_files: Vec::new(),
+            memory_identities: Vec::new(),
             keyboard_interactive: true,
             password: true,
             password_attempts: 3,
@@ -68,6 +119,11 @@ impl ConnectParams {
 
     pub fn identity_file(mut self, path: impl Into<PathBuf>) -> Self {
         self.identity_files.push(path.into());
+        self
+    }
+
+    pub fn memory_identity(mut self, identity: MemoryIdentity) -> Self {
+        self.memory_identities.push(identity);
         self
     }
 
@@ -91,6 +147,7 @@ impl std::fmt::Debug for ConnectParams {
             .field("keepalive", &self.keepalive)
             .field("agent", &self.agent)
             .field("identity_files", &self.identity_files)
+            .field("memory_identities", &self.memory_identities)
             .finish_non_exhaustive()
     }
 }

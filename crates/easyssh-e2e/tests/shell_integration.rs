@@ -7,21 +7,19 @@
 //! Unix machine that has the shell; a missing shell is skipped.
 #![cfg(unix)]
 
+#[macro_use]
+mod support;
+
 use easyssh_core::{ConfigStore, Connection};
 use easyssh_e2e::E2e;
-use easysshd::link::{AskpassPrompt, Link, LinkHandler, SessionMsg, SessionSink};
+use easysshd::link::{Link, SessionMsg, SessionSink};
 use easysshd::{Daemon, DaemonConfig, Server};
 use serde_json::json;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-struct NoPrompts;
-
-impl LinkHandler for NoPrompts {
-    fn askpass_prompt(&self, _prompt: AskpassPrompt) {}
-}
+use support::{set_engine, Client, EngineKind};
 
 type Seen = Arc<Mutex<Vec<SessionMsg>>>;
 
@@ -114,17 +112,24 @@ impl Running {
     }
 }
 
+/// A host for the local tests. They stand in for `ssh` with a local shell,
+/// which only the OpenSSH engine runs, so the host says so.
+fn local_host() -> Connection {
+    let mut connection = Connection::alias("local", "fake");
+    connection.engine = Some(easyssh_core::EnginePreference::Openssh);
+    connection
+}
+
 /// Saves a host with shell integration set as given, opens a session, and
-/// returns the link, the session id and what it prints.
+/// returns the client (call `detach` before dropping the link), the link,
+/// the session id and what it prints.
 async fn open(
     running: &Running,
     mut connection: Connection,
     integration: bool,
-) -> (Link, String, Seen) {
+) -> (Arc<Client>, Link, String, Seen) {
     connection.shell_integration = integration;
-    let link = Link::connect(&running.runtime, Arc::new(NoPrompts))
-        .await
-        .expect("connect");
+    let (client, link) = Client::connect(&running.runtime).await;
     link.request(
         "hosts.save",
         json!({"connection": serde_json::to_value(&connection).unwrap()}),
@@ -136,7 +141,7 @@ async fn open(
         .open_session(Some(&connection.id), 100, 30, sink)
         .await
         .expect("session.open");
-    (link, id, seen)
+    (client, link, id, seen)
 }
 
 /// What the integration must have reported by the time `false` and `cd /tmp`
@@ -200,49 +205,54 @@ async fn exit_session(link: &Link, id: &str, seen: &Seen) {
 
 // ---------------------------------------------------------------- containers
 
-async fn container(alias: &str, shell: &str) {
+/// Both engines deliver the same scripts and must report the same things.
+async fn container(alias: &str, shell: &str, engine: EngineKind) {
     let e2e = E2e::new();
     let running = start_daemon(e2e.dir.path()).await;
-    let (link, id, seen) = open(&running, e2e.alias(alias), true).await;
+    set_engine(&e2e.dir.path().join("connections.json"), engine);
+    let (client, link, id, seen) = open(&running, e2e.alias(alias), true).await;
     check_reports(&link, &id, &seen, shell).await;
     exit_session(&link, &id, &seen).await;
+    client.detach();
     drop(link);
     running.finish().await;
 }
 
-#[tokio::test]
-#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
-async fn container_bash_reports_exit_status_and_cwd() {
-    container("e2e-target", "bash").await;
+async fn container_bash_reports_exit_status_and_cwd(engine: EngineKind) {
+    container("e2e-target", "bash", engine).await;
 }
 
-#[tokio::test]
-#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
-async fn container_zsh_reports_exit_status_and_cwd() {
-    container("e2e-zsh", "zsh").await;
+both_engines!(container_bash_reports_exit_status_and_cwd);
+
+async fn container_zsh_reports_exit_status_and_cwd(engine: EngineKind) {
+    container("e2e-zsh", "zsh", engine).await;
 }
 
-#[tokio::test]
-#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
-async fn container_fish_reports_exit_status_and_cwd() {
-    container("e2e-fish", "fish").await;
+both_engines!(container_zsh_reports_exit_status_and_cwd);
+
+async fn container_fish_reports_exit_status_and_cwd(engine: EngineKind) {
+    container("e2e-fish", "fish", engine).await;
 }
 
-#[tokio::test]
-#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
-async fn container_host_without_integration_sees_no_sequences() {
+both_engines!(container_fish_reports_exit_status_and_cwd);
+
+async fn container_host_without_integration_sees_no_sequences(engine: EngineKind) {
     let e2e = E2e::new();
     let running = start_daemon(e2e.dir.path()).await;
-    let (link, id, seen) = open(&running, e2e.alias("e2e-target"), false).await;
+    set_engine(&e2e.dir.path().join("connections.json"), engine);
+    let (client, link, id, seen) = open(&running, e2e.alias("e2e-target"), false).await;
     link.write_session(&id, "echo plain-$((1+1))\r").unwrap();
     eventually("the command's output", &seen, |t| t.contains("plain-2")).await;
     // Give a (wrongly started) delivery time to show itself.
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(!text(&seen).contains("6973"), "{:?}", text(&seen));
     exit_session(&link, &id, &seen).await;
+    client.detach();
     drop(link);
     running.finish().await;
 }
+
+both_engines!(container_host_without_integration_sees_no_sequences);
 
 // ------------------------------------------------------------- local shells
 
@@ -307,9 +317,10 @@ async fn local(shell: &str, command: &str, setup: impl FnOnce(&Path)) {
     let command = command.replace("{home}", &home.display().to_string());
     let _ssh = FakeSsh::install(dir.path(), &command);
     let running = start_daemon(dir.path()).await;
-    let (link, id, seen) = open(&running, Connection::alias("local", "fake"), true).await;
+    let (client, link, id, seen) = open(&running, local_host(), true).await;
     check_reports(&link, &id, &seen, shell).await;
     exit_session(&link, &id, &seen).await;
+    client.detach();
     drop(link);
     running.finish().await;
 }
@@ -366,7 +377,7 @@ async fn local_unknown_shell_stays_quiet_and_usable() {
     let dir = tempfile::tempdir().unwrap();
     let _ssh = FakeSsh::install(dir.path(), "env PS1='$ ' dash -i");
     let running = start_daemon(dir.path()).await;
-    let (link, id, seen) = open(&running, Connection::alias("local", "fake"), true).await;
+    let (client, link, id, seen) = open(&running, local_host(), true).await;
     // dash knows nothing of the scripts: after the delivery the shell still
     // runs commands, and nothing of it stays on screen.
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -376,6 +387,7 @@ async fn local_unknown_shell_stays_quiet_and_usable() {
     assert!(!all.contains("__easyssh_"), "{all:?}");
     assert!(!all.contains("6973"), "{all:?}");
     exit_session(&link, &id, &seen).await;
+    client.detach();
     drop(link);
     running.finish().await;
 }

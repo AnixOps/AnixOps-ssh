@@ -33,7 +33,8 @@ current 1.x app.
 | **Hosts** | Saved hosts and every `Host` in `~/.ssh/config`, grouped, tagged, coloured and searchable. Create and edit hosts in the app. |
 | **Terminal** | xterm.js tabs on a real PTY: truecolor, 10,000-line scrollback (adjustable), find, copy and paste, reconnect, local shell tabs. |
 | **Files** | An SFTP pane beside the terminal: browse, upload by drag and drop, download, rename, delete, with a transfer queue. |
-| **Passwords** | Terminals ask in the terminal. The file pane and tunnels ask in a dialog through `SSH_ASKPASS`; answers go straight to OpenSSH and are never saved. |
+| **SSH engine** | The built-in engine (russh) is the default: a host's terminal, file pane and tunnels share one connection, so a password or key passphrase is asked once. Hosts that need something it does not do (`ProxyCommand`, `Match`, `LocalCommand`, certificates, FIDO2 keys, a remote command, forwards stored in the config) run on the system OpenSSH automatically. OpenSSH is also an advanced choice, globally or per host, in **Settings → Advanced**; it is kept for compatibility and only gets fixes. Installs that never chose an engine use the built-in one; an explicit OpenSSH choice is kept. |
+| **Passwords** | The built-in engine asks in a dialog, once per connection. On OpenSSH hosts terminals ask in the terminal, and the file pane and tunnels ask in a dialog through `SSH_ASKPASS`. Answers go straight to the engine and are saved only if you choose "Remember in vault". |
 | **Snippets** | Saved commands, run in the active terminal or broadcast to all. |
 | **Tunnels** | Local, remote and SOCKS forwards, one switch each, with live status. |
 | **Command palette** | Hosts, snippets, tunnels and actions in one search box. |
@@ -66,9 +67,11 @@ The installers are not signed yet. On Windows choose **More info → Run
 anyway** in SmartScreen; on macOS right-click the app and choose **Open** the
 first time.
 
-You need the OpenSSH client (`ssh`, `sftp`). macOS and Linux desktops include
-it; on Windows 10 and 11 it is under **Settings → System → Optional
-features → OpenSSH Client**. The app checks this on start and in Settings.
+The built-in engine needs nothing else for most hosts. Keep the OpenSSH client
+(`ssh`, `sftp`) installed for hosts that fall back to it and for local
+`~/.ssh/config` parsing. macOS and Linux desktops include it; on Windows 10 and
+11 it is under **Settings → System → Optional features → OpenSSH Client**. The
+app checks this on start and in Settings.
 
 ## Shortcuts
 
@@ -134,9 +137,15 @@ prompt jumps above. What the scripts do and the sequence format are in
   passphrase cannot be recovered.
 - Saved secrets are used only for the exact host and user they belong to. The
   askpass helper answers only password and key passphrase prompts and never
-  host key questions or any other prompt. A saved private key is written to a
-  `0600` file in the runtime directory for the life of the `ssh` process and
-  deleted afterwards (and swept on daemon start).
+  host key questions or any other prompt. On the built-in engine a saved
+  private key and its passphrase are handed to the engine from memory and are
+  never written to disk. On OpenSSH a saved private key is written to a `0600`
+  file in the runtime directory for the life of the `ssh` process and deleted
+  afterwards (and swept on daemon start).
+- Host keys the built-in engine trusts live in the app database (so they sync
+  with a vault), with `~/.ssh/known_hosts` read as a fallback and never
+  written. A key that differs from the recorded one is refused until you
+  replace it on purpose. The file earlier builds kept is imported once.
 - Windows Hello (Windows) and Touch ID (macOS) can unlock the vault, opt-in
   from Settings, Vault, and shown only where the device supports them. The
   passphrase always remains a fallback. The device key stays in the OS keychain

@@ -7,7 +7,8 @@ export interface Settings {
   locale: LocaleSetting;
   terminalFontSize: number;
   terminalScrollback: number;
-  /** The SSH engine for hosts that follow the global setting. */
+  /** The SSH engine for hosts that follow the global setting: the built-in
+   * engine unless OpenSSH was chosen (an advanced option kept for compatibility). */
   sshEngine: SshEngine;
   /** null until the first-run question has been answered. */
   crashReports: boolean | null;
@@ -19,7 +20,7 @@ let current: Settings = {
   ...mirror,
   terminalFontSize: 13,
   terminalScrollback: 10000,
-  sshEngine: "openssh",
+  sshEngine: "russh",
   crashReports: null,
   usageStats: false,
 };

@@ -21,7 +21,7 @@ pub struct AppConfig {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub sidebar: ::std::option::Option<SidebarPreferences>,
     pub snippets: ::std::vec::Vec<CommandSnippet>,
-    ///Absent means openssh.
+    ///Absent means russh (the built-in engine); openssh only when the user chose it.
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub ssh_engine: ::std::option::Option<SshEngine>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]

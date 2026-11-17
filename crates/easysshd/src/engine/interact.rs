@@ -214,6 +214,16 @@ mod tests {
                 ..Default::default()
             })
         }
+
+        fn secret_flags(
+            &self,
+            _: &str,
+        ) -> Result<easyssh_store::SecretFlags, easyssh_vault::VaultError> {
+            Ok(easyssh_store::SecretFlags {
+                password: self.0.is_some(),
+                ..Default::default()
+            })
+        }
     }
 
     fn saved_with(password: Option<&'static str>) -> SavedPassword {

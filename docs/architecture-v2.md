@@ -102,9 +102,24 @@ replaces the hand-written Tauri commands and `src/lib/backend.ts` mirror.
   the engine does not support (`ProxyCommand`, `Match`, `LocalCommand`,
   unusual algorithms) is marked and runs on the OpenSSH engine instead, so
   existing setups keep working.
-- The OpenSSH engine is temporary as a first-class path. Once russh passes
-  the whole end-to-end suite, OpenSSH becomes an advanced option per host
-  and gets fixes only, no new features.
+- The built-in engine passes the whole end-to-end suite (the daemon
+  scenarios run once per engine, `crates/easyssh-e2e/tests/support`), so it
+  is the default: for new installs and for installs that never chose an
+  engine (the `ssh_engine` setting is absent). OpenSSH is an advanced option
+  (Settings → Advanced, globally; per host in the host editor) that gets
+  fixes only, no new features; an explicit choice of it is kept. The fallback
+  rules above do not change: a host that needs `ProxyCommand`, `Match` and the
+  like still runs on OpenSSH whichever engine is selected.
+- A private key and passphrase saved in the vault reach the built-in engine
+  from memory (`ConnectParams::memory_identities`, zeroized on drop) and are
+  never written to a file. A locked vault with a saved key fails the open
+  with `vault_locked`, as on OpenSSH.
+- The `known_hosts` table is what the built-in engine trusts, read and written
+  through `StoreKnownHosts`; `~/.ssh/known_hosts` stays a read-only fallback
+  whose matches are copied into the table. The file the engine kept before
+  the table was used is imported once and renamed `known_hosts.migrated`. A
+  changed key is never accepted automatically; only the explicit replace
+  decision rewrites an entry.
 - FIDO2 `sk-ecdsa` / `sk-ed25519` support is added on top of russh, through
   libfido2, and offered upstream.
 - Serial ports join SSH and local shells as a session type. Mosh and Telnet
@@ -148,9 +163,11 @@ encrypted, with keys only you hold, in code anyone can audit".
   control remains a possible hardening.
 - The daemon answers `SSH_ASKPASS` password and passphrase prompts from the
   vault for the bound process (exact host and user) and reports
-  `vault_locked` when it cannot. Saved keys apply to terminal sessions on the
-  OpenSSH engine. The russh engine reads secrets through the `SecretSource`
-  trait; its code is untouched.
+  `vault_locked` when it cannot. On the OpenSSH engine a saved key becomes a
+  short-lived `0600` file for that process. The russh engine reads secrets
+  through the `SecretSource` trait and keeps the key and its passphrase in
+  memory only; a saved passphrase that does not unlock the key falls back to
+  asking the user.
 - Session logs are encrypted with libsodium secretstream on write.
 
 ## 7. Storage
@@ -271,7 +288,7 @@ end-to-end suite first.
 |---|---|---|
 | 0. Baseline | 1 | End-to-end tests in CI against an OpenSSH server container, on Linux only: terminal, SFTP, tunnels, password prompts, jump hosts. Run against v1 to record today's behaviour. Windows and macOS keep unit tests and the manual smoke test in RELEASING.md. |
 | 1. Daemon | 3 | `easyssh-proto`, `easysshd`, authenticated IPC; today's PTY sessions moved behind the daemon (still system OpenSSH); UI reattaches after reload. |
-| 2. Engine | 6 | russh engine behind a setting, OpenSSH fallback rules, one connection for terminal, files and tunnels. Done when russh passes the whole e2e suite; OpenSSH then becomes an advanced option. |
+| 2. Engine | 6 | russh engine behind a setting, OpenSSH fallback rules, one connection for terminal, files and tunnels. Done when russh passes the whole e2e suite; OpenSSH then becomes an advanced option. Done: the suite runs the daemon scenarios on both engines, saved keys and passphrases and the known hosts table work on russh, russh is the default and OpenSSH is an advanced option. |
 | 3. Store | 3 | Release 2.0. SQLite with v1 migration, known hosts store, importers (ssh_config, PuTTY, SecureCRT, MobaXterm, Xshell, FinalShell, Termius exports, CSV). |
 | 4. Vault | 6 | Device key and keychain, passwords and private keys in the vault, Windows Hello, Touch ID and serial ports (done), FIDO2 (open). |
 | 5. Sync | 8 | `easyssh-server`, sign-in without sending the passphrase, signed envelopes, field-level merge, history, team vaults and roles. |
