@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<VanDyke version="3.0">
+  <key name="Sessions">
+    <key name="Default">
+      <string name="Hostname"></string>
+    </key>
+    <key name="Production">
+      <key name="Web">
+        <key name="web1">
+          <string name="Hostname">web1.example.com</string>
+          <string name="Username">alice</string>
+          <string name="Protocol Name">SSH2</string>
+          <dword name="[SSH2] Port">000008ae</dword>
+          <string name="Identity Filename V2">C:\keys\web1.pem</string>
+          <string name="Firewall Name">Session:Production/bastion</string>
+          <string name="Session_Password_V2">02:not-a-real-secret</string>
+        </key>
+      </key>
+      <key name="bastion">
+        <string name="Hostname">192.0.2.1</string>
+        <string name="Protocol Name">SSH2</string>
+        <dword name="[SSH2] Port">00000016</dword>
+      </key>
+    </key>
+    <key name="telnet-box">
+      <string name="Hostname">192.0.2.99</string>
+      <string name="Protocol Name">Telnet</string>
+    </key>
+    <key name="Tom &amp; Jerry">
+      <string name="Hostname">2001:db8::7</string>
+      <string name="Protocol Name">SSH2</string>
+    </key>
+    <key name="empty-folder"/>
+  </key>
+</VanDyke>

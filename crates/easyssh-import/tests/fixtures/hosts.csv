@@ -1,0 +1,9 @@
+label,hostname,port,username,group,identity_file,jump
+web1,web1.example.com,2222,alice,Prod/Web,~/.ssh/web1,bastion
+bastion,192.0.2.1,,ops,Prod,,
+v6,2001:db8::2,22,,,,bastion;web1
+,192.0.2.99,,,,,
+nohost,,22,,,,
+badport,192.0.2.5,99999,,,,
+"quoted, label",192.0.2.6,,,"Group, with comma",,
+dash,-oProxyCommand=x,,,,,

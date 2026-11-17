@@ -1,0 +1,3 @@
+Host looped
+    HostName loop.example.com
+Include config_loop

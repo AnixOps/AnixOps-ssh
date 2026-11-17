@@ -1,0 +1,19 @@
+[package]
+name = "easyssh-import"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Importers for other SSH clients' exports (OpenSSH config, PuTTY, SecureCRT, MobaXterm, Xshell, FinalShell, Termius, CSV) into a neutral host list"
+
+[dependencies]
+csv = "1"
+easyssh-core = { path = "../easyssh-core" }
+quick-xml = "0.37"
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile.workspace = true
