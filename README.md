@@ -16,6 +16,15 @@ private keys. Every session runs your own `ssh`, so `~/.ssh/config`,
 work exactly as they do in your terminal. The app adds the parts a terminal
 lacks: an organised host list, tabs, a file pane, snippets and tunnels.
 
+## Where it is going
+
+Version 2 turns the app into a local-first, end-to-end encrypted home for
+hosts, keys and sessions, with an optional open-source sync server for
+yourself or a team. The plan is in
+[docs/architecture-v2.md](docs/architecture-v2.md) and
+[ROADMAP.md](ROADMAP.md). Until it ships, everything below describes the
+current 1.x app.
+
 ## Features
 
 | | |
