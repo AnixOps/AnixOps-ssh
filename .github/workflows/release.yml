@@ -43,6 +43,10 @@ jobs:
           if [ "$MAC_SIGNED" != "true" ]; then
             notes="$notes macOS 版本未签名，首次打开请右键选择“打开”。"
           fi
+          # Hand-written notes for this version, when there are any, come first.
+          if [ -f "docs/releases/$TAG.md" ]; then
+            notes="$(cat "docs/releases/$TAG.md")"$'\n\n'"$notes"
+          fi
           gh release create "$TAG" --draft --verify-tag --title "AnixOps SSH ${TAG#v}" --generate-notes --notes "$notes"
 
   build:
