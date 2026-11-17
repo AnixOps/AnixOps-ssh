@@ -71,6 +71,9 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          # Telemetry endpoints (docs/telemetry.md); empty means the build collects nothing.
+          EASYSSH_SENTRY_DSN: ${{ secrets.EASYSSH_SENTRY_DSN }}
+          EASYSSH_USAGE_URL: ${{ secrets.EASYSSH_USAGE_URL }}
         run: |
           if [ "$RUNNER_OS" = "macOS" ] && [ -n "$APPLE_CERTIFICATE" ]; then
             printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"

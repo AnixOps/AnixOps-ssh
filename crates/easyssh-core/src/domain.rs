@@ -33,6 +33,8 @@ pub struct AppConfig {
     pub sync: SyncPreferences,
     #[serde(default)]
     pub experimental: ExperimentalFeatures,
+    #[serde(default)]
+    pub telemetry: TelemetryPreferences,
 }
 
 impl AppConfig {
@@ -47,6 +49,19 @@ impl AppConfig {
             ..Self::default()
         }
     }
+}
+
+/// What the user decided about crash reports and usage statistics.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct TelemetryPreferences {
+    /// `None` until the user answered the first-run question; nothing is sent
+    /// or recorded while it is `None` or `false`.
+    #[serde(default)]
+    pub crash_reports: Option<bool>,
+    /// Anonymous usage statistics; off unless the user turns them on.
+    #[serde(default)]
+    pub usage_stats: bool,
 }
 
 /// Opt-in features which may expose a larger remote-data surface. They are

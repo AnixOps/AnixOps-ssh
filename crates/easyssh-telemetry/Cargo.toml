@@ -1,0 +1,20 @@
+[package]
+name = "easyssh-telemetry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Opt-in crash reports (Sentry envelope to a self-hosted GlitchTip) and anonymous usage statistics, with a scrubber that removes host names, addresses, users and paths"
+build = "build.rs"
+
+[dependencies]
+chrono.workspace = true
+dirs.workspace = true
+regex = "1"
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "2", default-features = false, features = ["tls"] }
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -6,6 +6,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { previewCancel, previewFiles, previewTransfer } from "./previewFiles";
 import { previewDeleteHost, previewSaveHost, previewSetFavorite, previewSnapshot } from "./preview";
 import { previewSession } from "./previewSession";
+import { UNAVAILABLE, type PendingReports, type TelemetryStatus } from "./telemetry";
 
 export type HostSource = "saved" | "ssh_config";
 
@@ -553,4 +554,27 @@ export async function syncPull(): Promise<boolean> {
     return true;
   }
   return invoke<boolean>("sync_pull");
+}
+
+/* Crash reports and usage statistics; see telemetry.ts and docs/telemetry.md. */
+
+export async function telemetryStatus(): Promise<TelemetryStatus> {
+  if (!isTauri) return UNAVAILABLE;
+  return invoke<TelemetryStatus>("telemetry_status");
+}
+
+export async function telemetryPending(): Promise<PendingReports> {
+  if (!isTauri) return { reports: [], usage: null };
+  return invoke<PendingReports>("telemetry_pending");
+}
+
+export async function telemetryDeletePending(): Promise<number> {
+  if (!isTauri) return 0;
+  return invoke<number>("telemetry_delete_pending");
+}
+
+/** The Rust side scrubs `message` and `stack` and decides whether to keep them. */
+export async function reportFrontendError(kind: string, message: string, stack: string): Promise<void> {
+  if (!isTauri) return;
+  await invoke("telemetry_report_frontend", { kind, message, stack });
 }

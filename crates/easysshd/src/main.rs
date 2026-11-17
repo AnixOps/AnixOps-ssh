@@ -38,6 +38,31 @@ fn parse_args() -> Result<Options, String> {
     })
 }
 
+/// Crash reports for the stand-alone daemon: same spool, same consent, read
+/// from the same settings file. No usage statistics from here.
+fn init_telemetry(config: &DaemonConfig) {
+    use easyssh_telemetry::{hook, Consent, Spool};
+    let spool = Spool::new(Spool::default_dir());
+    hook::install("daemon", env!("CARGO_PKG_VERSION"), spool.clone());
+    let allowed = config
+        .config_store
+        .load()
+        .map(|c| c.telemetry.crash_reports == Some(true))
+        .unwrap_or(false);
+    let consent = Consent {
+        crash_reports: allowed && easyssh_telemetry::dsn_configured(),
+        usage_stats: false,
+    };
+    hook::set_capture(consent.crash_reports);
+    easyssh_telemetry::spawn_startup_tasks(
+        spool,
+        consent,
+        env!("CARGO_PKG_VERSION").to_owned(),
+        String::new(),
+        0,
+    );
+}
+
 fn main() -> ExitCode {
     // OpenSSH may start this executable as its askpass helper.
     easysshd::askpass::run_helper_if_requested();
@@ -48,6 +73,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    init_telemetry(&options.config);
     eprintln!(
         "easysshd: starting, runtime dir {}",
         options.runtime_dir.display()
