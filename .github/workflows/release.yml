@@ -1,15 +1,22 @@
 name: Release
 
-# Push a tag such as v0.5.0 to publish installers for every platform.
+# Normally started by tag.yml when a version bump lands on main. Pushing a
+# tag such as v2.0.1 by hand still works.
 on:
   push:
     tags: ["v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to release, such as v2.0.0
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 env:
-  TAG: ${{ github.ref_name }}
+  TAG: ${{ inputs.tag || github.ref_name }}
   GH_TOKEN: ${{ github.token }}
 
 jobs:
@@ -18,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - name: Tag must match the app version
         run: |
           version="${TAG#v}"
@@ -34,6 +43,10 @@ jobs:
           if [ "$MAC_SIGNED" != "true" ]; then
             notes="$notes macOS 版本未签名，首次打开请右键选择“打开”。"
           fi
+          # Hand-written notes for this version, when there are any, come first.
+          if [ -f "docs/releases/$TAG.md" ]; then
+            notes="$(cat "docs/releases/$TAG.md")"$'\n\n'"$notes"
+          fi
           gh release create "$TAG" --draft --verify-tag --title "AnixOps SSH ${TAG#v}" --generate-notes --notes "$notes"
 
   build:
@@ -49,6 +62,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - name: Linux system libraries for Tauri
         if: runner.os == 'Linux'
         run: |
