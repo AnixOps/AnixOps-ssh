@@ -2,13 +2,16 @@
 //! so they survive a window reload or close.
 //!
 //! The daemon is this same executable started with the hidden `--easysshd`
-//! flag. At startup the app connects to a running daemon or starts one
-//! detached. When that fails, the reason is logged and the app keeps working
-//! with in-process sessions, exactly as before.
+//! flag. A supervisor (`easysshd::supervisor`) connects to a running daemon or
+//! starts one detached, reconnects with backoff when the connection drops and
+//! re-attaches live sessions, and hands over from a daemon of another build.
+//! While there is no connection, hosts and new sessions use the in-process
+//! paths, exactly as before the daemon existed.
 
 use easysshd::daemon::{run_blocking, Options};
-use easysshd::launch::{connect_or_spawn, spawn_detached};
+use easysshd::launch::spawn_detached;
 use easysshd::link::{AskpassPrompt, Link, LinkHandler};
+use easysshd::supervisor::{Backoff, Supervisor, SupervisorConfig};
 use easysshd::DaemonConfig;
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -37,6 +40,7 @@ pub fn run_if_requested() {
         Ok(config) => match run_blocking(Options {
             runtime_dir: runtime_dir(),
             config,
+            build_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
         }) {
             Ok(()) => 0,
             Err(error) => {
@@ -52,20 +56,24 @@ pub fn run_if_requested() {
     std::process::exit(code);
 }
 
-/// The connection to the daemon, when there is one.
+/// The supervised connection to the daemon, when it was set up.
 #[derive(Default)]
-pub struct DaemonState(Mutex<Option<Link>>);
+pub struct DaemonState(Mutex<Option<Arc<Supervisor>>>);
 
 impl DaemonState {
-    /// The live link, or `None` when sessions run in-process.
-    pub fn link(&self) -> Option<Link> {
-        let link = self.0.lock().ok()?.clone()?;
-        link.is_alive().then_some(link)
+    pub fn supervisor(&self) -> Option<Arc<Supervisor>> {
+        self.0.lock().ok()?.clone()
     }
 
-    fn set(&self, link: Link) {
+    /// The live link, or `None` when there is no daemon connection right now
+    /// (never connected, or reconnecting): callers use the in-process paths.
+    pub fn link(&self) -> Option<Link> {
+        self.supervisor()?.link()
+    }
+
+    fn set(&self, supervisor: Arc<Supervisor>) {
         if let Ok(mut slot) = self.0.lock() {
-            *slot = Some(link);
+            *slot = Some(supervisor);
         }
     }
 }
@@ -88,29 +96,39 @@ impl LinkHandler for Handler {
         );
     }
 
+    fn askpass_resolved(&self, id: u64) {
+        let _ = self
+            .app
+            .emit("askpass-resolved", serde_json::json!({ "id": id }));
+    }
+
+    fn hosts_changed(&self) {
+        let _ = self.app.emit("hosts-changed", ());
+    }
+
     fn lost(&self) {
-        eprintln!("EasySSH: lost the connection to easysshd; new sessions run in-process");
+        eprintln!("EasySSH: lost the connection to easysshd; reconnecting");
     }
 }
 
 /// Connects to the daemon, starting it if needed. Blocks for at most a few
-/// seconds; on failure logs why and leaves the app on in-process sessions.
+/// seconds; on failure logs why, keeps retrying in the background and leaves
+/// the app on in-process sessions and hosts meanwhile.
 pub fn start(app: &AppHandle) {
-    let dir = runtime_dir();
-    let handler = Arc::new(Handler { app: app.clone() });
-    let result = tauri::async_runtime::block_on(async {
-        let exe =
-            std::env::current_exe().map_err(|error| format!("no executable path: {error}"))?;
-        let args = vec![OsString::from(FLAG)];
-        connect_or_spawn(&dir, handler, || spawn_detached(&exe, &args), START_TIMEOUT).await
-    });
-    match result {
-        Ok(link) => {
-            use tauri::Manager;
-            app.state::<DaemonState>().set(link);
-        }
-        Err(reason) => {
-            eprintln!("EasySSH: easysshd unavailable, running sessions in-process: {reason}");
-        }
+    use tauri::Manager;
+    let config = SupervisorConfig {
+        runtime_dir: runtime_dir(),
+        app_version: env!("CARGO_PKG_VERSION").to_owned(),
+        spawn: Arc::new(|| {
+            let exe = std::env::current_exe()?;
+            spawn_detached(&exe, &[OsString::from(FLAG)])
+        }),
+        start_wait: START_TIMEOUT,
+        backoff: Backoff::default(),
+    };
+    let supervisor = Supervisor::new(config, Arc::new(Handler { app: app.clone() }));
+    app.state::<DaemonState>().set(supervisor.clone());
+    if let Err(reason) = tauri::async_runtime::block_on(supervisor.start()) {
+        eprintln!("EasySSH: easysshd unavailable, running in-process until it is: {reason}");
     }
 }

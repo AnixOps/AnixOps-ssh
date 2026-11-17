@@ -26,6 +26,11 @@ pub const SCHEMA_JSON: &str = include_str!("../schema/proto.schema.json");
 /// An empty result schema means the reply's `ok` is `null`.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("proto.hello", "ProtoHelloParams", "ProtoHelloResult"),
+    (
+        "daemon.shutdown_when_idle",
+        "DaemonShutdownWhenIdleParams",
+        "DaemonShutdownWhenIdleResult",
+    ),
     ("hosts.list", "HostsListParams", "HostsListResult"),
     ("hosts.save", "HostsSaveParams", "HostsSaveResult"),
     ("hosts.delete", "HostsDeleteParams", ""),
@@ -53,6 +58,8 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("session.output", "SessionOutputEvent"),
     ("session.exit", "SessionExitEvent"),
     ("askpass.prompt", "AskpassPromptEvent"),
+    ("askpass.resolved", "AskpassResolvedEvent"),
+    ("hosts.changed", "HostsChangedEvent"),
 ];
 
 fn validators() -> &'static HashMap<String, Validator> {

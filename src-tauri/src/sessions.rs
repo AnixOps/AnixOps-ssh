@@ -4,11 +4,15 @@
 //!
 //! Normally the PTYs live in `easysshd` (see daemon.rs) and these commands are
 //! thin proxies, so sessions survive a reload of the window. When the daemon
-//! is unavailable the same commands fall back to PTYs owned by this process.
+//! is unavailable (or draining for a newer build) new sessions fall back to
+//! PTYs owned by this process. If the connection to the daemon drops, the
+//! supervisor reconnects and re-attaches the live sessions; their tabs get
+//! `reconnecting` and `resumed` events meanwhile.
 
 use crate::daemon::DaemonState;
 use crate::hosts;
-use easysshd::link::{SessionMsg, SessionSink};
+use easysshd::link::SessionMsg;
+use easysshd::supervisor::{SupervisedMsg, SupervisedSink};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -21,8 +25,15 @@ use tauri::{ipc::Channel, AppHandle, Manager, State};
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum SessionEvent {
-    Data { data: String },
-    Exit { code: Option<u32> },
+    Data {
+        data: String,
+    },
+    Exit {
+        code: Option<u32>,
+    },
+    /// The connection to the daemon dropped; output resumes after `Resumed`.
+    Reconnecting,
+    Resumed,
 }
 
 struct Session {
@@ -90,13 +101,17 @@ fn lock_error<T>(_: T) -> String {
 
 /// Forwards daemon messages for one session to a webview channel. Dropping
 /// the sink (channel gone, e.g. after a reload) leaves the session running.
-fn sink_for(events: Channel<SessionEvent>) -> SessionSink {
+fn sink_for(events: Channel<SessionEvent>) -> SupervisedSink {
     Box::new(move |message| match message {
-        SessionMsg::Data { data, .. } => events.send(SessionEvent::Data { data }).is_ok(),
-        SessionMsg::Exit { code } => {
+        SupervisedMsg::Session(SessionMsg::Data { data, .. }) => {
+            events.send(SessionEvent::Data { data }).is_ok()
+        }
+        SupervisedMsg::Session(SessionMsg::Exit { code }) => {
             let _ = events.send(SessionEvent::Exit { code });
             false
         }
+        SupervisedMsg::Reconnecting => events.send(SessionEvent::Reconnecting).is_ok(),
+        SupervisedMsg::Resumed => events.send(SessionEvent::Resumed).is_ok(),
     })
 }
 
@@ -121,11 +136,21 @@ pub async fn session_open(
     rows: u16,
     events: Channel<SessionEvent>,
 ) -> Result<String, String> {
-    if let Some(link) = daemon.link() {
-        return link
-            .open_session(host_id.as_deref(), cols, rows, sink_for(events))
+    if let Some(supervisor) = daemon.supervisor().filter(|s| s.accepts_new_sessions()) {
+        match supervisor
+            .open_session(host_id.as_deref(), cols, rows, sink_for(events.clone()))
             .await
-            .map_err(|error| error.to_string());
+        {
+            Ok(id) => return Ok(id),
+            // The daemon went away or started draining since the check:
+            // this session runs in-process instead.
+            Err(error)
+                if matches!(
+                    error.code.as_str(),
+                    "draining" | "unavailable" | "disconnected"
+                ) => {}
+            Err(error) => return Err(error.to_string()),
+        }
     }
     open_in_process(app, &sessions, host_id, cols, rows, events)
 }
@@ -145,13 +170,17 @@ pub struct LiveSession {
 /// Sessions that outlived the window. Empty without a daemon.
 #[tauri::command]
 pub async fn sessions_list(daemon: State<'_, DaemonState>) -> Result<Vec<LiveSession>, String> {
-    let Some(link) = daemon.link() else {
+    let Some(supervisor) = daemon.supervisor() else {
         return Ok(Vec::new());
     };
-    let sessions = link
-        .list_sessions()
-        .await
-        .map_err(|error| error.to_string())?;
+    let sessions = match supervisor.list_sessions().await {
+        Ok(sessions) => sessions,
+        // Reconnecting: the tabs that exist are already being re-attached.
+        Err(error) if matches!(error.code.as_str(), "unavailable" | "disconnected") => {
+            return Ok(Vec::new())
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     Ok(sessions
         .into_iter()
         .map(|info| LiveSession {
@@ -173,8 +202,11 @@ pub async fn session_attach(
     id: String,
     events: Channel<SessionEvent>,
 ) -> Result<(), String> {
-    let link = daemon.link().ok_or("the session daemon is not running")?;
-    link.attach_session(&id, None, sink_for(events))
+    let supervisor = daemon
+        .supervisor()
+        .ok_or("the session daemon is not running")?;
+    supervisor
+        .attach_session(&id, None, sink_for(events))
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
@@ -183,8 +215,8 @@ pub async fn session_attach(
 /// Stops sending a session's output to this window; the session keeps running.
 #[tauri::command]
 pub fn session_detach(daemon: State<'_, DaemonState>, id: String) {
-    if let Some(link) = daemon.link() {
-        link.detach_session(&id);
+    if let Some(supervisor) = daemon.supervisor() {
+        supervisor.detach_session(&id);
     }
 }
 
@@ -270,8 +302,8 @@ pub fn session_write(
     data: String,
 ) -> Result<(), String> {
     if !is_local(&sessions, &id) {
-        let link = daemon.link().ok_or("session has ended")?;
-        return link
+        let supervisor = daemon.supervisor().ok_or("session has ended")?;
+        return supervisor
             .write_session(&id, &data)
             .map_err(|error| error.to_string());
     }
@@ -293,10 +325,10 @@ pub fn session_resize(
     rows: u16,
 ) -> Result<(), String> {
     if !is_local(&sessions, &id) {
-        if let Some(link) = daemon.link() {
-            return link
-                .resize_session(&id, cols, rows)
-                .map_err(|error| error.to_string());
+        if let Some(supervisor) = daemon.supervisor() {
+            // While reconnecting the size is re-sent by the tab when it resumes.
+            let _ = supervisor.resize_session(&id, cols, rows);
+            return Ok(());
         }
         return Ok(());
     }
@@ -317,8 +349,8 @@ pub fn session_close(
     id: String,
 ) -> Result<(), String> {
     if !is_local(&sessions, &id) {
-        if let Some(link) = daemon.link() {
-            link.close_session(&id);
+        if let Some(supervisor) = daemon.supervisor() {
+            supervisor.close_session(&id);
         }
         return Ok(());
     }

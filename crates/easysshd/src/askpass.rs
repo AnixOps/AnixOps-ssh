@@ -121,11 +121,16 @@ pub struct Prompt {
 /// Delivers a prompt to whoever can answer it; `false` when nobody can.
 pub type Notify = Arc<dyn Fn(Prompt) -> bool + Send + Sync>;
 
+/// Told when a prompt is over (answered, cancelled or timed out), so that
+/// every client that was shown it can close its dialog.
+pub type Resolved = Arc<dyn Fn(u64) + Send + Sync>;
+
 /// The daemon side: a loopback listener plus the table of open prompts.
 pub struct Hub {
     port: u16,
     token: String,
     notify: Notify,
+    resolved: Resolved,
     pending: Mutex<HashMap<u64, oneshot::Sender<Option<String>>>>,
     /// Processes whose prompt was cancelled; their later prompts fail at once.
     cancelled: Mutex<HashSet<String>>,
@@ -135,12 +140,13 @@ pub struct Hub {
 
 impl Hub {
     /// Bind `127.0.0.1:<random port>` and start serving helpers.
-    pub async fn bind(notify: Notify) -> std::io::Result<Arc<Hub>> {
-        Self::bind_with_timeout(notify, ANSWER_TIMEOUT).await
+    pub async fn bind(notify: Notify, resolved: Resolved) -> std::io::Result<Arc<Hub>> {
+        Self::bind_with_timeout(notify, resolved, ANSWER_TIMEOUT).await
     }
 
     pub async fn bind_with_timeout(
         notify: Notify,
+        resolved: Resolved,
         answer_timeout: Duration,
     ) -> std::io::Result<Arc<Hub>> {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
@@ -148,6 +154,7 @@ impl Hub {
             port: listener.local_addr()?.port(),
             token: uuid::Uuid::new_v4().simple().to_string(),
             notify,
+            resolved,
             pending: Mutex::new(HashMap::new()),
             cancelled: Mutex::new(HashSet::new()),
             next: AtomicU64::new(1),
@@ -230,6 +237,7 @@ impl Hub {
         if answer.is_none() {
             lock(&self.cancelled).insert(request.context);
         }
+        (self.resolved)(id);
         answer
     }
 }
