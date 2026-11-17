@@ -9,5 +9,7 @@ description = "End-to-end tests that run the OpenSSH orchestration against real 
 
 [dependencies]
 easyssh-core = { path = "../easyssh-core" }
-portable-pty = "0.9"
 tempfile = "3"
+
+[dev-dependencies]
+portable-pty = "0.9"

@@ -85,7 +85,7 @@ fn sftp_session_with_wrong_password_errors_without_hanging() {
 #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
 fn transfer_with_password_from_askpass() {
     let e2e = E2e::new();
-    let (env, _log) = e2e.askpass(PW_PASSWORD);
+    let (env, log) = e2e.askpass(PW_PASSWORD);
     let connection = e2e.alias("e2e-target-pw");
     let data = sample_bytes(50_000);
     let local = e2e.dir.path().join("pw-up.bin");
@@ -94,7 +94,12 @@ fn transfer_with_password_from_askpass() {
 
     let child = spawn_transfer(&OpenSsh, &connection, true, &local, &remote, &env).unwrap();
     let output = finish(child, CMD_TIMEOUT);
-    assert!(output.status.success(), "{}", text(&output.stderr));
+    assert!(
+        output.status.success(),
+        "upload failed: {}; askpass prompts: {:?}",
+        text(&output.stderr),
+        prompts(&log)
+    );
     let back = e2e.dir.path().join("pw-down.bin");
     let child = spawn_transfer(&OpenSsh, &connection, false, &back, &remote, &env).unwrap();
     let output = finish(child, CMD_TIMEOUT);
