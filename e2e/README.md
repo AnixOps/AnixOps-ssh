@@ -85,31 +85,31 @@ it passed against v1 unchanged.
 | File | Test | v1 | Notes | russh test | russh |
 | --- | --- | --- | --- | --- | --- |
 | `exec` | `config_is_isolated_from_the_real_home` | passes | ssh -G through the wrappers shows the test config | n/a (the russh tests build their own parameters; no ssh config is read) | n/a |
-| `exec` | `exec_through_alias_returns_stdout` | passes |  | `russh_exec::exec_returns_stdout_stderr_and_exit` | PENDING |
-| `exec` | `exec_propagates_remote_exit_code` | passes | remote `exit 7` gives exit code 7 | `russh_exec::exec_propagates_remote_exit_code` | PENDING |
-| `exec` | `exec_through_endpoint_target` | passes | host, user and port instead of an alias | `russh_exec::exec_returns_stdout_stderr_and_exit` | PENDING |
-| `terminal` | `interactive_shell_on_a_pty` | passes | marker round trip, resize, exit ends ssh | `russh_terminal::interactive_shell_on_a_pty` | PENDING |
-| `sftp` | `browse_and_manage_files` | passes | connect, home, mkdir, list, upload, rename, remove, rmdir | `russh_sftp::browse_and_manage_files` | PENDING |
-| `sftp` | `missing_directory_is_reported_as_not_found_or_empty` | passes (either outcome) | listing a missing directory gives a "not found" error or an empty list depending on timing; see below | `russh_sftp::missing_paths_are_reported_as_not_found` | PENDING |
-| `sftp` | `upload_and_download_through_sftp_transfer` | passes | 300 kB, bytes identical | `russh_sftp::upload_and_download_300_kb_streams` | PENDING |
-| `sftp` | `download_of_a_missing_file_fails_with_a_reason` | passes | non-zero exit, no local file | `russh_sftp::download_of_a_missing_file_fails_with_a_reason` | PENDING |
-| `sftp` | `upload_and_download_through_scp_invocation` | passes | ScpInvocation, bytes identical | `russh_sftp::upload_and_download_300_kb_streams` | PENDING |
-| `tunnels` | `local_forward_reaches_the_echo_service` | passes | -L, port closes after stop | `russh_tunnels::local_forward_reaches_the_echo_service` | PENDING |
-| `tunnels` | `dynamic_forward_speaks_socks5` | passes | -D, SOCKS5 CONNECT by hand | `russh_tunnels::dynamic_forward_speaks_socks5` | PENDING |
-| `tunnels` | `remote_forward_reaches_a_local_listener` | passes | -R, checked from inside the container | `russh_tunnels::remote_forward_reaches_a_local_listener` | PENDING |
-| `tunnels` | `forward_to_a_busy_local_port_fails_fast` | passes | ExitOnForwardFailure makes ssh exit | `russh_tunnels::forward_to_a_busy_local_port_fails_fast` | PENDING |
-| `password` | `exec_with_password_from_askpass` | passes | askpass was asked for the password | `russh_password::exec_with_password_from_the_interaction` | PENDING |
-| `password` | `wrong_password_fails_cleanly` | passes | Permission denied, no hang | `russh_password::wrong_password_fails_cleanly` | PENDING |
-| `password` | `sftp_session_with_password_from_askpass` | passes |  | `russh_password::sftp_session_with_password` | PENDING |
-| `password` | `sftp_session_with_wrong_password_errors_without_hanging` | passes | connect returns an error | `russh_password::wrong_password_fails_cleanly` | PENDING |
-| `password` | `tunnel_with_password_from_askpass` | passes |  | `russh_password::tunnel_with_password` | PENDING |
-| `password` | `tunnel_with_wrong_password_exits` | passes | Permission denied | `russh_password::wrong_password_fails_cleanly` | PENDING |
-| `password` | `transfer_with_password_from_askpass` | failed on 1.0.1, fixed in 1.0.2 | `sftp -b` implied BatchMode, no password prompt; see below | `russh_password::sftp_session_with_password` | PENDING |
-| `jump` | `exec_through_proxy_jump_alias_from_config` | passes | ProxyJump in ssh config | `russh_jump::exec_through_the_bastion` | PENDING |
-| `jump` | `exec_through_connection_proxy_jump` | passes | Connection.proxy_jump (-J) | `russh_jump::exec_through_the_bastion` | PENDING |
-| `jump` | `sftp_through_proxy_jump_alias_from_config` | passes | session, upload, download | `russh_jump::sftp_through_the_bastion` | PENDING |
-| `jump` | `sftp_through_connection_proxy_jump` | passes | session, upload, download | `russh_jump::sftp_through_the_bastion` | PENDING |
-| `jump` | `the_bastion_is_a_different_machine` | passes | sanity check for the jump tests | `russh_jump::the_bastion_is_a_different_machine` | PENDING |
+| `exec` | `exec_through_alias_returns_stdout` | passes |  | `russh_exec::exec_returns_stdout_stderr_and_exit` | passes |
+| `exec` | `exec_propagates_remote_exit_code` | passes | remote `exit 7` gives exit code 7 | `russh_exec::exec_propagates_remote_exit_code` | passes |
+| `exec` | `exec_through_endpoint_target` | passes | host, user and port instead of an alias | `russh_exec::exec_returns_stdout_stderr_and_exit` | passes |
+| `terminal` | `interactive_shell_on_a_pty` | passes | marker round trip, resize, exit ends ssh | `russh_terminal::interactive_shell_on_a_pty` | passes |
+| `sftp` | `browse_and_manage_files` | passes | connect, home, mkdir, list, upload, rename, remove, rmdir | `russh_sftp::browse_and_manage_files` | passes |
+| `sftp` | `missing_directory_is_reported_as_not_found_or_empty` | passes (either outcome) | listing a missing directory gives a "not found" error or an empty list depending on timing; see below | `russh_sftp::missing_paths_are_reported_as_not_found` | passes |
+| `sftp` | `upload_and_download_through_sftp_transfer` | passes | 300 kB, bytes identical | `russh_sftp::upload_and_download_300_kb_streams` | passes |
+| `sftp` | `download_of_a_missing_file_fails_with_a_reason` | passes | non-zero exit, no local file | `russh_sftp::download_of_a_missing_file_fails_with_a_reason` | passes |
+| `sftp` | `upload_and_download_through_scp_invocation` | passes | ScpInvocation, bytes identical | `russh_sftp::upload_and_download_300_kb_streams` | passes |
+| `tunnels` | `local_forward_reaches_the_echo_service` | passes | -L, port closes after stop | `russh_tunnels::local_forward_reaches_the_echo_service` | passes |
+| `tunnels` | `dynamic_forward_speaks_socks5` | passes | -D, SOCKS5 CONNECT by hand | `russh_tunnels::dynamic_forward_speaks_socks5` | passes |
+| `tunnels` | `remote_forward_reaches_a_local_listener` | passes | -R, checked from inside the container | `russh_tunnels::remote_forward_reaches_a_local_listener` | passes |
+| `tunnels` | `forward_to_a_busy_local_port_fails_fast` | passes | ExitOnForwardFailure makes ssh exit | `russh_tunnels::forward_to_a_busy_local_port_fails_fast` | passes |
+| `password` | `exec_with_password_from_askpass` | passes | askpass was asked for the password | `russh_password::exec_with_password_from_the_interaction` | passes |
+| `password` | `wrong_password_fails_cleanly` | passes | Permission denied, no hang | `russh_password::wrong_password_fails_cleanly` | passes |
+| `password` | `sftp_session_with_password_from_askpass` | passes |  | `russh_password::sftp_session_with_password` | passes |
+| `password` | `sftp_session_with_wrong_password_errors_without_hanging` | passes | connect returns an error | `russh_password::wrong_password_fails_cleanly` | passes |
+| `password` | `tunnel_with_password_from_askpass` | passes |  | `russh_password::tunnel_with_password` | passes |
+| `password` | `tunnel_with_wrong_password_exits` | passes | Permission denied | `russh_password::wrong_password_fails_cleanly` | passes |
+| `password` | `transfer_with_password_from_askpass` | failed on 1.0.1, fixed in 1.0.2 | `sftp -b` implied BatchMode, no password prompt; see below | `russh_password::sftp_session_with_password` | passes |
+| `jump` | `exec_through_proxy_jump_alias_from_config` | passes | ProxyJump in ssh config | `russh_jump::exec_through_the_bastion` | passes |
+| `jump` | `exec_through_connection_proxy_jump` | passes | Connection.proxy_jump (-J) | `russh_jump::exec_through_the_bastion` | passes |
+| `jump` | `sftp_through_proxy_jump_alias_from_config` | passes | session, upload, download | `russh_jump::sftp_through_the_bastion` | passes |
+| `jump` | `sftp_through_connection_proxy_jump` | passes | session, upload, download | `russh_jump::sftp_through_the_bastion` | passes |
+| `jump` | `the_bastion_is_a_different_machine` | passes | sanity check for the jump tests | `russh_jump::the_bastion_is_a_different_machine` | passes |
 
 ### russh-only tests
 
