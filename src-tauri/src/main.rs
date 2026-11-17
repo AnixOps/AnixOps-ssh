@@ -98,6 +98,7 @@ fn main() {
             vault::vault_forget_all,
             vault::secrets_status,
             vault::secrets_set,
+            daemon::hostkey_reply,
             ai::ai_config_get,
             ai::ai_config_save,
             ai::ai_key_set,
@@ -123,6 +124,7 @@ fn main() {
             // Background ssh processes do not end with the window on their own.
             if let tauri::RunEvent::Exit = event {
                 app.state::<tunnels::Tunnels>().stop_all();
+                tunnels::stop_remote(app);
             }
         });
 }

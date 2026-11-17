@@ -129,6 +129,11 @@ pub struct Prompt {
     pub prompt: String,
     /// A yes/no question, such as accepting a new host key.
     pub confirm: bool,
+    /// What a prompt of the built-in engine asks for (`password`,
+    /// `passphrase`, `keyboard_interactive`); `None` for OpenSSH's.
+    pub kind: Option<&'static str>,
+    /// Whether the answer may be shown while typing.
+    pub echo: Option<bool>,
     /// The prompt is the saved password or key passphrase of a saved host,
     /// so the dialog may offer "Remember in vault".
     pub rememberable: bool,
@@ -215,6 +220,55 @@ impl Hub {
     /// `"<port> <token>"` for [`ENV_ENDPOINT`].
     pub fn endpoint(&self) -> String {
         format!("{} {}", self.port, self.token)
+    }
+
+    /// A prompt of the built-in engine: shown to the attached clients like an
+    /// OpenSSH one, answered with `askpass.reply`. `None` when the user
+    /// cancelled, nobody could be asked, or nobody answered in time.
+    pub async fn prompt(
+        &self,
+        host: &str,
+        prompt: &str,
+        kind: &'static str,
+        echo: bool,
+    ) -> Option<String> {
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        let (sender, receiver) = oneshot::channel();
+        lock(&self.pending).insert(
+            id,
+            Waiting {
+                sender,
+                matched: None,
+            },
+        );
+        let shown = (self.notify)(Prompt {
+            id,
+            host: host.to_owned(),
+            prompt: prompt.to_owned(),
+            confirm: false,
+            kind: Some(kind),
+            echo: Some(echo),
+            rememberable: false,
+            vault_locked: false,
+        });
+        if !shown {
+            lock(&self.pending).remove(&id);
+            return None;
+        }
+        let answer = tokio::time::timeout(self.answer_timeout, receiver)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten();
+        lock(&self.pending).remove(&id);
+        (self.resolved)(id);
+        answer
+    }
+
+    /// Allocates an id that no askpass prompt uses, for other kinds of
+    /// questions (host keys) that share the clients' dialogs.
+    pub fn next_id(&self) -> u64 {
+        self.next.fetch_add(1, Ordering::Relaxed)
     }
 
     /// Lets the hub answer from, and save to, the vault. Set once.
@@ -344,6 +398,8 @@ impl Hub {
             host: request.host,
             confirm: request.prompt.contains("(yes/no"),
             prompt: request.prompt,
+            kind: None,
+            echo: None,
             rememberable,
             vault_locked,
         };

@@ -79,7 +79,7 @@ export function AskpassDialog() {
             <>
               <Input
                 ref={inputRef}
-                type="password"
+                type={current.echo ? "text" : "password"}
                 autoComplete="off"
                 value={value}
                 onChange={(event) => setValue(event.target.value)}

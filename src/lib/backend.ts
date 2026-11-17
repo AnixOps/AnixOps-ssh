@@ -55,9 +55,15 @@ export interface HostFields {
   port: number;
   proxyJump: string | null;
   notes: string;
+  /** Per-host SSH engine override; null or "auto" follows the global setting. */
+  engine?: EnginePreference | null;
   /** Opt-in: send the shell integration script after login. */
   shellIntegration: boolean;
 }
+
+/** Which SSH engine runs a host: the built-in one (russh) or the system OpenSSH. */
+export type SshEngine = "openssh" | "russh";
+export type EnginePreference = "auto" | "russh" | "openssh";
 
 export interface HostInput {
   /** A saved host's id, a ~/.ssh/config host's id (saved as new), or null. */
@@ -99,6 +105,10 @@ export interface SessionHandle {
   detach(): void;
   /** Ends the session. */
   close(): void;
+  /** The engine the session runs on; absent for a local shell. */
+  engine?: SshEngine | null;
+  /** Why that engine was chosen (English, for a tooltip). */
+  engineReason?: string | null;
 }
 
 /** A session that outlived the window, as the background daemon reports it. */
@@ -109,6 +119,8 @@ export interface LiveSession {
   rows: number;
   running: boolean;
   exitCode: number | null;
+  engine?: SshEngine | null;
+  engineReason?: string | null;
 }
 
 /** False in a plain browser (vite dev, CI screenshots): use preview data. */
@@ -237,14 +249,19 @@ export async function openSession(
   if (!isTauri) return previewSession(hostId, onEvent);
   const events = new Channel<SessionEvent>();
   events.onmessage = onEvent;
-  const id = await invoke<string>("session_open", { hostId, cols, rows, events });
-  return sessionHandle(id);
+  const opened = await invoke<{ id: string; engine: SshEngine | null; engineReason: string | null }>(
+    "session_open",
+    { hostId, cols, rows, events },
+  );
+  return sessionHandle(opened.id, opened.engine, opened.engineReason);
 }
 
-function sessionHandle(id: string): SessionHandle {
+function sessionHandle(id: string, engine: SshEngine | null = null, engineReason: string | null = null): SessionHandle {
   const report = (reason: unknown) => console.error(reason);
   return {
     id,
+    engine,
+    engineReason,
     write: (data) => void invoke("session_write", { id, data }).catch(report),
     resize: (cols, rows) => void invoke("session_resize", { id, cols, rows }).catch(report),
     detach: () => void invoke("session_detach", { id }).catch(report),
@@ -266,8 +283,11 @@ export async function attachSession(
   if (!isTauri) throw new Error("no daemon outside the app");
   const events = new Channel<SessionEvent>();
   events.onmessage = onEvent;
-  await invoke("session_attach", { id, events });
-  return sessionHandle(id);
+  const attached = await invoke<{ engine: SshEngine | null; engineReason: string | null }>("session_attach", {
+    id,
+    events,
+  });
+  return sessionHandle(id, attached.engine, attached.engineReason);
 }
 
 export async function copyText(text: string): Promise<void> {
@@ -366,10 +386,65 @@ export interface AskpassPrompt {
   prompt: string;
   /** A yes/no question, such as accepting a new host key. */
   confirm: boolean;
+  /** What the built-in engine asks for; absent for OpenSSH's prompts. */
+  kind?: "password" | "passphrase" | "keyboard_interactive";
+  /** Whether the answer may be shown while typing. */
+  echo?: boolean;
   /** The saved host's password or key passphrase: offer "Remember in vault". */
   rememberable?: boolean;
   /** An answer is saved for this host but the vault is locked. */
   vaultLocked?: boolean;
+}
+
+/** The built-in engine needs a decision about a host key. */
+export interface HostKeyPrompt {
+  id: number;
+  host: string;
+  port: number;
+  algorithm: string;
+  fingerprint: string;
+  /** "changed" means the server presents another key than the recorded one. */
+  status: "unknown" | "changed";
+  /** Fingerprints on record when the key changed. */
+  expected: string[];
+}
+
+export type HostKeyDecision = "reject" | "accept_once" | "accept_and_save" | "replace_and_save";
+
+/** Subscribes to host key questions; returns the unsubscribe function. */
+export function onHostKey(handler: (prompt: HostKeyPrompt) => void): () => void {
+  if (!isTauri) {
+    const preview = new URLSearchParams(window.location.search).get("hostkey");
+    if (preview === "unknown" || preview === "changed") {
+      window.setTimeout(
+        () =>
+          handler({
+            id: 1,
+            host: "prod-db",
+            port: 22,
+            algorithm: "ssh-ed25519",
+            fingerprint: "SHA256:3fA9k2Lq0yQkZf1mJb7Vx2c8Tn5Rw4Hs6Pd0Ue1Gi9o",
+            status: preview,
+            expected: preview === "changed" ? ["SHA256:Qw8Zr1Xn4Cv7Bm2Lk9Jh6Gf3Dt0Sa5Pe8Yu1Io4Ru7"] : [],
+          }),
+        300,
+      );
+    }
+    return () => {};
+  }
+  const stop = listen<HostKeyPrompt>("hostkey", (event) => handler(event.payload));
+  return () => void stop.then((unlisten) => unlisten());
+}
+
+/** Subscribes to host key questions that were answered elsewhere or timed out. */
+export function onHostKeyResolved(handler: (id: number) => void): () => void {
+  if (!isTauri) return () => {};
+  const stop = listen<{ id: number }>("hostkey-resolved", (event) => handler(event.payload.id));
+  return () => void stop.then((unlisten) => unlisten());
+}
+
+export function replyHostKey(id: number, decision: HostKeyDecision): void {
+  if (isTauri) void invoke("hostkey_reply", { id, decision }).catch(console.error);
 }
 
 /** Subscribes to OpenSSH prompts; returns the unsubscribe function. */

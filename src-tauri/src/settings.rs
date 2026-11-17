@@ -1,7 +1,9 @@
 //! App settings and a check of the local OpenSSH setup.
 
 use crate::hosts::{load_config, open_store};
-use easyssh_core::{scan_default_ssh_config, Locale, OpenSsh, TerminalPreferences, Theme};
+use easyssh_core::{
+    scan_default_ssh_config, Locale, OpenSsh, SshEngine, TerminalPreferences, Theme,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -11,6 +13,9 @@ pub struct Settings {
     locale: Locale,
     terminal_font_size: f32,
     terminal_scrollback: usize,
+    /// `openssh` (default) or `russh`.
+    #[serde(default)]
+    ssh_engine: SshEngine,
     /// `None` until the first-run question was answered.
     #[serde(default)]
     crash_reports: Option<bool>,
@@ -26,6 +31,7 @@ pub fn settings_get() -> Result<Settings, String> {
         locale: config.locale,
         terminal_font_size: config.terminal.font_size,
         terminal_scrollback: config.terminal.scrollback_lines,
+        ssh_engine: config.ssh_engine.unwrap_or_default(),
         crash_reports: config.telemetry.crash_reports,
         usage_stats: config.telemetry.usage_stats,
     })
@@ -65,6 +71,12 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     store
         .set_setting_as("telemetry", &telemetry)
         .map_err(stored)?;
+    // Absent means openssh, so an unchanged default stays out of the store.
+    if settings.ssh_engine != SshEngine::Openssh || load_config()?.ssh_engine.is_some() {
+        store
+            .set_setting_as("ssh_engine", &settings.ssh_engine)
+            .map_err(stored)?;
+    }
     crate::telemetry::apply(&telemetry);
     Ok(())
 }

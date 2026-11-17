@@ -4,7 +4,7 @@
 use crate::auth;
 use crate::error::{AuthMethod, Error, Result};
 use crate::forward::RemoteForwards;
-use crate::interaction::{Decision, Interaction};
+use crate::interaction::{Decision, HostKeyDetails, Interaction};
 use crate::known_hosts::{fingerprint, KnownHostStatus};
 use crate::params::ConnectParams;
 use russh::client::{self, Msg};
@@ -91,6 +91,22 @@ impl client::Handler for ClientHandler {
     }
 }
 
+fn details(
+    host: &str,
+    port: u16,
+    key: &PublicKey,
+    fingerprint: &str,
+    status: KnownHostStatus,
+) -> HostKeyDetails {
+    HostKeyDetails {
+        host: host.to_owned(),
+        port,
+        algorithm: key.algorithm().to_string(),
+        fingerprint: fingerprint.to_owned(),
+        status,
+    }
+}
+
 /// Decides about a host key: known_hosts first, then the user.
 async fn verify_host_key(
     params: &ConnectParams,
@@ -108,7 +124,7 @@ async fn verify_host_key(
         }),
         status @ KnownHostStatus::Unknown => {
             match interaction
-                .verify_host_key(host, port, &print, status)
+                .verify_host_key_details(&details(host, port, key, &print, status))
                 .await
             {
                 Decision::AcceptOnce => Ok(()),
@@ -130,7 +146,7 @@ async fn verify_host_key(
             // Only an explicit replacement is accepted. Whatever else the
             // Interaction answers, a changed key stays refused.
             match interaction
-                .verify_host_key(host, port, &print, status)
+                .verify_host_key_details(&details(host, port, key, &print, status))
                 .await
             {
                 Decision::ReplaceAndSave => params.known_hosts.replace(host, port, key),

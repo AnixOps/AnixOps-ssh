@@ -14,6 +14,7 @@ import {
   saveHost,
   secretsSet,
   secretsStatus,
+  type EnginePreference,
   type Group,
   type Host,
   type HostFields,
@@ -254,6 +255,19 @@ export function HostEditor({
               className="font-mono"
               spellCheck={false}
             />
+          </Field>
+
+          <Field label={t.hostEngine} hint={t.optional}>
+            <select
+              aria-label={t.hostEngine}
+              value={fields.engine ?? "auto"}
+              onChange={(event) => set("engine", event.target.value as EnginePreference)}
+              className="h-9 w-full rounded-sm bg-fill-1 px-3 text-callout text-label-1 outline-none focus-visible:ring-2 focus-visible:ring-(--accent)"
+            >
+              <option value="auto">{t.engineAuto}</option>
+              <option value="russh">{t.engineBuiltin}</option>
+              <option value="openssh">{t.engineOpenssh}</option>
+            </select>
           </Field>
 
           <div className="grid grid-cols-2 gap-3">

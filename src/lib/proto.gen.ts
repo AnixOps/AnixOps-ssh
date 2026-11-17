@@ -121,6 +121,42 @@ export type ImportGroupMode = "source" | "none" | "existing";
  * via the `definition` "SyncState".
  */
 export type SyncState = "signed_out" | "idle" | "syncing" | "error" | "locked";
+/**
+ * Rust: domain::SshEngine. The global engine setting, and the engine a session actually runs on.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SshEngine".
+ */
+export type SshEngine = "openssh" | "russh";
+/**
+ * Rust: domain::EnginePreference. Per-host override of the global engine; `auto` follows the global setting.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "EnginePreference".
+ */
+export type EnginePreference = "auto" | "russh" | "openssh";
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostKeyStatus".
+ */
+export type HostKeyStatus = "unknown" | "changed";
+/**
+ * `replace_and_save` is the only way to accept a changed key; any other answer to a changed key refuses the connection.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostKeyDecision".
+ */
+export type HostKeyDecision = "reject" | "accept_once" | "accept_and_save" | "replace_and_save";
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SftpEntryKind".
+ */
+export type SftpEntryKind = "file" | "dir" | "symlink" | "other";
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TunnelStateName".
+ */
+export type TunnelStateName = "starting" | "running" | "stopped" | "failed";
 
 /**
  * Entities (v1 shapes), envelopes and the starting command/event set.
@@ -168,6 +204,10 @@ export interface Connection {
   shell_integration?: boolean;
   created_at: string;
   updated_at: string;
+  /**
+   * Absent means auto.
+   */
+  engine?: "auto" | "russh" | "openssh";
 }
 /**
  * Rust: domain::Group. `parent_id` has serde(default), so it is optional.
@@ -324,6 +364,10 @@ export interface AppConfig {
   sync?: SyncPreferences;
   experimental?: ExperimentalFeatures;
   telemetry?: TelemetryPreferences;
+  /**
+   * Absent means openssh.
+   */
+  ssh_engine?: "openssh" | "russh";
 }
 /**
  * Machine-readable code plus a human message.
@@ -674,6 +718,14 @@ export interface SessionOpenParams {
  */
 export interface SessionOpenResult {
   session_id: string;
+  /**
+   * The engine the session runs on; absent for a local shell.
+   */
+  engine?: "openssh" | "russh";
+  /**
+   * Why that engine was chosen, in English, for display in a tooltip.
+   */
+  engine_reason?: string;
 }
 /**
  * Command `session.write` payload. Reply: null.
@@ -729,6 +781,14 @@ export interface SessionInfo {
    * Offset the next output will have (total bytes produced).
    */
   next_seq: number;
+  /**
+   * The engine the session runs on; absent for a local shell.
+   */
+  engine?: "openssh" | "russh";
+  /**
+   * Why that engine was chosen, in English, for display in a tooltip.
+   */
+  engine_reason?: string;
 }
 /**
  * Command `session.list` payload. Reply: SessionListResult.
@@ -861,6 +921,14 @@ export interface AskpassPromptEvent {
    * A saved answer exists but the vault is locked: the dialog may offer to unlock it (`askpass.unlock`).
    */
   vault_locked?: boolean;
+  /**
+   * What the prompt asks for; absent for OpenSSH's askpass prompts.
+   */
+  kind?: "password" | "passphrase" | "keyboard_interactive" | "confirm";
+  /**
+   * Whether the answer may be shown while typing (keyboard-interactive prompts).
+   */
+  echo?: boolean;
 }
 /**
  * Command `daemon.shutdown_when_idle` payload. The daemon refuses new sessions (error `draining`) and exits once no session is running, even if clients stay connected. Reply: DaemonShutdownWhenIdleResult.
@@ -1405,4 +1473,287 @@ export interface HostsVaultsResult {
   host_vaults: {
     [k: string]: string;
   };
+}
+/**
+ * Event `hostkey.prompt` payload: the engine needs a decision about a host key. Answer with `hostkey.reply`.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostkeyPromptEvent".
+ */
+export interface HostkeyPromptEvent {
+  id: number;
+  host: string;
+  port: number;
+  algorithm: string;
+  fingerprint: string;
+  status: HostKeyStatus;
+  /**
+   * Fingerprints on record when the key changed.
+   */
+  expected?: string[];
+}
+/**
+ * Event `hostkey.resolved` payload: the prompt was answered, cancelled or timed out; close its dialog.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostkeyResolvedEvent".
+ */
+export interface HostkeyResolvedEvent {
+  id: number;
+}
+/**
+ * Command `hostkey.reply` payload.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostkeyReplyParams".
+ */
+export interface HostkeyReplyParams {
+  id: number;
+  decision: HostKeyDecision;
+}
+/**
+ * Command `engine.resolve` payload. Reply: EngineResolveResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "EngineResolveParams".
+ */
+export interface EngineResolveParams {
+  host_id: string;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "EngineResolveResult".
+ */
+export interface EngineResolveResult {
+  engine: SshEngine;
+  reason: string;
+}
+/**
+ * Command `engine.connections` payload (debug). Reply: EngineConnectionsResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "EngineConnectionsParams".
+ */
+export interface EngineConnectionsParams {}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "EngineConnection".
+ */
+export interface EngineConnection {
+  host_id: string;
+  target: string;
+  jump: string[];
+  leases: number;
+}
+/**
+ * `opened` counts every connection the russh engine has opened since the daemon started.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "EngineConnectionsResult".
+ */
+export interface EngineConnectionsResult {
+  opened: number;
+  live: number;
+  connections: EngineConnection[];
+}
+/**
+ * `modified` is Unix seconds.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SftpEntry".
+ */
+export interface SftpEntry {
+  name: string;
+  kind: SftpEntryKind;
+  size: number;
+  modified: number | null;
+  permissions: number | null;
+}
+/**
+ * Command `sftp.open` payload (russh engine). Reply: SftpOpenResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SftpOpenParams".
+ */
+export interface SftpOpenParams {
+  host_id: string;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SftpOpenResult".
+ */
+export interface SftpOpenResult {
+  sftp_id: string;
+  home: string;
+}
+/**
+ * Command `sftp.list` payload. Reply: SftpListResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SftpListParams".
+ */
+export interface SftpListParams {
+  sftp_id: string;
+  path: string;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SftpListResult".
+ */
+export interface SftpListResult {
+  entries: SftpEntry[];
+}
+/**
+ * Command `sftp.mkdir` payload.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SftpMkdirParams".
+ */
+export interface SftpMkdirParams {
+  sftp_id: string;
+  path: string;
+}
+/**
+ * Command `sftp.remove` payload.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SftpRemoveParams".
+ */
+export interface SftpRemoveParams {
+  sftp_id: string;
+  path: string;
+  directory: boolean;
+}
+/**
+ * Command `sftp.rename` payload.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SftpRenameParams".
+ */
+export interface SftpRenameParams {
+  sftp_id: string;
+  from: string;
+  to: string;
+}
+/**
+ * Command `sftp.close` payload.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SftpCloseParams".
+ */
+export interface SftpCloseParams {
+  sftp_id: string;
+}
+/**
+ * Command `transfer.start` payload. Both paths are final (an upload names the remote file, not its directory). Progress and the end arrive as events. Reply: TransferStartResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferStartParams".
+ */
+export interface TransferStartParams {
+  sftp_id: string;
+  direction: TransferDirection;
+  local_path: string;
+  remote_path: string;
+  recursive?: boolean;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferStartResult".
+ */
+export interface TransferStartResult {
+  transfer_id: string;
+}
+/**
+ * Command `transfer.cancel` payload.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferCancelParams".
+ */
+export interface TransferCancelParams {
+  transfer_id: string;
+}
+/**
+ * Event `transfer.progress` payload: bytes moved so far.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferProgressEvent".
+ */
+export interface TransferProgressEvent {
+  transfer_id: string;
+  bytes: number;
+}
+/**
+ * Event `transfer.done` payload.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferDoneEvent".
+ */
+export interface TransferDoneEvent {
+  transfer_id: string;
+  status: "completed" | "failed" | "cancelled";
+  error?: string | null;
+}
+/**
+ * Command `tunnel.start` payload (russh engine). Reply: TunnelStartResult; later changes arrive as `tunnel.status`.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TunnelStartParams".
+ */
+export interface TunnelStartParams {
+  tunnel: Tunnel;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TunnelStartResult".
+ */
+export interface TunnelStartResult {
+  id: string;
+  bind_port: number;
+}
+/**
+ * Command `tunnel.stop` payload.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TunnelStopParams".
+ */
+export interface TunnelStopParams {
+  id: string;
+}
+/**
+ * Command `tunnel.list` payload. Reply: TunnelListResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TunnelListParams".
+ */
+export interface TunnelListParams {}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TunnelState".
+ */
+export interface TunnelState {
+  id: string;
+  host_id: string;
+  state: TunnelStateName;
+  bind_port?: number | null;
+  error?: string | null;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TunnelListResult".
+ */
+export interface TunnelListResult {
+  tunnels: TunnelState[];
+}
+/**
+ * Event `tunnel.status` payload.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TunnelStatusEvent".
+ */
+export interface TunnelStatusEvent {
+  id: string;
+  state: TunnelStateName;
+  bind_port?: number | null;
+  error?: string | null;
 }

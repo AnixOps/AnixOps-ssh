@@ -33,8 +33,34 @@ pub struct AppConfig {
     pub sync: SyncPreferences,
     #[serde(default)]
     pub experimental: ExperimentalFeatures,
+    /// Which SSH engine runs new sessions. Absent means `openssh`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_engine: Option<SshEngine>,
     #[serde(default)]
     pub telemetry: TelemetryPreferences,
+}
+
+/// The global SSH engine setting.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SshEngine {
+    /// The system `ssh` binary (today's behaviour).
+    #[default]
+    Openssh,
+    /// The built-in russh engine inside the daemon, with OpenSSH as the
+    /// fallback for hosts that need features it does not support.
+    Russh,
+}
+
+/// A per-host override of the global [`SshEngine`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EnginePreference {
+    /// Follow the global setting.
+    #[default]
+    Auto,
+    Russh,
+    Openssh,
 }
 
 impl AppConfig {
@@ -148,6 +174,9 @@ pub struct Connection {
     pub shell_integration: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Per-host engine override; absent means `auto`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<EnginePreference>,
 }
 
 impl Connection {
@@ -175,6 +204,7 @@ impl Connection {
             shell_integration: false,
             created_at: now,
             updated_at: now,
+            engine: None,
         }
     }
 }

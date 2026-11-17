@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "EasySSH desktop daemon: authenticated local IPC, terminal sessions that outlive the UI"
 
 [dependencies]
+async-trait = "0.1"
 base64.workspace = true
 chrono.workspace = true
 dirs.workspace = true
@@ -14,6 +15,8 @@ easyssh-core = { path = "../easyssh-core" }
 easyssh-proto = { path = "../easyssh-proto" }
 easyssh-sessionlog = { path = "../easyssh-sessionlog" }
 easyssh-crypto = { path = "../easyssh-crypto" }
+easyssh-ssh = { path = "../easyssh-ssh" }
+russh = { version = "0.65.2", default-features = false, features = ["ring", "rsa", "flate2"] }
 easyssh-store = { path = "../easyssh-store" }
 easyssh-sync = { path = "../easyssh-sync" }
 easyssh-telemetry = { path = "../easyssh-telemetry" }
@@ -27,7 +30,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 uuid.workspace = true
 zeroize = "1"
 

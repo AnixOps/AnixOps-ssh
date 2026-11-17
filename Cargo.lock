@@ -121,6 +121,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tempfile",
+ "tokio",
  "uuid",
  "zeroize",
 ]
@@ -1857,6 +1858,7 @@ dependencies = [
 name = "easysshd"
 version = "1.0.2"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "chrono",
  "dirs 5.0.1",
@@ -1865,6 +1867,7 @@ dependencies = [
  "easyssh-proto",
  "easyssh-server",
  "easyssh-sessionlog",
+ "easyssh-ssh",
  "easyssh-store",
  "easyssh-sync",
  "easyssh-telemetry",
@@ -1875,6 +1878,7 @@ dependencies = [
  "libc",
  "portable-pty",
  "rand 0.8.8",
+ "russh",
  "serde",
  "serde_json",
  "sha2 0.10.9",

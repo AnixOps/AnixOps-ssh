@@ -124,8 +124,18 @@ fn is_local(sessions: &Sessions, id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// What `session_open` answers: the session and the engine it runs on.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedSession {
+    id: String,
+    /// `russh` or `openssh`; `None` for a local shell.
+    engine: Option<String>,
+    engine_reason: Option<String>,
+}
+
 /// Starts a session for `host_id`, or a local shell when it is `None`, and
-/// returns its id. Output and the exit status arrive on `events`.
+/// returns its id and engine. Output and the exit status arrive on `events`.
 #[tauri::command]
 pub async fn session_open(
     app: AppHandle,
@@ -135,14 +145,20 @@ pub async fn session_open(
     cols: u16,
     rows: u16,
     events: Channel<SessionEvent>,
-) -> Result<String, String> {
+) -> Result<OpenedSession, String> {
     crate::telemetry::record_session();
     if let Some(supervisor) = daemon.supervisor().filter(|s| s.accepts_new_sessions()) {
         match supervisor
-            .open_session(host_id.as_deref(), cols, rows, sink_for(events.clone()))
+            .open_session_info(host_id.as_deref(), cols, rows, sink_for(events.clone()))
             .await
         {
-            Ok(id) => return Ok(id),
+            Ok(opened) => {
+                return Ok(OpenedSession {
+                    id: opened.session_id,
+                    engine: opened.engine,
+                    engine_reason: opened.engine_reason,
+                })
+            }
             // The daemon went away or started draining since the check:
             // this session runs in-process instead.
             Err(error)
@@ -153,7 +169,14 @@ pub async fn session_open(
             Err(error) => return Err(error.to_string()),
         }
     }
-    open_in_process(app, &sessions, host_id, cols, rows, events)
+    let local = host_id.is_none();
+    let id = open_in_process(app, &sessions, host_id, cols, rows, events)?;
+    Ok(OpenedSession {
+        id,
+        engine: (!local).then(|| "openssh".to_owned()),
+        engine_reason: (!local)
+            .then(|| "the session daemon is not running, so OpenSSH runs this host".to_owned()),
+    })
 }
 
 /// A session the daemon holds, as the UI needs it to rebuild its tabs.
@@ -166,6 +189,8 @@ pub struct LiveSession {
     rows: u16,
     running: bool,
     exit_code: Option<i64>,
+    engine: Option<String>,
+    engine_reason: Option<String>,
 }
 
 /// Sessions that outlived the window. Empty without a daemon.
@@ -191,6 +216,11 @@ pub async fn sessions_list(daemon: State<'_, DaemonState>) -> Result<Vec<LiveSes
             rows: info.rows,
             running: info.running,
             exit_code: info.exit_code,
+            engine: info
+                .engine
+                .and_then(|engine| serde_json::to_value(engine).ok())
+                .and_then(|value| value.as_str().map(str::to_owned)),
+            engine_reason: info.engine_reason,
         })
         .collect())
 }
@@ -202,15 +232,35 @@ pub async fn session_attach(
     daemon: State<'_, DaemonState>,
     id: String,
     events: Channel<SessionEvent>,
-) -> Result<(), String> {
+) -> Result<AttachedSession, String> {
     let supervisor = daemon
         .supervisor()
         .ok_or("the session daemon is not running")?;
     supervisor
         .attach_session(&id, None, sink_for(events))
         .await
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    // The engine is part of the session's record, not of its output.
+    let info = supervisor
+        .list_sessions()
+        .await
+        .ok()
+        .and_then(|sessions| sessions.into_iter().find(|info| info.session_id == id));
+    Ok(AttachedSession {
+        engine: info
+            .as_ref()
+            .and_then(|info| serde_json::to_value(info.engine).ok())
+            .and_then(|value| value.as_str().map(str::to_owned)),
+        engine_reason: info.and_then(|info| info.engine_reason),
+    })
+}
+
+/// What `session_attach` answers beyond the replay.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachedSession {
+    engine: Option<String>,
+    engine_reason: Option<String>,
 }
 
 /// Stops sending a session's output to this window; the session keeps running.

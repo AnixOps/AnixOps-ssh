@@ -126,6 +126,7 @@ impl Syncable for Host {
         take(fields, "remote_directories", &mut c.remote_directories)?;
         take(fields, "terminal", &mut c.terminal)?;
         take(fields, "shell_integration", &mut c.shell_integration)?;
+        take(fields, "engine", &mut c.engine)?;
         take(fields, "tags", &mut c.tags)?;
         take(fields, "notes_secret", &mut host.notes_secret)?;
         Ok(host)
@@ -1061,5 +1062,28 @@ impl SyncStore for StoreSync {
 
     fn set_cursor(&mut self, vault_id: &str, cursor: u64) -> Result<()> {
         self.store().set_sync_cursor(vault_id, cursor)
+    }
+}
+
+#[cfg(test)]
+mod engine_field_tests {
+    use super::Syncable;
+    use crate::entities::Host;
+    use crate::store::Entity;
+    use easyssh_core::{Connection, EnginePreference};
+
+    #[test]
+    fn a_hosts_engine_choice_travels_with_it() {
+        let mut connection = Connection::alias("engine", "engine");
+        connection.id = uuid::Uuid::new_v4().to_string();
+        connection.engine = Some(EnginePreference::Russh);
+        let sent = Host::new(connection.clone());
+        let fields: std::collections::BTreeMap<String, serde_json::Value> = sent
+            .fields()
+            .into_iter()
+            .map(|(name, field)| (name.to_owned(), field.value))
+            .collect();
+        let received = Host::from_fields(None, &connection.id, &fields).unwrap();
+        assert_eq!(received.connection.engine, connection.engine);
     }
 }

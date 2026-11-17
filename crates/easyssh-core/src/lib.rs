@@ -19,9 +19,9 @@ pub mod workspace;
 
 pub use config::{ConfigStore, MigrationReport};
 pub use domain::{
-    AppConfig, CommandSnippet, Connection, ConnectionTarget, DisplayDensity, ExperimentalFeatures,
-    Group, Locale, SessionRecord, SidebarNavigation, SidebarPreferences, TelemetryPreferences,
-    TerminalPreferences, Theme, Workspace,
+    AppConfig, CommandSnippet, Connection, ConnectionTarget, DisplayDensity, EnginePreference,
+    ExperimentalFeatures, Group, Locale, SessionRecord, SidebarNavigation, SidebarPreferences,
+    SshEngine, TelemetryPreferences, TerminalPreferences, Theme, Workspace,
 };
 pub use openssh::{AgentDiagnostics, ExternalTerminal, OpenSsh, OpenSshError, SshInvocation};
 pub use remote::{

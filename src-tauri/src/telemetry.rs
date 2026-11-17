@@ -11,8 +11,18 @@ use easyssh_telemetry::{envelope, hook, report, usage, Consent, Spool};
 use serde::Serialize;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// The SSH engine setting; the OpenSSH engine is the only one for now.
-const ENGINE: &str = "openssh";
+/// The global SSH engine setting, as the usage ping names it.
+fn engine() -> String {
+    match load_config()
+        .ok()
+        .and_then(|c| c.ssh_engine)
+        .unwrap_or_default()
+    {
+        easyssh_core::SshEngine::Openssh => "openssh",
+        easyssh_core::SshEngine::Russh => "russh",
+    }
+    .to_owned()
+}
 /// Input from the page is cut before scrubbing, whatever it sends.
 const MAX_INPUT: usize = 8 * 1024;
 
@@ -59,7 +69,7 @@ pub fn start_background() {
         spool(),
         current_consent(),
         VERSION.to_owned(),
-        ENGINE.to_owned(),
+        engine(),
         hosts,
     );
 }
@@ -145,7 +155,7 @@ pub fn telemetry_pending() -> Pending {
         easyssh_telemetry::build_usage_url(),
         &consent,
         VERSION,
-        ENGINE,
+        &engine(),
         hosts,
         &easyssh_telemetry::today(),
     )

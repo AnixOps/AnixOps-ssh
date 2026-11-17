@@ -359,6 +359,10 @@ impl Store {
             ("telemetry", serde_json::to_value(&config.telemetry)?),
             ("recent_connection_ids", serde_json::to_value(recent)?),
         ];
+        let mut entries = entries.to_vec();
+        if let Some(engine) = config.ssh_engine {
+            entries.push(("ssh_engine", serde_json::to_value(engine)?));
+        }
         for (key, value) in entries {
             if self.setting_exists_any(key)? {
                 report.settings.existing += 1;

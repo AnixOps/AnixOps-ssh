@@ -185,6 +185,9 @@ impl Entity for Host {
             shell_integration: row.get::<_, i64>("shell_integration")? != 0,
             created_at: parse_ts(&row.get::<_, String>("created_at")?)?,
             updated_at: meta.updated_at,
+            engine: row
+                .get::<_, Option<String>>("engine")?
+                .and_then(|name| serde_json::from_value(serde_json::Value::String(name)).ok()),
         };
         Ok(Self {
             connection,
@@ -219,6 +222,7 @@ impl Entity for Host {
         fields.insert("remote_directories", Field::plain(&c.remote_directories));
         fields.insert("terminal", Field::plain(&c.terminal));
         fields.insert("shell_integration", Field::plain(c.shell_integration));
+        fields.insert("engine", Field::plain(c.engine));
         fields.insert("tags", Field::plain(clean_tags(&c.tags)));
         fields.insert("password", Field::secret(secrets.password));
         fields.insert("private_key", Field::secret(secrets.private_key));
@@ -283,6 +287,18 @@ impl Entity for Host {
             ("local_directories", json(&c.local_directories)?),
             ("remote_directories", json(&c.remote_directories)?),
             ("shell_integration", int(i64::from(c.shell_integration))),
+            (
+                "engine",
+                match c.engine {
+                    Some(engine) => text(
+                        serde_json::to_value(engine)
+                            .ok()
+                            .and_then(|value| value.as_str().map(str::to_owned))
+                            .unwrap_or_default(),
+                    ),
+                    None => Value::Null,
+                },
+            ),
             (
                 "term_font_size",
                 Value::Real(f64::from(c.terminal.font_size)),

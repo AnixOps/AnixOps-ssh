@@ -258,6 +258,7 @@ impl SyncConnection {
             shell_integration: false,
             created_at: now,
             updated_at: now,
+            engine: None,
         }
     }
 }

@@ -62,6 +62,8 @@ export function previewSession(
 
   return {
     id: `preview-${++previewCount}`,
+    engine: hostId ? (hostId === "1" ? "russh" : "openssh") : null,
+    engineReason: hostId ? "preview data" : null,
     write(data) {
       for (const char of data) {
         if (char === "\r") {

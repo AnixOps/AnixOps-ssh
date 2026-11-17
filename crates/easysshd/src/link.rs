@@ -73,10 +73,46 @@ pub struct AskpassPrompt {
     pub host: String,
     pub prompt: String,
     pub confirm: bool,
+    /// `password`, `passphrase`, `keyboard_interactive` for the built-in
+    /// engine's prompts; `None` for OpenSSH's.
+    pub kind: Option<String>,
+    pub echo: Option<bool>,
     /// A saved host's password or key passphrase: offer "Remember in vault".
     pub rememberable: bool,
     /// A saved answer exists but the vault is locked: offer to unlock it.
     pub vault_locked: bool,
+}
+
+/// The built-in engine needs a decision about a host key.
+#[derive(Debug, Clone)]
+pub struct HostKeyPrompt {
+    pub id: u64,
+    pub host: String,
+    pub port: u16,
+    pub algorithm: String,
+    pub fingerprint: String,
+    /// `unknown` or `changed`.
+    pub status: String,
+    pub expected: Vec<String>,
+}
+
+/// A tunnel of the built-in engine changed state.
+#[derive(Debug, Clone)]
+pub struct TunnelStatus {
+    pub id: String,
+    /// `starting`, `running`, `stopped` or `failed`.
+    pub state: String,
+    pub bind_port: Option<u16>,
+    pub error: Option<String>,
+}
+
+/// What `session.open` answered.
+#[derive(Debug, Clone)]
+pub struct OpenedSession {
+    pub session_id: String,
+    /// `russh` or `openssh`; `None` for a local shell or an older daemon.
+    pub engine: Option<String>,
+    pub engine_reason: Option<String>,
 }
 
 pub trait LinkHandler: Send + Sync + 'static {
@@ -89,6 +125,15 @@ pub trait LinkHandler: Send + Sync + 'static {
     fn askpass_resolved(&self, _id: u64) {}
     /// A client saved or deleted a host: refresh the host list.
     fn hosts_changed(&self) {}
+    /// The built-in engine asks about a host key; answer with
+    /// `hostkey.reply`.
+    fn hostkey_prompt(&self, _prompt: HostKeyPrompt) {}
+    /// Host key prompt `id` is over (answered, cancelled or timed out).
+    fn hostkey_resolved(&self, _id: u64) {}
+    fn transfer_progress(&self, _transfer_id: &str, _bytes: u64) {}
+    /// `status` is `completed`, `failed` or `cancelled`.
+    fn transfer_done(&self, _transfer_id: &str, _status: &str, _error: Option<&str>) {}
+    fn tunnel_status(&self, _status: TunnelStatus) {}
     /// The vault locked or unlocked (also by auto-lock).
     fn vault_changed(&self, _unlocked: bool) {}
     /// The sync state changed (`sync.state`); `status` is the same object
@@ -204,8 +249,48 @@ impl Inner {
                 host: payload["host"].as_str().unwrap_or_default().to_owned(),
                 prompt: payload["prompt"].as_str().unwrap_or_default().to_owned(),
                 confirm: payload["confirm"].as_bool().unwrap_or(false),
+                kind: payload["kind"].as_str().map(str::to_owned),
+                echo: payload["echo"].as_bool(),
                 rememberable: payload["rememberable"].as_bool().unwrap_or(false),
                 vault_locked: payload["vault_locked"].as_bool().unwrap_or(false),
+            }),
+            Some("hostkey.prompt") => self.handler.hostkey_prompt(HostKeyPrompt {
+                id: payload["id"].as_u64().unwrap_or(0),
+                host: payload["host"].as_str().unwrap_or_default().to_owned(),
+                port: payload["port"].as_u64().unwrap_or(22) as u16,
+                algorithm: payload["algorithm"].as_str().unwrap_or_default().to_owned(),
+                fingerprint: payload["fingerprint"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                status: payload["status"].as_str().unwrap_or("unknown").to_owned(),
+                expected: payload["expected"]
+                    .as_array()
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|i| i.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            }),
+            Some("hostkey.resolved") => self
+                .handler
+                .hostkey_resolved(payload["id"].as_u64().unwrap_or(0)),
+            Some("transfer.progress") => self.handler.transfer_progress(
+                payload["transfer_id"].as_str().unwrap_or_default(),
+                payload["bytes"].as_u64().unwrap_or(0),
+            ),
+            Some("transfer.done") => self.handler.transfer_done(
+                payload["transfer_id"].as_str().unwrap_or_default(),
+                payload["status"].as_str().unwrap_or("failed"),
+                payload["error"].as_str(),
+            ),
+            Some("tunnel.status") => self.handler.tunnel_status(TunnelStatus {
+                id: payload["id"].as_str().unwrap_or_default().to_owned(),
+                state: payload["state"].as_str().unwrap_or("failed").to_owned(),
+                bind_port: payload["bind_port"].as_u64().map(|p| p as u16),
+                error: payload["error"].as_str().map(str::to_owned),
             }),
             Some("askpass.resolved") => self
                 .handler
@@ -370,6 +455,20 @@ impl Link {
         rows: u16,
         sink: SessionSink,
     ) -> Result<String, LinkError> {
+        Ok(self
+            .open_session_info(host_id, cols, rows, sink)
+            .await?
+            .session_id)
+    }
+
+    /// [`Link::open_session`] that also reports the engine the session runs on.
+    pub async fn open_session_info(
+        &self,
+        host_id: Option<&str>,
+        cols: u16,
+        rows: u16,
+        sink: SessionSink,
+    ) -> Result<OpenedSession, LinkError> {
         #[cfg_attr(not(unix), allow(unused_mut))]
         let mut payload = json!({"host_id": host_id, "cols": cols, "rows": rows});
         // The agent of the user's current login, not the daemon's (Unix only).
@@ -388,7 +487,17 @@ impl Link {
                     self.inner.draining.store(true, Ordering::SeqCst);
                 }
             })?;
-        Ok(reply["session_id"].as_str().unwrap_or_default().to_owned())
+        Ok(OpenedSession {
+            session_id: reply["session_id"].as_str().unwrap_or_default().to_owned(),
+            engine: reply["engine"].as_str().map(str::to_owned),
+            engine_reason: reply["engine_reason"].as_str().map(str::to_owned),
+        })
+    }
+
+    /// `hostkey.reply` with a decision (`reject`, `accept_once`,
+    /// `accept_and_save` or `replace_and_save`).
+    pub fn hostkey_reply(&self, id: u64, decision: &str) -> Result<(), LinkError> {
+        self.post("hostkey.reply", json!({"id": id, "decision": decision}))
     }
 
     /// `session.attach`: the sink receives the buffered output from

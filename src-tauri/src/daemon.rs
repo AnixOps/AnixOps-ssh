@@ -10,7 +10,7 @@
 
 use easysshd::daemon::{run_blocking, Options};
 use easysshd::launch::spawn_detached;
-use easysshd::link::{AskpassPrompt, Link, LinkHandler};
+use easysshd::link::{AskpassPrompt, HostKeyPrompt, Link, LinkHandler, TunnelStatus};
 use easysshd::supervisor::{Backoff, Supervisor, SupervisorConfig};
 use easysshd::DaemonConfig;
 use std::ffi::OsString;
@@ -84,18 +84,67 @@ struct Handler {
 
 impl LinkHandler for Handler {
     fn askpass_prompt(&self, prompt: AskpassPrompt) {
-        // Same event and shape as the in-process bridge (askpass.rs).
+        // Same event and shape as the in-process bridge (askpass.rs), plus
+        // what the built-in engine adds: what is asked and whether to echo.
+        let mut payload = serde_json::json!({
+            "id": prompt.id,
+            "host": prompt.host,
+            "prompt": prompt.prompt,
+            "confirm": prompt.confirm,
+            "rememberable": prompt.rememberable,
+            "vaultLocked": prompt.vault_locked,
+        });
+        if let Some(kind) = prompt.kind {
+            payload["kind"] = serde_json::json!(kind);
+        }
+        if let Some(echo) = prompt.echo {
+            payload["echo"] = serde_json::json!(echo);
+        }
+        let _ = self.app.emit("askpass", payload);
+    }
+
+    fn hostkey_prompt(&self, prompt: HostKeyPrompt) {
         let _ = self.app.emit(
-            "askpass",
+            "hostkey",
             serde_json::json!({
                 "id": prompt.id,
                 "host": prompt.host,
-                "prompt": prompt.prompt,
-                "confirm": prompt.confirm,
-                "rememberable": prompt.rememberable,
-                "vaultLocked": prompt.vault_locked,
+                "port": prompt.port,
+                "algorithm": prompt.algorithm,
+                "fingerprint": prompt.fingerprint,
+                "status": prompt.status,
+                "expected": prompt.expected,
             }),
         );
+    }
+
+    fn hostkey_resolved(&self, id: u64) {
+        let _ = self
+            .app
+            .emit("hostkey-resolved", serde_json::json!({ "id": id }));
+    }
+
+    fn transfer_progress(&self, transfer_id: &str, bytes: u64) {
+        crate::files::remote_event(
+            &self.app,
+            transfer_id,
+            crate::files::TransferEvent::Progress { bytes },
+        );
+    }
+
+    fn transfer_done(&self, transfer_id: &str, status: &str, error: Option<&str>) {
+        let event = match status {
+            "completed" => crate::files::TransferEvent::Done,
+            "cancelled" => crate::files::TransferEvent::Cancelled,
+            _ => crate::files::TransferEvent::Failed {
+                message: error.unwrap_or("the transfer failed").to_owned(),
+            },
+        };
+        crate::files::remote_event(&self.app, transfer_id, event);
+    }
+
+    fn tunnel_status(&self, status: TunnelStatus) {
+        crate::tunnels::remote_status(&self.app, status);
     }
 
     fn askpass_resolved(&self, id: u64) {
@@ -143,4 +192,43 @@ pub fn start(app: &AppHandle) {
     if let Err(reason) = tauri::async_runtime::block_on(supervisor.start()) {
         eprintln!("EasySSH: easysshd unavailable, running in-process until it is: {reason}");
     }
+}
+
+/// The daemon link when `host_id` runs on the built-in engine, so file and
+/// tunnel commands go through the daemon (`sftp.*`, `tunnel.*`) and share the
+/// terminal's connection. `None` means the OpenSSH paths apply: no daemon,
+/// the host is on OpenSSH, or the daemon could not tell.
+pub async fn russh_link(daemon: &DaemonState, host_id: &str) -> Option<Link> {
+    let link = daemon.link()?;
+    let answer = link
+        .request("engine.resolve", serde_json::json!({ "host_id": host_id }))
+        .await
+        .ok()?;
+    (answer["engine"].as_str() == Some("russh")).then_some(link)
+}
+
+/// Whether a daemon error means "use the OpenSSH path instead".
+pub fn use_openssh(error: &easysshd::link::LinkError) -> bool {
+    matches!(
+        error.code.as_str(),
+        "unsupported" | "wrong_engine" | "unavailable" | "disconnected"
+    )
+}
+
+/// `hostkey.reply`: the user's decision about a host key.
+#[tauri::command]
+pub fn hostkey_reply(
+    daemon: tauri::State<'_, DaemonState>,
+    id: u64,
+    decision: String,
+) -> Result<(), String> {
+    if !matches!(
+        decision.as_str(),
+        "reject" | "accept_once" | "accept_and_save" | "replace_and_save"
+    ) {
+        return Err("unknown decision".to_owned());
+    }
+    let link = daemon.link().ok_or("the session daemon is not running")?;
+    link.hostkey_reply(id, &decision)
+        .map_err(|error| error.to_string())
 }

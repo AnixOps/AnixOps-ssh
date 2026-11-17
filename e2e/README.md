@@ -50,7 +50,8 @@ real tool with `-F <that config>`. The wrappers go first on `PATH`, which is
 how the core finds the tools. `HOME` points into the temporary directory too
 and `SSH_AUTH_SOCK` is unset. The config defines the aliases `e2e-target`,
 `e2e-bastion`, `e2e-target-internal`, `e2e-target-via-bastion` (ProxyJump) and
-`e2e-target-pw`, with `StrictHostKeyChecking accept-new`, a temporary
+`e2e-target-pw` and `e2e-target-proxycmd` (ProxyCommand, which only OpenSSH
+runs), with `StrictHostKeyChecking accept-new`, a temporary
 `UserKnownHostsFile` and `IdentitiesOnly yes`. The test
 `config_is_isolated_from_the_real_home` checks this.
 
@@ -78,6 +79,7 @@ and check that OpenSSH really asked it for the password.
 | `tests/password.rs` | askpass password for exec, `SftpSession`, transfer and tunnel; wrong password fails without hanging |
 | `tests/shell_integration.rs` | the daemon delivers the shell integration scripts to bash, zsh and fish (containers `e2e-target`, `e2e-zsh`, `e2e-fish`; also against local shells without Docker), runs `false` and `cd /tmp` and checks the `OSC 6973` sequences carry exit status 1 and `/tmp`; the script stays off screen and out of history; a host without the setting sees no sequences |
 | `tests/jump.rs` | exec and SFTP through a `ProxyJump` alias and through `Connection::proxy_jump` |
+| `tests/russh_daemon.rs` | the daemon with `ssh_engine = russh`: terminal, SFTP and a -L tunnel share one connection (`engine.connections`), jump host, password prompt asked once, unknown host key asked once then remembered, changed host key refused until replaced, `ProxyCommand` falls back to OpenSSH |
 
 ## Baseline against v1 and russh
 
