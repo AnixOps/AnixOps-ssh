@@ -643,6 +643,18 @@ const zh = {
   newTabMenu: "新建标签页",
   serialSection: "串口",
   serialPermissionDenied: "没有权限打开这个串口。在 Linux 上，把你的用户加入拥有它的用户组（Debian、Ubuntu、Fedora 是 dialout，Arch 是 uucp），例如 sudo usermod -aG dialout $USER，然后注销再登录。",
+  mobileNoHostsHint: "添加一台主机，点按即可连接。",
+  mobileBack: "返回主机列表",
+  mobileKeys: "终端按键",
+  mobileKeyCtrl: "Ctrl，作用于下一个按键",
+  mobileKeyEsc: "Esc",
+  mobileKeyTab: "Tab",
+  mobileKeyUp: "向上",
+  mobileKeyDown: "向下",
+  mobileKeyLeft: "向左",
+  mobileKeyRight: "向右",
+  mobileHostsTitle: "主机",
+  mobileAddHost: "添加主机",
 };
 
 const en: typeof zh = {
@@ -1288,6 +1300,18 @@ const en: typeof zh = {
   newTabMenu: "New tab",
   serialSection: "Serial ports",
   serialPermissionDenied: "No permission to open this serial port. On Linux, add your user to the group that owns it (dialout on Debian, Ubuntu and Fedora, uucp on Arch), for example sudo usermod -aG dialout $USER, then log out and back in.",
+  mobileNoHostsHint: "Add a host, then tap it to connect.",
+  mobileBack: "Back to hosts",
+  mobileKeys: "Terminal keys",
+  mobileKeyCtrl: "Ctrl, applies to the next key",
+  mobileKeyEsc: "Esc",
+  mobileKeyTab: "Tab",
+  mobileKeyUp: "Up",
+  mobileKeyDown: "Down",
+  mobileKeyLeft: "Left",
+  mobileKeyRight: "Right",
+  mobileHostsTitle: "Hosts",
+  mobileAddHost: "Add host",
 };
 
 export type Strings = typeof zh;

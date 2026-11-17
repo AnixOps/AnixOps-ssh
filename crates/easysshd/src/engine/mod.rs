@@ -10,7 +10,8 @@
 pub mod choice;
 pub mod files;
 pub mod interact;
-pub mod known_hosts;
+/// Host keys in the store; shared with the in-process engine of the mobile app.
+pub use easyssh_engine::known_hosts;
 pub mod plan;
 pub mod registry;
 pub mod tunnels;
@@ -48,22 +49,7 @@ pub struct KnownHostsPaths {
     pub user: Option<PathBuf>,
 }
 
-/// The protocol error code for a connect failure, so callers can tell a
-/// fallback (`unsupported`) from the user saying no (`cancelled`).
-pub fn error_code(error: &SshError) -> &'static str {
-    match error {
-        SshError::Unsupported(_) => "unsupported",
-        SshError::Cancelled(_) => "cancelled",
-        SshError::Locked(_) => "vault_locked",
-        SshError::AuthFailed { .. } => "auth_failed",
-        SshError::HostKeyRejected { .. } => "hostkey_rejected",
-        SshError::HostKeyMismatch { .. } => "hostkey_changed",
-        SshError::HostKeyRevoked { .. } => "hostkey_revoked",
-        SshError::Network(_) | SshError::Timeout(_) | SshError::Disconnected => "network",
-        SshError::NotFound(_) => "not_found",
-        _ => "ssh_error",
-    }
-}
+pub use easyssh_engine::error_code;
 
 fn vault_error(error: easyssh_vault::VaultError) -> SshError {
     match error {

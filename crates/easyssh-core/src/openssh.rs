@@ -192,6 +192,8 @@ impl OpenSsh {
 pub struct ExternalTerminal;
 
 impl ExternalTerminal {
+    // Android and iOS have no external terminal to launch: both arguments go unused there.
+    #[allow(unused_variables)]
     pub fn launch(name: &str, invocation: &SshInvocation) -> Result<(), OpenSshError> {
         #[cfg(windows)]
         {

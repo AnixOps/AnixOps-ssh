@@ -42,6 +42,18 @@ const scenes = [
   { name: "terminal-en", query: "lang=en", open: ["prod-web-01", "home-nas"] },
 ];
 
+// The touch UI of the mobile app (components/mobile), forced on with ?mobile=1.
+// Sizes: a phone, then a tablet that crosses the md breakpoint (834 px).
+const mobileScenes = [
+  { name: "mobile-hosts", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 } },
+  { name: "mobile-hosts-empty", query: "mobile=1&lang=en&hosts=empty", viewport: { width: 390, height: 844 } },
+  { name: "mobile-add-host", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, click: "Add host" },
+  { name: "mobile-terminal", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, open: "prod-web-01", type: ["ls"] },
+  { name: "mobile-terminal-ctrl", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, open: "prod-web-01", pressCtrl: true },
+  { name: "mobile-hostkey", query: "mobile=1&lang=en&hostkey=changed", viewport: { width: 390, height: 844 } },
+  { name: "mobile-tablet", query: "mobile=1&lang=en", viewport: { width: 1024, height: 768 }, open: "prod-web-01", type: ["ls"] },
+];
+
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const errors = [];
 for (const colorScheme of ["light", "dark"]) {
@@ -104,10 +116,53 @@ for (const colorScheme of ["light", "dark"]) {
   }
   await context.close();
 }
+for (const colorScheme of ["light", "dark"]) {
+  for (const scene of mobileScenes) {
+    const context = await browser.newContext({
+      viewport: scene.viewport,
+      deviceScaleFactor: Number(process.env.DSF || 2),
+      colorScheme,
+      hasTouch: true,
+      isMobile: true,
+      locale: "en-US",
+    });
+    const page = await context.newPage();
+    page.on("pageerror", (error) => errors.push(`${scene.name}/${colorScheme}: ${error.message}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") errors.push(`${scene.name}/${colorScheme}: ${message.text()}`);
+    });
+    await page.goto(`${baseUrl}/?${scene.query}`);
+    await page.waitForLoadState("networkidle");
+    if (scene.click) await page.getByRole("button", { name: scene.click, exact: true }).first().click();
+    if (scene.open) {
+      await page.getByRole("button", { name: new RegExp(scene.open) }).first().click();
+      await page.locator(".xterm-screen").waitFor();
+      await page.waitForTimeout(300);
+      for (const command of scene.type ?? []) {
+        await page.keyboard.type(command);
+        await page.keyboard.press("Enter");
+      }
+    }
+    if (scene.pressCtrl) await page.getByRole("button", { name: /^Ctrl/ }).click();
+    // Every touch control is at least 44 x 44 px (layout.md); report any that is not.
+    const small = await page.evaluate(() =>
+      [...document.querySelectorAll("button, input")]
+        .filter((element) => element.getClientRects().length > 0)
+        .map((element) => ({ label: element.getAttribute("aria-label") || element.textContent?.trim() || element.tagName, box: element.getBoundingClientRect() }))
+        .filter(({ box }) => box.height < 43.5 || box.width < 43.5)
+        .map(({ label, box }) => `${label} ${Math.round(box.width)}x${Math.round(box.height)}`),
+    );
+    if (small.length > 0) errors.push(`${scene.name}/${colorScheme}: touch targets under 44 px: ${small.join(", ")}`);
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: join(outDir, `${scene.name}-${colorScheme}.png`) });
+    await context.close();
+  }
+}
 await browser.close();
 
 if (errors.length > 0) {
   console.error(errors.join("\n"));
   process.exit(1);
 }
-console.log(`Saved ${scenes.length * 2} screenshots to ${outDir}`);
+console.log(`Saved ${(scenes.length + mobileScenes.length) * 2} screenshots to ${outDir}`);

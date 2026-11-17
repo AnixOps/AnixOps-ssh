@@ -6,29 +6,42 @@ license.workspace = true
 rust-version.workspace = true
 description = "Cross-platform session manager for the system OpenSSH"
 
+# Tauri mobile loads the app as a library (`cdylib` on Android, `staticlib` on
+# iOS); the desktop binary in main.rs calls the same `run`.
+[lib]
+name = "anixops_ssh_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# What every platform needs: the store, the in-process engine and the shell.
 [dependencies]
+easyssh-core = { path = "../crates/easyssh-core" }
+easyssh-engine = { path = "../crates/easyssh-engine" }
+easyssh-store = { path = "../crates/easyssh-store" }
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-clipboard-manager = "2"
+tokio.workspace = true
+
+# Desktop only: the daemon, local shells and serial ports, the OS keychain,
+# Windows Hello and Touch ID, OpenSSH, native dialogs. Android and iOS get none
+# of them (docs/mobile-prototype.md).
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 chrono.workspace = true
 dirs.workspace = true
 easyssh-ai = { path = "../crates/easyssh-ai" }
-easyssh-core = { path = "../crates/easyssh-core" }
 easyssh-crypto = { path = "../crates/easyssh-crypto" }
 easyssh-sessionlog = { path = "../crates/easyssh-sessionlog" }
-easyssh-store = { path = "../crates/easyssh-store" }
 easyssh-telemetry = { path = "../crates/easyssh-telemetry" }
 easyssh-unlock = { path = "../crates/easyssh-unlock" }
 easyssh-vault = { path = "../crates/easyssh-vault", features = ["os-keyring"] }
 easysshd = { path = "../crates/easysshd" }
 portable-pty = "0.9"
-serde.workspace = true
-serde_json.workspace = true
-tauri = { version = "2", features = [] }
-tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
-tokio.workspace = true
 uuid.workspace = true
 zeroize = "1"
 

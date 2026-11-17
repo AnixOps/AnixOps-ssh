@@ -1,0 +1,218 @@
+//! The mobile app (Android and iOS): the engine runs in this process.
+//!
+//! There is no daemon, no OpenSSH, no local shell and no OS keychain here. The
+//! commands have the names and shapes of the desktop ones (`load_hosts`,
+//! `session_open`, `askpass_reply`, ...) for the screens the prototype needs,
+//! so the React components that show prompts are shared. A session lives
+//! exactly as long as its terminal screen: when the operating system suspends
+//! the app the TCP connection dies and the UI offers to reconnect.
+
+use easyssh_engine::hosts::{add_host, snapshot, target_for, NewHost};
+use easyssh_engine::known_hosts::StoreKnownHosts;
+use easyssh_engine::prompts::Prompts;
+use easyssh_engine::{Engine, ShellSink};
+use easyssh_store::{open_app_store, Store};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::sync::{Arc, Mutex};
+use tauri::ipc::Channel;
+use tauri::{Emitter, Manager, State};
+
+struct Mobile {
+    store: Arc<Mutex<Store>>,
+    engine: Arc<Engine>,
+}
+
+impl Mobile {
+    fn with_store<T>(&self, work: impl FnOnce(&Store) -> Result<T, String>) -> Result<T, String> {
+        let store = self.store.lock().unwrap_or_else(|p| p.into_inner());
+        work(&store)
+    }
+}
+
+/// Same shape as the desktop's session events.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+enum SessionEvent {
+    Data { data: String },
+    Exit { code: Option<u32> },
+}
+
+struct ChannelSink(Channel<SessionEvent>);
+
+impl ShellSink for ChannelSink {
+    fn data(&self, text: String) {
+        let _ = self.0.send(SessionEvent::Data { data: text });
+    }
+
+    fn exit(&self, code: Option<u32>) {
+        let _ = self.0.send(SessionEvent::Exit { code });
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenedSession {
+    id: String,
+    engine: &'static str,
+    engine_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct HostFieldsInput {
+    hostname: String,
+    username: Option<String>,
+    port: u16,
+}
+
+/// The part of the desktop's `HostInput` the mobile form fills in.
+#[derive(Deserialize)]
+struct HostInput {
+    name: String,
+    fields: HostFieldsInput,
+}
+
+#[tauri::command]
+fn load_hosts(state: State<'_, Mobile>) -> Result<Value, String> {
+    state.with_store(|store| {
+        let config = store.load_app_config().map_err(|error| error.to_string())?;
+        Ok(snapshot(&config))
+    })
+}
+
+#[tauri::command]
+fn host_save(state: State<'_, Mobile>, input: HostInput) -> Result<String, String> {
+    state.with_store(|store| {
+        add_host(
+            store,
+            &NewHost {
+                name: input.name,
+                hostname: input.fields.hostname,
+                username: input.fields.username,
+                port: input.fields.port,
+            },
+        )
+    })
+}
+
+#[tauri::command]
+fn host_delete(state: State<'_, Mobile>, id: String) -> Result<(), String> {
+    state.with_store(|store| {
+        store
+            .remove_host(&id)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+async fn session_open(
+    state: State<'_, Mobile>,
+    host_id: Option<String>,
+    cols: u16,
+    rows: u16,
+    events: Channel<SessionEvent>,
+) -> Result<OpenedSession, String> {
+    let host_id = host_id.ok_or("a phone has no local shell; open a host")?;
+    let target = state.with_store(|store| {
+        let config = store.load_app_config().map_err(|error| error.to_string())?;
+        target_for(&config, &host_id)
+    })?;
+    let id = state
+        .engine
+        .open_shell(target, cols, rows, Arc::new(ChannelSink(events)))
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(OpenedSession {
+        id,
+        engine: "russh",
+        engine_reason: None,
+    })
+}
+
+#[tauri::command]
+fn session_write(state: State<'_, Mobile>, id: String, data: String) -> Result<(), String> {
+    state.engine.write(&id, data.as_bytes())
+}
+
+#[tauri::command]
+fn session_resize(
+    state: State<'_, Mobile>,
+    id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    state.engine.resize(&id, cols, rows)
+}
+
+#[tauri::command]
+fn session_close(state: State<'_, Mobile>, id: String) {
+    state.engine.close(&id);
+}
+
+/// A phone keeps no session once its screen is gone, so detaching ends it.
+#[tauri::command]
+fn session_detach(state: State<'_, Mobile>, id: String) {
+    state.engine.close(&id);
+}
+
+#[tauri::command]
+fn sessions_list() -> Vec<Value> {
+    Vec::new()
+}
+
+#[tauri::command]
+fn askpass_reply(state: State<'_, Mobile>, id: u64, answer: Option<String>) {
+    state.engine.prompts().reply_secret(id, answer);
+}
+
+#[tauri::command]
+fn hostkey_reply(state: State<'_, Mobile>, id: u64, decision: String) {
+    state.engine.prompts().reply_hostkey(id, &decision);
+}
+
+/// Crash reports are a desktop feature for now; the web view still reports
+/// its errors through this command, so it must exist.
+#[tauri::command]
+fn telemetry_report_frontend() {}
+
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .invoke_handler(tauri::generate_handler![
+            load_hosts,
+            host_save,
+            host_delete,
+            session_open,
+            session_write,
+            session_resize,
+            session_close,
+            session_detach,
+            sessions_list,
+            askpass_reply,
+            hostkey_reply,
+            telemetry_report_frontend,
+        ])
+        .setup(|app| {
+            let dir = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&dir)?;
+            // The v1 JSON file never exists on a phone; its path only names
+            // the folder the database lives in.
+            let opened = open_app_store(&dir.join("config.json"))?;
+            let store = Arc::new(Mutex::new(opened.store));
+            let handle = app.handle().clone();
+            let prompts = Prompts::new(Arc::new(move |name, payload| {
+                let _ = handle.emit(name, payload);
+            }));
+            let engine = Engine::new(prompts, Arc::new(StoreKnownHosts::new(store.clone())));
+            app.manage(Mobile { store, engine });
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("failed to build AnixOps SSH")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                app.state::<Mobile>().engine.close_all();
+            }
+        });
+}
