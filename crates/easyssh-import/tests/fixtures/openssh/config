@@ -1,0 +1,44 @@
+# Synthetic fixture; all hosts are documentation addresses.
+Include includes/*.conf
+
+Host web1 web2
+    HostName web.example.com
+    Port 2222
+    IdentityFile ~/.ssh/id_web
+    IdentityFile ~/.ssh/id_backup
+
+Host db
+    hostname=192.0.2.20
+    USER dbadmin
+    ProxyJump bastion,admin@jump2.example.com:2200
+
+Host "quoted alias"
+    HostName "quoted.example.com"
+    User "quoted user"
+
+Host v6
+    HostName 2001:db8::10
+
+Host legacy
+    HostName legacy.example.com
+    ProxyCommand ssh -W %h:%p bastion
+    LocalCommand echo connected
+    PermitLocalCommand yes
+    KexAlgorithms +diffie-hellman-group1-sha1
+    LocalForward 8080 localhost:80
+
+Host dev-*
+    User devuser
+    Port 2200
+
+Host dev-1 !dev-secret
+    HostName dev1.example.com
+
+Host bastion
+    HostName 192.0.2.1
+
+Host *
+    User fallback
+    Port 22
+    IdentityFile ~/.ssh/id_default
+    ServerAliveInterval 30

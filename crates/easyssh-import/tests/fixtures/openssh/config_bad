@@ -1,0 +1,10 @@
+Host ok
+    HostName ok.example.com
+    Port notaport
+Host bad
+    HostName "unterminated.example.com
+Host -oProxyCommand=evil
+    HostName -oProxyCommand=evil
+Include ../outside.conf
+Include /etc/hostname
+User
