@@ -66,7 +66,7 @@ pub struct AskpassPromptEvent {
     pub echo: ::std::option::Option<bool>,
     pub host: ::std::string::String,
     pub id: u64,
-    ///What the prompt asks for; absent for OpenSSH's askpass prompts.
+    ///What the prompt asks for; absent for OpenSSH's askpass prompts. `security_key_pin` asks for the PIN of a FIDO2 security key; `security_key_touch` only tells the user to touch the key and takes no answer (it closes with `askpass.resolved`).
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub kind: ::std::option::Option<AskpassPromptEventKind>,
     pub prompt: ::std::string::String,
@@ -77,7 +77,7 @@ pub struct AskpassPromptEvent {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub vault_locked: ::std::option::Option<bool>,
 }
-///What the prompt asks for; absent for OpenSSH's askpass prompts.
+///What the prompt asks for; absent for OpenSSH's askpass prompts. `security_key_pin` asks for the PIN of a FIDO2 security key; `security_key_touch` only tells the user to touch the key and takes no answer (it closes with `askpass.resolved`).
 #[derive(
     ::serde::Deserialize,
     ::serde::Serialize,
@@ -99,6 +99,10 @@ pub enum AskpassPromptEventKind {
     KeyboardInteractive,
     #[serde(rename = "confirm")]
     Confirm,
+    #[serde(rename = "security_key_pin")]
+    SecurityKeyPin,
+    #[serde(rename = "security_key_touch")]
+    SecurityKeyTouch,
 }
 impl ::std::fmt::Display for AskpassPromptEventKind {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
@@ -107,6 +111,8 @@ impl ::std::fmt::Display for AskpassPromptEventKind {
             Self::Passphrase => f.write_str("passphrase"),
             Self::KeyboardInteractive => f.write_str("keyboard_interactive"),
             Self::Confirm => f.write_str("confirm"),
+            Self::SecurityKeyPin => f.write_str("security_key_pin"),
+            Self::SecurityKeyTouch => f.write_str("security_key_touch"),
         }
     }
 }
@@ -120,6 +126,8 @@ impl ::std::str::FromStr for AskpassPromptEventKind {
             "passphrase" => Ok(Self::Passphrase),
             "keyboard_interactive" => Ok(Self::KeyboardInteractive),
             "confirm" => Ok(Self::Confirm),
+            "security_key_pin" => Ok(Self::SecurityKeyPin),
+            "security_key_touch" => Ok(Self::SecurityKeyTouch),
             _ => Err("invalid value".into()),
         }
     }

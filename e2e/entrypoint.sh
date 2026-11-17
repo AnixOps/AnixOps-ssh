@@ -14,6 +14,10 @@ for user in keyuser zshuser fishuser; do
   install -m 600 -o "$user" -g "$user" /keys/id_e2e.pub "/home/$user/.ssh/authorized_keys"
 done
 
+# keyuser also accepts two software-made FIDO2 (sk-*) keys; sshd verifies their
+# signatures without hardware. See crates/easyssh-e2e/src/sk.rs.
+cat /etc/e2e/id_e2e_sk.pub >> /home/keyuser/.ssh/authorized_keys
+
 socat TCP-LISTEN:7777,bind=127.0.0.1,fork,reuseaddr EXEC:cat &
 
 exec /usr/sbin/sshd -D -e

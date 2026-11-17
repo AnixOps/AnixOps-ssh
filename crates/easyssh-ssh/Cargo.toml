@@ -6,6 +6,14 @@ license.workspace = true
 rust-version.workspace = true
 description = "SSH engine on russh: auth chain, channels, SFTP, forwards, jump chains, known hosts"
 
+[features]
+default = ["hardware-key"]
+# Real FIDO2 authenticators over USB HID (CTAP2). Compiled on Linux and macOS;
+# Windows keeps the OpenSSH fallback for sk-* keys (see security_key.rs).
+hardware-key = ["dep:ctap-hid-fido2"]
+# A software authenticator that makes real sk signatures, for tests.
+software-key = ["dep:ed25519-dalek", "dep:p256", "dep:sha2"]
+
 [dependencies]
 async-trait = "0.1"
 base64.workspace = true
@@ -18,6 +26,15 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 tracing = "0.1"
 zeroize = "1"
+ed25519-dalek = { version = "3", optional = true }
+p256 = { version = "0.14", optional = true, features = ["ecdsa"] }
+sha2 = { workspace = true, optional = true }
+
+[target.'cfg(not(windows))'.dependencies]
+ctap-hid-fido2 = { version = "3.6.1", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+sha2.workspace = true
+ed25519-dalek = "3"
+p256 = { version = "0.14", features = ["ecdsa"] }

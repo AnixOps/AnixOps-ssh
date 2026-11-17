@@ -10,7 +10,7 @@ description = "End-to-end tests that run the OpenSSH orchestration against real 
 [dependencies]
 async-trait = "0.1"
 easyssh-core = { path = "../easyssh-core" }
-easyssh-ssh = { path = "../easyssh-ssh" }
+easyssh-ssh = { path = "../easyssh-ssh", features = ["software-key"] }
 tokio = { workspace = true, features = ["fs"] }
 tempfile = "3"
 
