@@ -1,0 +1,71 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "less",
+  "description": "Page through a file",
+  "options": [
+    {
+      "name": [
+        "-N",
+        "--LINE-NUMBERS"
+      ],
+      "description": "Show line numbers"
+    },
+    {
+      "name": [
+        "-S",
+        "--chop-long-lines"
+      ],
+      "description": "Cut long lines instead of wrapping"
+    },
+    {
+      "name": [
+        "-R",
+        "--RAW-CONTROL-CHARS"
+      ],
+      "description": "Show ANSI colors"
+    },
+    {
+      "name": [
+        "-F",
+        "--quit-if-one-screen"
+      ],
+      "description": "Exit if the file fits on one screen"
+    },
+    {
+      "name": [
+        "-X",
+        "--no-init"
+      ],
+      "description": "Do not clear the screen on exit"
+    },
+    {
+      "name": [
+        "-i",
+        "--ignore-case"
+      ],
+      "description": "Ignore case in searches unless uppercase is used"
+    },
+    {
+      "name": [
+        "-I",
+        "--IGNORE-CASE"
+      ],
+      "description": "Ignore case in searches"
+    },
+    {
+      "name": [
+        "-M",
+        "--LONG-PROMPT"
+      ],
+      "description": "Show a long prompt with position"
+    }
+  ],
+  "args": [
+    {
+      "name": "file",
+      "optional": true,
+      "variadic": true,
+      "template": "filepaths"
+    }
+  ]
+}

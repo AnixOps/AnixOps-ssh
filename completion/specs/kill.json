@@ -1,0 +1,107 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "kill",
+  "description": "Send a signal to processes",
+  "parser": {
+    "flagClustering": false
+  },
+  "options": [
+    {
+      "name": "-s",
+      "description": "Signal name or number to send",
+      "args": [
+        {
+          "name": "signal",
+          "suggestions": [
+            "TERM",
+            "KILL",
+            "HUP",
+            "INT",
+            "STOP",
+            "CONT",
+            "USR1",
+            "USR2"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "-l",
+      "description": "List signal names"
+    },
+    {
+      "name": "-L",
+      "description": "List signal names in a table"
+    },
+    {
+      "name": [
+        "-9",
+        "-KILL"
+      ],
+      "description": "Kill the process (SIGKILL)"
+    },
+    {
+      "name": [
+        "-15",
+        "-TERM"
+      ],
+      "description": "Ask the process to terminate (SIGTERM)"
+    },
+    {
+      "name": [
+        "-1",
+        "-HUP"
+      ],
+      "description": "Hang up, often reloads the configuration (SIGHUP)"
+    },
+    {
+      "name": [
+        "-2",
+        "-INT"
+      ],
+      "description": "Interrupt the process (SIGINT)"
+    },
+    {
+      "name": [
+        "-3",
+        "-QUIT"
+      ],
+      "description": "Quit the process (SIGQUIT)"
+    },
+    {
+      "name": [
+        "-19",
+        "-STOP"
+      ],
+      "description": "Pause the process (SIGSTOP)"
+    },
+    {
+      "name": [
+        "-18",
+        "-CONT"
+      ],
+      "description": "Resume a paused process (SIGCONT)"
+    },
+    {
+      "name": [
+        "-10",
+        "-USR1"
+      ],
+      "description": "User-defined signal 1 (SIGUSR1)"
+    },
+    {
+      "name": [
+        "-12",
+        "-USR2"
+      ],
+      "description": "User-defined signal 2 (SIGUSR2)"
+    }
+  ],
+  "args": [
+    {
+      "name": "pid",
+      "optional": true,
+      "variadic": true
+    }
+  ]
+}

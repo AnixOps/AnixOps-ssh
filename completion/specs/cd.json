@@ -1,0 +1,22 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "cd",
+  "description": "Change the working directory",
+  "options": [
+    {
+      "name": "-L",
+      "description": "Follow symbolic links"
+    },
+    {
+      "name": "-P",
+      "description": "Use the physical directory structure"
+    }
+  ],
+  "args": [
+    {
+      "name": "directory",
+      "optional": true,
+      "template": "folders"
+    }
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "du",
+  "description": "Estimate file space usage",
+  "options": [
+    {
+      "name": [
+        "-h",
+        "--human-readable"
+      ],
+      "description": "Print sizes in human readable format"
+    },
+    {
+      "name": [
+        "-s",
+        "--summarize"
+      ],
+      "description": "Display only a total for each argument"
+    },
+    {
+      "name": [
+        "-a",
+        "--all"
+      ],
+      "description": "Write counts for all files, not only directories"
+    },
+    {
+      "name": [
+        "-c",
+        "--total"
+      ],
+      "description": "Produce a grand total"
+    },
+    {
+      "name": [
+        "-d",
+        "--max-depth"
+      ],
+      "description": "Print totals only for directories this deep",
+      "args": [
+        {
+          "name": "depth"
+        }
+      ]
+    },
+    {
+      "name": [
+        "-x",
+        "--one-file-system"
+      ],
+      "description": "Skip directories on different file systems"
+    },
+    {
+      "name": "-k",
+      "description": "Use 1 KiB blocks"
+    },
+    {
+      "name": "-m",
+      "description": "Use 1 MiB blocks"
+    },
+    {
+      "name": [
+        "-L",
+        "--dereference"
+      ],
+      "description": "Dereference all symbolic links"
+    },
+    {
+      "name": "--exclude",
+      "description": "Exclude files matching a pattern",
+      "args": [
+        {
+          "name": "pattern"
+        }
+      ],
+      "requiresEquals": true,
+      "repeatable": true
+    },
+    {
+      "name": [
+        "-b",
+        "--bytes"
+      ],
+      "description": "Print apparent sizes in bytes"
+    },
+    {
+      "name": "--apparent-size",
+      "description": "Print apparent sizes instead of disk usage"
+    },
+    {
+      "name": [
+        "-S",
+        "--separate-dirs"
+      ],
+      "description": "Do not include the size of subdirectories"
+    },
+    {
+      "name": "--si",
+      "description": "Like -h, but use powers of 1000"
+    },
+    {
+      "name": [
+        "-B",
+        "--block-size"
+      ],
+      "description": "Scale sizes by this size",
+      "args": [
+        {
+          "name": "size"
+        }
+      ]
+    }
+  ],
+  "args": [
+    {
+      "name": "file",
+      "optional": true,
+      "variadic": true,
+      "template": "filepaths"
+    }
+  ]
+}

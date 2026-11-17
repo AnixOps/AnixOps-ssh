@@ -1,0 +1,213 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": "tar",
+  "description": "Create and extract archives",
+  "options": [
+    {
+      "name": [
+        "-x",
+        "--extract",
+        "--get"
+      ],
+      "description": "Extract files from an archive",
+      "exclusiveWith": [
+        "-c",
+        "--create",
+        "-t",
+        "--list"
+      ]
+    },
+    {
+      "name": [
+        "-c",
+        "--create"
+      ],
+      "description": "Create a new archive",
+      "exclusiveWith": [
+        "-x",
+        "--extract",
+        "--get",
+        "-t",
+        "--list"
+      ]
+    },
+    {
+      "name": [
+        "-t",
+        "--list"
+      ],
+      "description": "List the contents of an archive",
+      "exclusiveWith": [
+        "-x",
+        "--extract",
+        "--get",
+        "-c",
+        "--create"
+      ]
+    },
+    {
+      "name": [
+        "-r",
+        "--append"
+      ],
+      "description": "Append files to the end of an archive"
+    },
+    {
+      "name": [
+        "-u",
+        "--update"
+      ],
+      "description": "Append files that are newer than the archive copy"
+    },
+    {
+      "name": [
+        "-f",
+        "--file"
+      ],
+      "description": "Use this archive file",
+      "args": [
+        {
+          "name": "archive",
+          "template": "filepaths"
+        }
+      ]
+    },
+    {
+      "name": [
+        "-v",
+        "--verbose"
+      ],
+      "description": "List files processed"
+    },
+    {
+      "name": [
+        "-z",
+        "--gzip",
+        "--gunzip"
+      ],
+      "description": "Filter through gzip"
+    },
+    {
+      "name": [
+        "-j",
+        "--bzip2"
+      ],
+      "description": "Filter through bzip2"
+    },
+    {
+      "name": [
+        "-J",
+        "--xz"
+      ],
+      "description": "Filter through xz"
+    },
+    {
+      "name": "--zstd",
+      "description": "Filter through zstd"
+    },
+    {
+      "name": [
+        "-a",
+        "--auto-compress"
+      ],
+      "description": "Choose compression from the archive suffix"
+    },
+    {
+      "name": [
+        "-C",
+        "--directory"
+      ],
+      "description": "Change to this directory first",
+      "args": [
+        {
+          "name": "directory",
+          "template": "folders"
+        }
+      ]
+    },
+    {
+      "name": [
+        "-p",
+        "--preserve-permissions"
+      ],
+      "description": "Extract all permissions"
+    },
+    {
+      "name": "--exclude",
+      "description": "Skip files matching this pattern",
+      "args": [
+        {
+          "name": "pattern"
+        }
+      ],
+      "repeatable": true
+    },
+    {
+      "name": [
+        "-T",
+        "--files-from"
+      ],
+      "description": "Read the names to archive from a file",
+      "args": [
+        {
+          "name": "file",
+          "template": "filepaths"
+        }
+      ]
+    },
+    {
+      "name": "--strip-components",
+      "description": "Remove N leading path components on extract",
+      "args": [
+        {
+          "name": "number"
+        }
+      ],
+      "requiresEquals": true
+    },
+    {
+      "name": [
+        "-k",
+        "--keep-old-files"
+      ],
+      "description": "Do not replace existing files"
+    },
+    {
+      "name": [
+        "-O",
+        "--to-stdout"
+      ],
+      "description": "Extract to standard output"
+    },
+    {
+      "name": [
+        "-h",
+        "--dereference"
+      ],
+      "description": "Follow symbolic links"
+    },
+    {
+      "name": "--one-file-system",
+      "description": "Stay in the local file system"
+    },
+    {
+      "name": [
+        "-P",
+        "--absolute-names"
+      ],
+      "description": "Keep leading slashes in names"
+    },
+    {
+      "name": "--wildcards",
+      "description": "Treat the names as patterns"
+    }
+  ],
+  "args": [
+    {
+      "name": "file",
+      "optional": true,
+      "variadic": true,
+      "template": "filepaths"
+    }
+  ]
+}

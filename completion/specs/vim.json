@@ -1,0 +1,133 @@
+{
+  "$schema": "../schema/spec.schema.json",
+  "name": [
+    "vim",
+    "vi"
+  ],
+  "description": "Vi IMproved, a text editor",
+  "options": [
+    {
+      "name": "-R",
+      "description": "Read-only mode"
+    },
+    {
+      "name": "-r",
+      "description": "List swap files, or recover a file"
+    },
+    {
+      "name": "-b",
+      "description": "Binary mode"
+    },
+    {
+      "name": "-d",
+      "description": "Diff mode: show differences between files"
+    },
+    {
+      "name": "-o",
+      "description": "Open files in horizontal split windows"
+    },
+    {
+      "name": "-O",
+      "description": "Open files in vertical split windows"
+    },
+    {
+      "name": "-p",
+      "description": "Open files in tab pages"
+    },
+    {
+      "name": "-c",
+      "description": "Run a command after loading the first file",
+      "args": [
+        {
+          "name": "command"
+        }
+      ],
+      "repeatable": true
+    },
+    {
+      "name": "--cmd",
+      "description": "Run a command before loading any vimrc",
+      "args": [
+        {
+          "name": "command"
+        }
+      ],
+      "repeatable": true
+    },
+    {
+      "name": "-S",
+      "description": "Source a session file after loading",
+      "args": [
+        {
+          "name": "file",
+          "template": "filepaths"
+        }
+      ]
+    },
+    {
+      "name": "-u",
+      "description": "Use this vimrc instead of the default",
+      "args": [
+        {
+          "name": "vimrc",
+          "template": "filepaths"
+        }
+      ]
+    },
+    {
+      "name": "-i",
+      "description": "Use this viminfo file",
+      "args": [
+        {
+          "name": "viminfo",
+          "template": "filepaths"
+        }
+      ]
+    },
+    {
+      "name": "-t",
+      "description": "Edit the file where a tag is defined",
+      "args": [
+        {
+          "name": "tag"
+        }
+      ]
+    },
+    {
+      "name": "-n",
+      "description": "Do not use a swap file"
+    },
+    {
+      "name": "-M",
+      "description": "Make changes impossible"
+    },
+    {
+      "name": "-Z",
+      "description": "Restricted mode"
+    },
+    {
+      "name": "--clean",
+      "description": "Start without plugins and user settings"
+    },
+    {
+      "name": "--noplugin",
+      "description": "Do not load plugins"
+    },
+    {
+      "name": "--version",
+      "description": "Print the version and exit"
+    },
+    {
+      "name": "--help",
+      "description": "Print help and exit"
+    }
+  ],
+  "args": [
+    {
+      "name": "file",
+      "optional": true,
+      "variadic": true,
+      "template": "filepaths"
+    }
+  ]
+}
