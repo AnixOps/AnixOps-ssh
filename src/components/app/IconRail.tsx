@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Server, Settings, SquareCode, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, Server, Settings, SquareCode, Users, type LucideIcon } from "lucide-react";
 import { motion } from "motion/react";
 import mark from "@/assets/mark.svg";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -6,12 +6,13 @@ import { t } from "@/lib/i18n";
 import { slide } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
-export type NavKey = "hosts" | "forwards" | "snippets" | "settings";
+export type NavKey = "hosts" | "forwards" | "snippets" | "team" | "settings";
 
 const primary: { key: NavKey; label: string; icon: LucideIcon }[] = [
   { key: "hosts", label: t.navHosts, icon: Server },
   { key: "forwards", label: t.navForwards, icon: ArrowLeftRight },
   { key: "snippets", label: t.navSnippets, icon: SquareCode },
+  { key: "team", label: t.navTeam, icon: Users },
 ];
 
 export function IconRail({ active, onChange }: { active: NavKey; onChange: (key: NavKey) => void }) {

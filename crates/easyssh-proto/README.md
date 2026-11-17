@@ -62,3 +62,11 @@ daemon are expected to ship the same schema revision and compare
 `schema_version` with `proto.hello` on connect.
 
 `AppConfig.schema_version` is the unrelated v1 storage version (currently 7).
+
+## Sync commands
+
+Schema revision with sync: `sync.status|signup|signin|signout|now`,
+`sync.devices.list|revoke`, `vaults.list`, `vault.create_shared`,
+`vault.members.list|lookup|add|remove|role`, `hosts.move_vault`, `hosts.vaults`,
+`hosts.history`, `hosts.history_restore`, and the `sync.state` event (payload
+`SyncStatus`). All additive.

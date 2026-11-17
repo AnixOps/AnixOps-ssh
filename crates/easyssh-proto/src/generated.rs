@@ -281,6 +281,18 @@ pub struct Group {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub parent_id: ::std::option::Option<::std::string::String>,
 }
+///A value of one host field that an edit or a merge replaced.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostHistoryEntry {
+    ///RFC 3339.
+    pub changed_at: ::std::string::String,
+    pub device: ::std::string::String,
+    pub field: ::std::string::String,
+    pub seq: i64,
+    ///Any JSON value.
+    pub value: ::serde_json::Value,
+}
 ///Event `hosts.changed` payload. Sent to every connected client after `hosts.save`, `hosts.delete` or a `hosts.import_apply` that changed something; clients refresh their host list.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
 #[serde(deny_unknown_fields)]
@@ -290,6 +302,25 @@ pub struct HostsChangedEvent {}
 #[serde(deny_unknown_fields)]
 pub struct HostsDeleteParams {
     pub id: ::std::string::String,
+}
+///Command `hosts.history` payload. Reply: HostsHistoryResult (newest first; secrets are never listed).
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostsHistoryParams {
+    pub id: ::std::string::String,
+}
+///Command `hosts.history_restore` payload: put one old value back, as an ordinary edit that syncs. Reply: null.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostsHistoryRestoreParams {
+    pub id: ::std::string::String,
+    pub seq: i64,
+}
+///`HostsHistoryResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostsHistoryResult {
+    pub entries: ::std::vec::Vec<HostHistoryEntry>,
 }
 ///Command `hosts.import_apply` payload. Reply: HostsImportApplyResult. Adds and updates only; nothing stored is ever removed. Broadcasts `hosts.changed` when something changed.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -369,6 +400,19 @@ pub struct HostsListResult {
     pub connections: ::std::vec::Vec<Connection>,
     pub groups: ::std::vec::Vec<Group>,
 }
+///Command `hosts.move_vault` payload: move a host into another vault. The host gets a new id (a record never changes vault); its tunnels follow. Reply: HostsMoveVaultResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostsMoveVaultParams {
+    pub id: ::std::string::String,
+    pub vault_id: ::std::string::String,
+}
+///`HostsMoveVaultResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostsMoveVaultResult {
+    pub id: ::std::string::String,
+}
 ///Command `hosts.save` payload. Reply: HostsSaveResult.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
@@ -383,6 +427,20 @@ pub struct HostsSaveParams {
 #[serde(deny_unknown_fields)]
 pub struct HostsSaveResult {
     pub id: ::std::string::String,
+}
+///Command `hosts.vaults` payload. Reply: HostsVaultsResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct HostsVaultsParams {}
+///`HostsVaultsResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct HostsVaultsResult {
+    ///Host id to vault id, for the hosts that are not in the personal vault.
+    pub host_vaults: ::std::collections::HashMap<
+        ::std::string::String,
+        ::std::string::String,
+    >,
 }
 ///What to do with an imported host that matches a stored one (same hostname, port and user).
 #[derive(
@@ -1034,6 +1092,47 @@ pub struct SidebarPreferences {
     pub selected_tag: ::std::option::Option<::std::string::String>,
     pub width: f64,
 }
+///What the last sync run did.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SyncCounts {
+    pub merged: u64,
+    pub pulled: u64,
+    pub pushed: u64,
+    ///Same-field conflicts a merge decided; the losing value is in the record's history.
+    pub resolved: u64,
+}
+///`SyncDevice`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SyncDevice {
+    ///Unix seconds.
+    pub created_at: u64,
+    pub device_id: ::std::string::String,
+    pub name: ::std::string::String,
+    pub revoked: bool,
+    pub this_device: bool,
+}
+///Command `sync.devices.list` payload. Reply: SyncDevicesListResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SyncDevicesListParams {}
+///`SyncDevicesListResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SyncDevicesListResult {
+    pub devices: ::std::vec::Vec<SyncDevice>,
+}
+///Command `sync.devices.revoke` payload: the server stops accepting pushes from that device and ends its sessions. Reply: null. The current device cannot be revoked.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SyncDevicesRevokeParams {
+    pub device_id: ::std::string::String,
+}
+///Command `sync.now` payload: pull and push now. Reply: SyncStatus.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SyncNowParams {}
 ///Rust: domain::SyncPreferences.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
@@ -1054,6 +1153,135 @@ pub struct SyncPreferences {
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub repository_path: ::std::option::Option<::std::string::String>,
 }
+///Command `sync.signin` payload: sign in to an existing account on this device (OPAQUE login, unwrap the account keys, enroll this device with an account-signed certificate). Reply: SyncStatus. Fails with `wrong_passphrase`.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SyncSigninParams {
+    ///How this device appears in the device list; defaults to the host name.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub device_name: ::std::option::Option<::std::string::String>,
+    ///Stretched on this device with Argon2id; never sent and never stored.
+    pub passphrase: ::std::string::String,
+    ///https://, or http:// only for a loopback address.
+    pub server_url: ::std::string::String,
+    pub username: ::std::string::String,
+}
+///Command `sync.signout` payload: end the session, revoke nothing, forget the account keys and sync bookkeeping on this device. Hosts stay. Reply: SyncStatus.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SyncSignoutParams {}
+///Command `sync.signup` payload: create an account on the server (OPAQUE registration), create the personal vault and enroll this device. Reply: SyncStatus.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SyncSignupParams {
+    ///How this device appears in the device list; defaults to the host name.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub device_name: ::std::option::Option<::std::string::String>,
+    ///Stretched on this device with Argon2id; never sent and never stored.
+    pub passphrase: ::std::string::String,
+    ///https://, or http:// only for a loopback address.
+    pub server_url: ::std::string::String,
+    pub username: ::std::string::String,
+}
+///`locked`: signed in, but the vault is locked, so the account secrets cannot be opened yet.
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum SyncState {
+    #[serde(rename = "signed_out")]
+    SignedOut,
+    #[serde(rename = "idle")]
+    Idle,
+    #[serde(rename = "syncing")]
+    Syncing,
+    #[serde(rename = "error")]
+    Error,
+    #[serde(rename = "locked")]
+    Locked,
+}
+impl ::std::fmt::Display for SyncState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::SignedOut => f.write_str("signed_out"),
+            Self::Idle => f.write_str("idle"),
+            Self::Syncing => f.write_str("syncing"),
+            Self::Error => f.write_str("error"),
+            Self::Locked => f.write_str("locked"),
+        }
+    }
+}
+impl ::std::str::FromStr for SyncState {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "signed_out" => Ok(Self::SignedOut),
+            "idle" => Ok(Self::Idle),
+            "syncing" => Ok(Self::Syncing),
+            "error" => Ok(Self::Error),
+            "locked" => Ok(Self::Locked),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for SyncState {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for SyncState {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///The sync state. No secret is ever part of it. Reply of `sync.status`, `sync.signup`, `sync.signin`, `sync.signout` and `sync.now`, and payload of event `sync.state`.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SyncStatus {
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub device_id: ::std::option::Option<::std::string::String>,
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub device_name: ::std::option::Option<::std::string::String>,
+    ///This account's safety number: twelve groups of five digits. Members compare it with what they see for you.
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub fingerprint: ::std::option::Option<::std::string::String>,
+    pub last: SyncCounts,
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub last_error: ::std::option::Option<::std::string::String>,
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub last_error_code: ::std::option::Option<::std::string::String>,
+    ///RFC 3339.
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub last_sync_at: ::std::option::Option<::std::string::String>,
+    ///Records waiting to be pushed.
+    pub pending: u64,
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub server_url: ::std::option::Option<::std::string::String>,
+    pub signed_in: bool,
+    pub state: SyncState,
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub username: ::std::option::Option<::std::string::String>,
+}
+///Command `sync.status` payload. Reply: SyncStatus.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SyncStatusParams {}
 ///Rust: domain::TelemetryPreferences. Both fields have serde(default).
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
 #[serde(deny_unknown_fields)]
@@ -1364,6 +1592,12 @@ impl ::std::convert::TryFrom<::std::string::String> for TunnelKind {
 pub struct VaultChangedEvent {
     pub unlocked: bool,
 }
+///Command `vault.create_shared` payload: create a team vault on the server; the caller is its owner. Reply: VaultInfo.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultCreateSharedParams {
+    pub name: ::std::string::String,
+}
 ///Command `vault.forget_all` payload: delete every saved password, key and passphrase. Works while locked. Reply: VaultForgetAllResult.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
 #[serde(deny_unknown_fields)]
@@ -1374,10 +1608,379 @@ pub struct VaultForgetAllParams {}
 pub struct VaultForgetAllResult {
     pub hosts: u64,
 }
+///`VaultInfo`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultInfo {
+    pub id: ::std::string::String,
+    pub kind: VaultInfoKind,
+    pub name: ::std::string::String,
+    ///The signed-in account's role in a team vault.
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub role: ::std::option::Option<::std::string::String>,
+}
+///`VaultInfoKind`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum VaultInfoKind {
+    #[serde(rename = "personal")]
+    Personal,
+    #[serde(rename = "team")]
+    Team,
+}
+impl ::std::fmt::Display for VaultInfoKind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Personal => f.write_str("personal"),
+            Self::Team => f.write_str("team"),
+        }
+    }
+}
+impl ::std::str::FromStr for VaultInfoKind {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "personal" => Ok(Self::Personal),
+            "team" => Ok(Self::Team),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for VaultInfoKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for VaultInfoKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
 ///Command `vault.lock` payload ("lock now"). Reply: VaultStatus.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
 #[serde(deny_unknown_fields)]
 pub struct VaultLockParams {}
+///`VaultMember`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultMember {
+    pub account_id: ::std::string::String,
+    ///Safety number of the member's account keys.
+    pub fingerprint: ::std::string::String,
+    pub role: VaultMemberRole,
+    ///`confirmed`: a person compared the fingerprint when adding the member; `unconfirmed`: first seen from the server; `changed`: the keys differ from the pinned ones, and this member's records are refused.
+    pub trust: VaultMemberTrust,
+    pub username: ::std::string::String,
+}
+///`VaultMemberRole`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum VaultMemberRole {
+    #[serde(rename = "owner")]
+    Owner,
+    #[serde(rename = "editor")]
+    Editor,
+    #[serde(rename = "viewer")]
+    Viewer,
+}
+impl ::std::fmt::Display for VaultMemberRole {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Owner => f.write_str("owner"),
+            Self::Editor => f.write_str("editor"),
+            Self::Viewer => f.write_str("viewer"),
+        }
+    }
+}
+impl ::std::str::FromStr for VaultMemberRole {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "owner" => Ok(Self::Owner),
+            "editor" => Ok(Self::Editor),
+            "viewer" => Ok(Self::Viewer),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for VaultMemberRole {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for VaultMemberRole {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`confirmed`: a person compared the fingerprint when adding the member; `unconfirmed`: first seen from the server; `changed`: the keys differ from the pinned ones, and this member's records are refused.
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum VaultMemberTrust {
+    #[serde(rename = "self")]
+    Self_,
+    #[serde(rename = "confirmed")]
+    Confirmed,
+    #[serde(rename = "unconfirmed")]
+    Unconfirmed,
+    #[serde(rename = "changed")]
+    Changed,
+}
+impl ::std::fmt::Display for VaultMemberTrust {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Self_ => f.write_str("self"),
+            Self::Confirmed => f.write_str("confirmed"),
+            Self::Unconfirmed => f.write_str("unconfirmed"),
+            Self::Changed => f.write_str("changed"),
+        }
+    }
+}
+impl ::std::str::FromStr for VaultMemberTrust {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "self" => Ok(Self::Self_),
+            "confirmed" => Ok(Self::Confirmed),
+            "unconfirmed" => Ok(Self::Unconfirmed),
+            "changed" => Ok(Self::Changed),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for VaultMemberTrust {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for VaultMemberTrust {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///Command `vault.members.add` payload (owner only): seal the vault key to the member and add them. Reply: VaultMember.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultMembersAddParams {
+    ///The fingerprint the person compared. The daemon looks the account up again and refuses (`fingerprint_mismatch`) when the keys changed.
+    pub fingerprint: ::std::string::String,
+    pub role: VaultMembersAddParamsRole,
+    pub username: ::std::string::String,
+    pub vault_id: ::std::string::String,
+}
+///`VaultMembersAddParamsRole`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum VaultMembersAddParamsRole {
+    #[serde(rename = "owner")]
+    Owner,
+    #[serde(rename = "editor")]
+    Editor,
+    #[serde(rename = "viewer")]
+    Viewer,
+}
+impl ::std::fmt::Display for VaultMembersAddParamsRole {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Owner => f.write_str("owner"),
+            Self::Editor => f.write_str("editor"),
+            Self::Viewer => f.write_str("viewer"),
+        }
+    }
+}
+impl ::std::str::FromStr for VaultMembersAddParamsRole {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "owner" => Ok(Self::Owner),
+            "editor" => Ok(Self::Editor),
+            "viewer" => Ok(Self::Viewer),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for VaultMembersAddParamsRole {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for VaultMembersAddParamsRole {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///Command `vault.members.list` payload. Reply: VaultMembersListResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultMembersListParams {
+    pub vault_id: ::std::string::String,
+}
+///`VaultMembersListResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultMembersListResult {
+    pub members: ::std::vec::Vec<VaultMember>,
+}
+///Command `vault.members.lookup` payload: look an account up and compute its fingerprint, to show before adding. Reply: VaultMembersLookupResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultMembersLookupParams {
+    pub username: ::std::string::String,
+}
+///`VaultMembersLookupResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultMembersLookupResult {
+    pub account_id: ::std::string::String,
+    pub fingerprint: ::std::string::String,
+    pub username: ::std::string::String,
+}
+///Command `vault.members.remove` payload (owner only). The vault key is not rotated yet. Reply: null.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultMembersRemoveParams {
+    pub account_id: ::std::string::String,
+    pub vault_id: ::std::string::String,
+}
+///Command `vault.members.role` payload (owner only). Reply: null.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultMembersRoleParams {
+    pub account_id: ::std::string::String,
+    pub role: VaultMembersRoleParamsRole,
+    pub vault_id: ::std::string::String,
+}
+///`VaultMembersRoleParamsRole`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum VaultMembersRoleParamsRole {
+    #[serde(rename = "owner")]
+    Owner,
+    #[serde(rename = "editor")]
+    Editor,
+    #[serde(rename = "viewer")]
+    Viewer,
+}
+impl ::std::fmt::Display for VaultMembersRoleParamsRole {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Owner => f.write_str("owner"),
+            Self::Editor => f.write_str("editor"),
+            Self::Viewer => f.write_str("viewer"),
+        }
+    }
+}
+impl ::std::str::FromStr for VaultMembersRoleParamsRole {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "owner" => Ok(Self::Owner),
+            "editor" => Ok(Self::Editor),
+            "viewer" => Ok(Self::Viewer),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for VaultMembersRoleParamsRole {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for VaultMembersRoleParamsRole {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
 ///Command `vault.remove_passphrase` payload: go back to keychain-only protection. Reply: VaultStatus.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
@@ -1420,6 +2023,16 @@ pub struct VaultStatusParams {}
 #[serde(deny_unknown_fields)]
 pub struct VaultUnlockParams {
     pub passphrase: ::std::string::String,
+}
+///Command `vaults.list` payload. Reply: VaultsListResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct VaultsListParams {}
+///`VaultsListResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultsListResult {
+    pub vaults: ::std::vec::Vec<VaultInfo>,
 }
 ///files/snippets/forwarding are legacy values kept so schema 5 metadata still deserializes.
 #[derive(

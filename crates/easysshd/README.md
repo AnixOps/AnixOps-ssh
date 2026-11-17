@@ -183,3 +183,24 @@ longer paths fail with an explicit error.
 
 The files are removed on clean shutdown (Ctrl+C or SIGTERM). After a crash the
 next start replaces the stale socket and secret once it holds the lock.
+
+## Sync service
+
+`syncsvc` runs the account, the background sync and the team vault commands
+for the app (`sync.status|signup|signin|signout|now`,
+`sync.devices.list|revoke`, `vaults.list`, `vault.create_shared`,
+`vault.members.list|lookup|add|remove|role`, `hosts.move_vault`, `hosts.vaults`,
+`hosts.history`, `hosts.history_restore`; event `sync.state`). It syncs on
+start, every two minutes, after local changes (debounced, also when another
+process writes the database) and on `sync.now`, over `easyssh_store::StoreSync`.
+The server URL must be https, or http on loopback. The account keys and token
+are encrypted with the vault's device key; the passphrase is never stored.
+`DaemonExtras.sync` (`SyncOptions`) sets the intervals and the Argon2id cost
+so tests can use cheap ones.
+
+`tests/syncflow.rs` starts an in-process `easyssh-server` on loopback and
+drives two or three full daemons over the IPC link: edits and deletes
+propagate, concurrent edits to different fields merge, a same-field conflict
+keeps the loser in history, a revoked device cannot push, shared vaults and
+roles work and the safety numbers match on both sides, and nothing
+secret reaches the server.

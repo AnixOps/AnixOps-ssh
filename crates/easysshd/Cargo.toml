@@ -15,8 +15,10 @@ easyssh-proto = { path = "../easyssh-proto" }
 easyssh-sessionlog = { path = "../easyssh-sessionlog" }
 easyssh-crypto = { path = "../easyssh-crypto" }
 easyssh-store = { path = "../easyssh-store" }
+easyssh-sync = { path = "../easyssh-sync" }
 easyssh-telemetry = { path = "../easyssh-telemetry" }
 easyssh-vault = { path = "../easyssh-vault", features = ["os-keyring"] }
+ed25519-dalek = "3"
 fs4.workspace = true
 hmac.workspace = true
 portable-pty = "0.9"
@@ -41,6 +43,7 @@ windows-sys = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
+easyssh-server = { path = "../easyssh-server" }
 uuid.workspace = true
 zeroize = "1"
 tempfile.workspace = true

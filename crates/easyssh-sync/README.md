@@ -169,3 +169,11 @@ client, and older clients simply ignore it: the change is additive.
   multiple records per request, no websocket notifications (poll with `pull`).
 - Concurrent edits to one field keep one winner; the loser is restorable
   from history, not merged textually.
+
+## In the app
+
+`easyssh-store` implements `SyncStore` (`StoreSync`) over the app database:
+hosts, groups, snippets, tunnels and known hosts, with history kept in
+`record_history`, the version vectors and field stamps in the tables, and the
+pull cursor and `HighWater` persisted. Saved secrets are not mapped. The
+daemon's `syncsvc` drives it; see `crates/easysshd/README.md`.

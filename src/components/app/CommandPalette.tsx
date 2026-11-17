@@ -17,6 +17,7 @@ import {
   Server,
   SquareCode,
   SquareTerminal,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -180,6 +181,7 @@ export function CommandPalette({
         : []),
       { id: "nav-forwards", section: t.paletteActions, title: t.navForwards, icon: ArrowLeftRight, run: () => onNav("forwards") },
       { id: "nav-snippets", section: t.paletteActions, title: t.navSnippets, icon: SquareCode, run: () => onNav("snippets") },
+      { id: "nav-team", section: t.paletteActions, title: t.navTeam, icon: Users, run: () => onNav("team") },
     ];
     return [
       ...hosts.map((host) => ({

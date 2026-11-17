@@ -15,6 +15,7 @@ mod session_logs;
 mod sessions;
 mod settings;
 mod snippets;
+mod sync;
 mod telemetry;
 mod tunnels;
 mod vault;
@@ -87,6 +88,7 @@ fn main() {
             files::transfer_cancel,
             askpass::askpass_reply,
             askpass::askpass_unlock,
+            sync::sync_call,
             vault::vault_status,
             vault::vault_unlock,
             vault::vault_lock,

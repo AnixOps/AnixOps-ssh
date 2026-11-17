@@ -5,6 +5,7 @@ use crate::agent::validate_agent_socket;
 use crate::askpass::{Hub, Prompt};
 use crate::log::Logger;
 use crate::server::{BoxFuture, Outbox, Service};
+use crate::syncsvc::{SyncFailure, SyncOptions, SyncService};
 use crate::terminal::{SpawnOptions, TermSession, DEFAULT_SCROLLBACK};
 use base64::Engine;
 use easyssh_core::security::{validate_alias, validate_connection};
@@ -80,6 +81,9 @@ pub struct DaemonExtras {
     /// The program OpenSSH runs for `SSH_ASKPASS`: this executable when
     /// `None` (it calls `askpass::run_helper_if_requested` first thing).
     pub askpass_helper: Option<PathBuf>,
+    /// Timing and key-stretching settings of the sync service (production
+    /// defaults when unset; tests use cheap ones).
+    pub sync: SyncOptions,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -126,6 +130,7 @@ pub struct Daemon {
     logs: LogStore,
     clients: Clients,
     askpass: Arc<Hub>,
+    sync: Arc<SyncService>,
     build_version: String,
     log: Arc<Logger>,
     /// Set by `daemon.shutdown_when_idle` (or a newer client's `proto.hello`):
@@ -243,6 +248,17 @@ impl Daemon {
         let access: Arc<dyn StoreAccess> = store.clone();
         askpass.set_answers(Arc::new(VaultSecrets::new(vault.clone(), access)));
         spawn_auto_lock(&vault, &clients, &log);
+        let sync_clients = clients.clone();
+        let sync = SyncService::start(
+            store.clone(),
+            vault.clone(),
+            extras.sync.clone(),
+            Arc::new(move |kind: &str, payload: Value| {
+                for outbox in lock(&sync_clients).values() {
+                    outbox.event(kind, payload.clone());
+                }
+            }),
+        );
         Ok(Arc::new(Daemon {
             cfg,
             store,
@@ -256,6 +272,7 @@ impl Daemon {
             logs,
             clients,
             askpass,
+            sync,
             build_version,
             log,
             draining: AtomicBool::new(false),
@@ -404,6 +421,18 @@ impl Daemon {
         }
         match self.dispatch(conn, outbox, &id, &kind, payload).await {
             Ok(Outcome::Ok(value)) => {
+                if matches!(
+                    kind.as_str(),
+                    "hosts.save"
+                        | "hosts.delete"
+                        | "hosts.import_apply"
+                        | "hosts.move_vault"
+                        | "hosts.history_restore"
+                        | "known_hosts.import"
+                        | "known_hosts.remove"
+                ) {
+                    self.sync.kick();
+                }
                 outbox.send(json!({"id": id, "ok": value})).await;
             }
             Ok(Outcome::Replied) => {}
@@ -670,6 +699,7 @@ impl Daemon {
                     .map_err(|e| fail("internal", e.to_string()))?
                     .map_err(vault_failure)?;
                 self.broadcast("vault.changed", json!({"unlocked": true}));
+                self.sync.restore();
                 ok(self.vault_status())
             }
             "vault.lock" => {
@@ -752,6 +782,160 @@ impl Daemon {
                 .map_err(vault_failure)?;
                 self.broadcast("hosts.changed", json!({}));
                 ok(flags_json(flags))
+            }
+            "sync.status" => {
+                let _: proto::SyncStatusParams = parse(payload)?;
+                self.sync.restore();
+                ok(self.sync.status_json())
+            }
+            "sync.signup" => {
+                let p: proto::SyncSignupParams = parse(payload)?;
+                let status = self
+                    .sync
+                    .signup(
+                        &p.server_url,
+                        &p.username,
+                        &p.passphrase,
+                        p.device_name.as_deref(),
+                    )
+                    .await
+                    .map_err(sync_failure)?;
+                self.broadcast("hosts.changed", json!({}));
+                ok(status)
+            }
+            "sync.signin" => {
+                let p: proto::SyncSigninParams = parse(payload)?;
+                let status = self
+                    .sync
+                    .signin(
+                        &p.server_url,
+                        &p.username,
+                        &p.passphrase,
+                        p.device_name.as_deref(),
+                    )
+                    .await
+                    .map_err(sync_failure)?;
+                self.broadcast("hosts.changed", json!({}));
+                ok(status)
+            }
+            "sync.signout" => {
+                let _: proto::SyncSignoutParams = parse(payload)?;
+                ok(self.sync.signout().await.map_err(sync_failure)?)
+            }
+            "sync.now" => {
+                let _: proto::SyncNowParams = parse(payload)?;
+                ok(self.sync.sync_now().await)
+            }
+            "sync.devices.list" => {
+                let _: proto::SyncDevicesListParams = parse(payload)?;
+                ok(self.sync.devices_list().await.map_err(sync_failure)?)
+            }
+            "sync.devices.revoke" => {
+                let p: proto::SyncDevicesRevokeParams = parse(payload)?;
+                self.sync
+                    .devices_revoke(&p.device_id)
+                    .await
+                    .map_err(sync_failure)?;
+                ok(Value::Null)
+            }
+            "vaults.list" => {
+                let _: proto::VaultsListParams = parse(payload)?;
+                ok(self.sync.vaults_list().map_err(sync_failure)?)
+            }
+            "vault.create_shared" => {
+                let p: proto::VaultCreateSharedParams = parse(payload)?;
+                ok(self
+                    .sync
+                    .create_shared(&p.name)
+                    .await
+                    .map_err(sync_failure)?)
+            }
+            "vault.members.list" => {
+                let p: proto::VaultMembersListParams = parse(payload)?;
+                ok(self
+                    .sync
+                    .members_list(&p.vault_id)
+                    .await
+                    .map_err(sync_failure)?)
+            }
+            "vault.members.lookup" => {
+                let p: proto::VaultMembersLookupParams = parse(payload)?;
+                ok(self
+                    .sync
+                    .members_lookup(&p.username)
+                    .await
+                    .map_err(sync_failure)?)
+            }
+            "vault.members.add" => {
+                let p: MembersAdd = parse(payload)?;
+                ok(self
+                    .sync
+                    .members_add(&p.vault_id, &p.username, p.role, &p.fingerprint)
+                    .await
+                    .map_err(sync_failure)?)
+            }
+            "vault.members.remove" => {
+                let p: proto::VaultMembersRemoveParams = parse(payload)?;
+                self.sync
+                    .members_remove(&p.vault_id, &p.account_id)
+                    .await
+                    .map_err(sync_failure)?;
+                ok(Value::Null)
+            }
+            "vault.members.role" => {
+                let p: MembersRole = parse(payload)?;
+                self.sync
+                    .members_role(&p.vault_id, &p.account_id, p.role)
+                    .await
+                    .map_err(sync_failure)?;
+                ok(Value::Null)
+            }
+            "hosts.move_vault" => {
+                let p: proto::HostsMoveVaultParams = parse(payload)?;
+                // Saved secrets move with the host; that needs the vault open.
+                let _ = self.vault.ensure_unlocked();
+                let id = lock(&self.store)
+                    .move_host_to_vault(&p.id, &p.vault_id)
+                    .map_err(store_failure)?;
+                self.broadcast("hosts.changed", json!({}));
+                ok(json!({"id": id}))
+            }
+            "hosts.vaults" => {
+                let _: proto::HostsVaultsParams = parse(payload)?;
+                let hosts = lock(&self.store).list_hosts().map_err(store_failure)?;
+                let map: serde_json::Map<String, Value> = hosts
+                    .into_iter()
+                    .filter(|r| r.meta.vault_id != easyssh_store::PERSONAL_VAULT_ID)
+                    .map(|r| (r.meta.id, Value::String(r.meta.vault_id)))
+                    .collect();
+                ok(json!({"host_vaults": map}))
+            }
+            "hosts.history" => {
+                let p: proto::HostsHistoryParams = parse(payload)?;
+                let entries: Vec<Value> = lock(&self.store)
+                    .history(&p.id)
+                    .map_err(store_failure)?
+                    .into_iter()
+                    .filter(|e| e.record_table == "hosts" && e.field != "deleted")
+                    .map(|e| {
+                        json!({
+                            "seq": e.seq,
+                            "field": e.field,
+                            "value": e.old_value.unwrap_or(Value::Null),
+                            "changed_at": e.changed_at.to_rfc3339(),
+                            "device": e.device,
+                        })
+                    })
+                    .collect();
+                ok(json!({"entries": entries}))
+            }
+            "hosts.history_restore" => {
+                let p: proto::HostsHistoryRestoreParams = parse(payload)?;
+                lock(&self.store)
+                    .restore_host_field(&p.id, p.seq)
+                    .map_err(store_failure)?;
+                self.broadcast("hosts.changed", json!({}));
+                ok(Value::Null)
             }
             "askpass.endpoint" => ok(json!({"endpoint": self.askpass.endpoint()})),
             other => Err(fail("unknown_command", format!("unknown command {other}"))),
@@ -1114,6 +1298,25 @@ fn import_failure(error: StoreError) -> Failure {
 
 /// Upper bound for a `known_hosts` file the daemon agrees to import.
 const MAX_KNOWN_HOSTS_BYTES: u64 = 16 * 1024 * 1024;
+
+fn sync_failure(error: SyncFailure) -> Failure {
+    fail(error.code, error.message)
+}
+
+#[derive(serde::Deserialize)]
+struct MembersAdd {
+    vault_id: String,
+    username: String,
+    role: easyssh_sync::wire::Role,
+    fingerprint: String,
+}
+
+#[derive(serde::Deserialize)]
+struct MembersRole {
+    vault_id: String,
+    account_id: String,
+    role: easyssh_sync::wire::Role,
+}
 
 fn store_failure(error: StoreError) -> Failure {
     match &error {

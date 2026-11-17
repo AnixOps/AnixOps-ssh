@@ -3,6 +3,7 @@ import { AiSettings } from "@/components/app/AiSettings";
 import { SessionLogs } from "@/components/app/SessionLogs";
 import { BackupSync } from "@/components/app/BackupSync";
 import { KnownHosts } from "@/components/app/KnownHosts";
+import { SyncSettings } from "@/components/app/SyncSettings";
 import { VaultSettings } from "@/components/app/VaultSettings";
 import { CircleAlert, CircleCheck, Eye, EyeOff, Minus, Plus, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -193,6 +194,10 @@ export function SettingsPanel({
 
         <Group title={t.privacy}>
           <PrivacySection current={current} update={update} />
+        </Group>
+
+        <Group title={t.syncTitle}>
+          <SyncSettings />
         </Group>
 
         <Group title={t.backupSync}>

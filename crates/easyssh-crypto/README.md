@@ -132,3 +132,12 @@ uncertified device or a certificate from another account fails.
 then feeds the committed outputs to the decrypting/verifying side. Regenerate
 only for an intentional format change (which needs a new version byte):
 `UPDATE_VECTORS=1 cargo test -p easyssh-crypto --test vectors`.
+
+## Safety numbers
+
+`account_fingerprint(seal_public, signing_public)` is SHA-256 over a fixed
+label and both public keys, expanded to twelve groups of five digits. Two
+people compare it when one adds the other to a team vault;
+`fingerprints_match` ignores spacing and never matches an empty value.
+`AccountKeyPair::to_seeds` exports the two secret seeds for the sealed
+storage the daemon keeps.
