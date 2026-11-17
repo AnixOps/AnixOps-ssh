@@ -1008,6 +1008,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "easyssh-e2e"
+version = "1.0.1"
+dependencies = [
+ "easyssh-core",
+ "portable-pty",
+ "tempfile",
+]
+
+[[package]]
 name = "easyssh-proto"
 version = "1.0.1"
 dependencies = [
