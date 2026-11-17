@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/readme-banner-ssh-dark.png">
+  <img alt="AnixOps SSH" src="docs/brand/readme-banner-ssh-light.png">
+</picture>
+
 # AnixOps SSH
 
 A clean, Termius-style SSH client for the OpenSSH already on your computer.

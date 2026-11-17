@@ -42,7 +42,7 @@ const scenes = [
   { name: "terminal-en", query: "lang=en", open: ["prod-web-01", "home-nas"] },
 ];
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const errors = [];
 for (const colorScheme of ["light", "dark"]) {
   const context = await browser.newContext({
