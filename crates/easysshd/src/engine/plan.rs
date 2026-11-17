@@ -88,9 +88,7 @@ pub fn parse_ssh_g(text: &str) -> Option<HostFacts> {
             "passwordauthentication" => facts.password = yes(value),
             "kbdinteractiveauthentication" => facts.keyboard_interactive = yes(value),
             "numberofpasswordprompts" => facts.password_attempts = value.parse().ok(),
-            "connecttimeout" => {
-                facts.connect_timeout = value.parse().ok().map(Duration::from_secs)
-            }
+            "connecttimeout" => facts.connect_timeout = value.parse().ok().map(Duration::from_secs),
             "serveraliveinterval" => {
                 facts.keepalive = value
                     .parse::<u64>()

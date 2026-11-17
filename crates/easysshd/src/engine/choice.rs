@@ -94,9 +94,10 @@ pub fn choose_engine(
         );
     }
     match preference {
-        EnginePreference::Russh => {
-            Choice::new(SshEngine::Russh, "this host is set to use the built-in engine")
-        }
+        EnginePreference::Russh => Choice::new(
+            SshEngine::Russh,
+            "this host is set to use the built-in engine",
+        ),
         _ => Choice::new(
             SshEngine::Russh,
             "the built-in engine is selected in the settings",

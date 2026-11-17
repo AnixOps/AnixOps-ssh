@@ -52,7 +52,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "AskpassEndpointResult",
     ),
     ("hostkey.reply", "HostkeyReplyParams", ""),
-    ("engine.resolve", "EngineResolveParams", "EngineResolveResult"),
+    (
+        "engine.resolve",
+        "EngineResolveParams",
+        "EngineResolveResult",
+    ),
     (
         "engine.connections",
         "EngineConnectionsParams",
@@ -64,7 +68,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("sftp.remove", "SftpRemoveParams", ""),
     ("sftp.rename", "SftpRenameParams", ""),
     ("sftp.close", "SftpCloseParams", ""),
-    ("transfer.start", "TransferStartParams", "TransferStartResult"),
+    (
+        "transfer.start",
+        "TransferStartParams",
+        "TransferStartResult",
+    ),
     ("transfer.cancel", "TransferCancelParams", ""),
     ("tunnel.start", "TunnelStartParams", "TunnelStartResult"),
     ("tunnel.stop", "TunnelStopParams", ""),

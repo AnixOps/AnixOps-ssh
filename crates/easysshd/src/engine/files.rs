@@ -298,7 +298,11 @@ async fn upload_path(
     while let Some((dir, remote_dir)) = pending.pop() {
         // An existing directory is fine.
         if let Err(e) = sftp.mkdir(&remote_dir).await {
-            if !sftp.stat(&remote_dir).await.is_ok_and(|s| s.kind == EntryKind::Dir) {
+            if !sftp
+                .stat(&remote_dir)
+                .await
+                .is_ok_and(|s| s.kind == EntryKind::Dir)
+            {
                 return Err(e);
             }
         }

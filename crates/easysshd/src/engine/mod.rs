@@ -64,7 +64,6 @@ pub struct Engine {
     pub(crate) registry: registry::Registry<Session, SharedError>,
     hub: Arc<Hub>,
     hostkeys: Arc<HostKeyPrompts>,
-    broadcast: Broadcast,
     paths: Mutex<KnownHostsPaths>,
     pub(crate) files: files::Files,
     pub(crate) tunnels: tunnels::Tunnels,
@@ -79,9 +78,8 @@ impl Engine {
     ) -> Arc<Engine> {
         Arc::new(Engine {
             registry: registry::Registry::new(linger),
-            hostkeys: HostKeyPrompts::new(broadcast.clone()),
+            hostkeys: HostKeyPrompts::new(broadcast),
             hub,
-            broadcast,
             paths: Mutex::new(paths),
             files: files::Files::default(),
             tunnels: tunnels::Tunnels::default(),
@@ -98,10 +96,6 @@ impl Engine {
 
     pub fn hostkeys(&self) -> &Arc<HostKeyPrompts> {
         &self.hostkeys
-    }
-
-    pub(crate) fn broadcast(&self, kind: &str, payload: Value) -> usize {
-        (self.broadcast)(kind, payload)
     }
 
     fn params(&self, spec: &HostSpec, agent: Option<&PathBuf>) -> ConnectParams {

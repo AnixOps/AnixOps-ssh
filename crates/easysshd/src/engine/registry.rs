@@ -149,9 +149,7 @@ impl<S: Pooled, E: Clone + Send + 'static> Registry<S, E> {
                 });
             }
         }
-        out.sort_by(|a, b| {
-            (&a.key.host_id, &a.key.target).cmp(&(&b.key.host_id, &b.key.target))
-        });
+        out.sort_by(|a, b| (&a.key.host_id, &a.key.target).cmp(&(&b.key.host_id, &b.key.target)));
         out
     }
 
@@ -228,8 +226,7 @@ impl<S: Pooled, E: Clone + Send + 'static> Registry<S, E> {
 
     /// Closes every connection now (daemon shutdown).
     pub async fn close_all(&self) {
-        let entries: Vec<Arc<Entry<S, E>>> =
-            lock(&self.inner.entries).values().cloned().collect();
+        let entries: Vec<Arc<Entry<S, E>>> = lock(&self.inner.entries).values().cloned().collect();
         for entry in entries {
             let mut slot = entry.slot.lock().await;
             if let Some(session) = slot.take() {

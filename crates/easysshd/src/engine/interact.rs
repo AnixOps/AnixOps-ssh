@@ -123,7 +123,9 @@ impl Interaction for DaemonInteraction {
     }
 
     async fn password(&self, prompt: &str) -> Option<String> {
-        self.hub.prompt(&self.label, prompt, "password", false).await
+        self.hub
+            .prompt(&self.label, prompt, "password", false)
+            .await
     }
 
     async fn keyboard_interactive(

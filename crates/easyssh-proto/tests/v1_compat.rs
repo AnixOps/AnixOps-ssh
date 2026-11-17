@@ -42,6 +42,7 @@ fn full_connection() -> Connection {
     c.terminal.font_size = 16.5;
     c.terminal.scrollback_lines = 50_000;
     c.terminal.startup_command = Some("cd /srv".into());
+    c.engine = Some(easyssh_core::EnginePreference::Russh);
     c
 }
 
@@ -62,6 +63,7 @@ fn full_config() -> AppConfig {
             parent_id: Some("g1".into()),
         },
     ];
+    config.ssh_engine = Some(easyssh_core::SshEngine::Russh);
     config.recent_connection_ids = vec![config.connections[0].id.clone()];
     config.snippets = vec![CommandSnippet {
         id: "s1".into(),

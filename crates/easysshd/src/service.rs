@@ -9,16 +9,16 @@ use crate::log::Logger;
 use crate::server::{BoxFuture, Outbox, Service};
 use crate::terminal::{TermSession, DEFAULT_SCROLLBACK};
 use easyssh_core::security::{validate_alias, validate_connection};
-use easyssh_core::{AppConfig, ConfigStore, Connection, OpenSsh, SshEngine, SshInvocation};
+use easyssh_core::{AppConfig, ConfigStore, Connection, OpenSsh, SshInvocation};
 use easyssh_proto as proto;
 use easyssh_ssh::Error as SshError;
 use portable_pty::CommandBuilder;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
@@ -479,7 +479,224 @@ impl Daemon {
                 ok(Value::Null)
             }
             "askpass.endpoint" => ok(json!({"endpoint": self.askpass.endpoint()})),
+            "hostkey.reply" => {
+                let p: proto::HostkeyReplyParams = parse(payload)?;
+                let decision = serde_json::to_value(p.decision)
+                    .ok()
+                    .and_then(|v| v.as_str().map(parse_decision))
+                    .unwrap_or(easyssh_ssh::Decision::Reject);
+                self.engine.hostkeys().reply(p.id, decision);
+                ok(Value::Null)
+            }
+            "engine.resolve" => {
+                let p: proto::EngineResolveParams = parse(payload)?;
+                let me = self.upgrade()?;
+                self.background(outbox, req_id, async move {
+                    let (_, resolution) = me.resolution(&p.host_id).await?;
+                    Ok(json!({
+                        "engine": resolution.choice.engine,
+                        "reason": resolution.choice.reason,
+                    }))
+                })
+            }
+            "engine.connections" => {
+                let _: proto::EngineConnectionsParams = parse(payload)?;
+                ok(self.engine.connections().await)
+            }
+            "sftp.open" => {
+                let p: proto::SftpOpenParams = parse(payload)?;
+                let me = self.upgrade()?;
+                self.background(outbox, req_id, async move {
+                    let plan = me.russh_plan(&p.host_id).await?;
+                    let lease = me.engine.lease(&plan, None).await.map_err(ssh_shared)?;
+                    let (sftp_id, home) = me.engine.files.open(lease).await.map_err(ssh_fail)?;
+                    Ok(json!({"sftp_id": sftp_id, "home": home}))
+                })
+            }
+            "sftp.list" => {
+                let p: proto::SftpListParams = parse(payload)?;
+                let entry = self.sftp(&p.sftp_id)?;
+                self.background(outbox, req_id, async move {
+                    entry.list(&p.path).await.map_err(ssh_fail)
+                })
+            }
+            "sftp.mkdir" => {
+                let p: proto::SftpMkdirParams = parse(payload)?;
+                let entry = self.sftp(&p.sftp_id)?;
+                self.background(outbox, req_id, async move {
+                    entry.mkdir(&p.path).await.map_err(ssh_fail)?;
+                    Ok(Value::Null)
+                })
+            }
+            "sftp.remove" => {
+                let p: proto::SftpRemoveParams = parse(payload)?;
+                let entry = self.sftp(&p.sftp_id)?;
+                self.background(outbox, req_id, async move {
+                    entry.remove(&p.path, p.directory).await.map_err(ssh_fail)?;
+                    Ok(Value::Null)
+                })
+            }
+            "sftp.rename" => {
+                let p: proto::SftpRenameParams = parse(payload)?;
+                let entry = self.sftp(&p.sftp_id)?;
+                self.background(outbox, req_id, async move {
+                    entry.rename(&p.from, &p.to).await.map_err(ssh_fail)?;
+                    Ok(Value::Null)
+                })
+            }
+            "sftp.close" => {
+                let p: proto::SftpCloseParams = parse(payload)?;
+                let me = self.upgrade()?;
+                self.background(outbox, req_id, async move {
+                    me.engine.files.close(&p.sftp_id).await;
+                    Ok(Value::Null)
+                })
+            }
+            "transfer.start" => {
+                let p: proto::TransferStartParams = parse(payload)?;
+                let entry = self.sftp(&p.sftp_id)?;
+                let upload = serde_json::to_value(p.direction).ok() == Some(json!("upload"));
+                let id = self.engine.files.start_transfer(
+                    entry,
+                    upload,
+                    PathBuf::from(&p.local_path),
+                    p.remote_path.clone(),
+                    p.recursive.unwrap_or(false),
+                    self.broadcaster(),
+                );
+                ok(json!({"transfer_id": id}))
+            }
+            "transfer.cancel" => {
+                let p: proto::TransferCancelParams = parse(payload)?;
+                self.engine
+                    .files
+                    .cancel_transfer(&p.transfer_id, &self.broadcaster());
+                ok(Value::Null)
+            }
+            "tunnel.start" => {
+                let p: proto::TunnelStartParams = parse(payload)?;
+                let tunnel: easyssh_core::Tunnel =
+                    serde_json::from_value(serde_json::to_value(&p.tunnel).unwrap_or_default())
+                        .map_err(|e| fail("invalid_command", e.to_string()))?;
+                tunnel
+                    .forward_spec()
+                    .map_err(|e| fail("invalid_tunnel", e.to_string()))?;
+                let me = self.upgrade()?;
+                self.background(outbox, req_id, async move {
+                    let port = me.start_tunnel(tunnel.clone()).await?;
+                    Ok(json!({"id": tunnel.id, "bind_port": port}))
+                })
+            }
+            "tunnel.stop" => {
+                let p: proto::TunnelStopParams = parse(payload)?;
+                let me = self.upgrade()?;
+                self.background(outbox, req_id, async move {
+                    me.engine.tunnels.stop(&p.id, &me.broadcaster()).await;
+                    Ok(Value::Null)
+                })
+            }
+            "tunnel.list" => {
+                let _: proto::TunnelListParams = parse(payload)?;
+                ok(self.engine.tunnels.list())
+            }
             other => Err(fail("unknown_command", format!("unknown command {other}"))),
+        }
+    }
+
+    fn upgrade(&self) -> Result<Arc<Daemon>, Failure> {
+        self.me
+            .upgrade()
+            .ok_or_else(|| fail("internal", "the daemon is stopping"))
+    }
+
+    fn broadcaster(&self) -> Broadcast {
+        let clients = self.clients.clone();
+        Arc::new(move |kind: &str, payload: Value| {
+            lock(&clients)
+                .values()
+                .filter(|outbox| outbox.event(kind, payload.clone()))
+                .count()
+        })
+    }
+
+    /// Runs slow work without holding up the connection's other commands
+    /// (a russh connect may wait for the user to answer a prompt, and the
+    /// answer arrives on the same connection) and replies when it is done.
+    fn background<F>(&self, outbox: &Outbox, req_id: &str, work: F) -> Handled
+    where
+        F: Future<Output = Result<Value, Failure>> + Send + 'static,
+    {
+        let outbox = outbox.clone();
+        let id = req_id.to_owned();
+        let log = self.log.clone();
+        tokio::spawn(async move {
+            let reply = match work.await {
+                Ok(value) => json!({"id": id, "ok": value}),
+                Err(f) => {
+                    log.error(&format!("a background command failed: {}", f.code));
+                    error_reply(&id, f.code, &f.message)
+                }
+            };
+            outbox.send(reply).await;
+        });
+        Ok(Outcome::Replied)
+    }
+
+    fn sftp(&self, id: &str) -> Result<Arc<engine::files::SftpEntry>, Failure> {
+        self.engine
+            .files
+            .get(id)
+            .ok_or_else(|| fail("unknown_sftp", format!("no file session {id}")))
+    }
+
+    /// The host and the engine decision for it. Looks at `ssh -G` only when
+    /// the built-in engine is wanted, so OpenSSH users see no change.
+    async fn resolution(&self, host_id: &str) -> Result<(Connection, plan::Resolution), Failure> {
+        let config = self.load_config()?;
+        let connection = resolve(&config, host_id)?;
+        let global = config.ssh_engine.unwrap_or_default();
+        let probe = connection.clone();
+        let resolution = tokio::task::spawn_blocking(move || plan::resolve(&probe, global))
+            .await
+            .map_err(|e| fail("internal", e.to_string()))?;
+        Ok((connection, resolution))
+    }
+
+    /// The plan for a host that must run on the built-in engine.
+    async fn russh_plan(&self, host_id: &str) -> Result<plan::RusshPlan, Failure> {
+        let (_, resolution) = self.resolution(host_id).await?;
+        resolution.plan.ok_or_else(|| {
+            fail(
+                "wrong_engine",
+                format!("this host runs on OpenSSH: {}", resolution.choice.reason),
+            )
+        })
+    }
+
+    async fn start_tunnel(&self, tunnel: easyssh_core::Tunnel) -> Result<u16, Failure> {
+        let broadcast = self.broadcaster();
+        let plan = self.russh_plan(&tunnel.host_id).await?;
+        if !self.engine.tunnels.begin(&tunnel, &broadcast).await {
+            return Err(fail("already_running", "the tunnel is already running"));
+        }
+        let lease = match self.engine.lease(&plan, None).await {
+            Ok(lease) => lease,
+            Err(error) => {
+                self.engine.tunnels.failed(&tunnel, &error, &broadcast);
+                return Err(ssh_shared(error));
+            }
+        };
+        match self
+            .engine
+            .tunnels
+            .start(&tunnel, lease, broadcast.clone())
+            .await
+        {
+            Ok(port) => Ok(port),
+            Err(error) => {
+                self.engine.tunnels.failed(&tunnel, &error, &broadcast);
+                Err(ssh_fail(error))
+            }
         }
     }
 
@@ -507,38 +724,140 @@ impl Daemon {
             }
             None => None,
         };
+        let mut chosen = None;
+        if let Some(host_id) = &p.host_id {
+            let (_, resolution) = self.resolution(host_id).await?;
+            if let Some(plan) = resolution.plan {
+                // The built-in engine: connecting may involve prompts, so
+                // it finishes in the background and replies then.
+                let me = self.upgrade()?;
+                let outbox = outbox.clone();
+                let req_id = req_id.to_owned();
+                let reason = resolution.choice.reason;
+                tokio::spawn(async move {
+                    me.open_remote(conn, &outbox, &req_id, p, plan, reason, agent_sock)
+                        .await;
+                });
+                return Ok(Outcome::Replied);
+            }
+            chosen = Some(resolution.choice);
+        }
+        let engine = chosen.map(|c| ("openssh", c.reason));
+        let session = self.spawn_pty(&p, agent_sock).await?;
+        self.publish(conn, outbox, req_id, session, engine).await;
+        Ok(Outcome::Replied)
+    }
+
+    fn exit_hook(&self) -> crate::terminal::ExitHook {
+        let log = self.log.clone();
+        Box::new(move |sid, code| {
+            log.info(&format!("session {sid} ended, exit code {code:?}"));
+        })
+    }
+
+    /// A session on a PTY: the system `ssh`, or a local shell.
+    async fn spawn_pty(
+        &self,
+        p: &proto::SessionOpenParams,
+        agent_sock: Option<PathBuf>,
+    ) -> Result<Arc<TermSession>, Failure> {
         let store = self.cfg.config_store.clone();
         let shell = self.cfg.local_shell.clone();
         let host_id = p.host_id.clone();
         let id = uuid::Uuid::new_v4().simple().to_string();
         let scrollback = self.cfg.scrollback_bytes;
         let (cols, rows) = (p.cols, p.rows);
-        let spawn_id = id.clone();
-        let exit_log = self.log.clone();
-        let on_exit: crate::terminal::ExitHook = Box::new(move |sid, code| {
-            exit_log.info(&format!("session {sid} ended, exit code {code:?}"));
-        });
-        let session = tokio::task::spawn_blocking(move || {
+        let on_exit = self.exit_hook();
+        tokio::task::spawn_blocking(move || {
             let command = command_for(
                 &store,
                 shell.as_deref(),
                 host_id.as_deref(),
                 agent_sock.as_deref(),
             )?;
-            TermSession::spawn(spawn_id, host_id, command, cols, rows, scrollback, on_exit)
+            TermSession::spawn(id, host_id, command, cols, rows, scrollback, on_exit)
                 .map_err(|e| fail("spawn_failed", e))
         })
         .await
-        .map_err(|e| fail("internal", e.to_string()))??;
-        lock(&self.sessions).insert(id.clone(), session.clone());
-        // The reply must precede the session's events on this connection:
-        // queue it first, then subscribe (which replays whatever the child
-        // already printed).
-        outbox
-            .send(json!({"id": req_id, "ok": {"session_id": id}}))
-            .await;
+        .map_err(|e| fail("internal", e.to_string()))?
+    }
+
+    /// Registers a new session, replies to `session.open` and attaches the
+    /// requesting connection. The reply must precede the session's events on
+    /// this connection: it is queued first, then the connection subscribes
+    /// (which replays whatever the session already printed).
+    async fn publish(
+        &self,
+        conn: u64,
+        outbox: &Outbox,
+        req_id: &str,
+        session: Arc<TermSession>,
+        engine: Option<(&str, String)>,
+    ) {
+        let mut result = json!({"session_id": session.id()});
+        if let Some((engine, reason)) = engine {
+            session.set_engine(engine, &reason);
+            result["engine"] = json!(engine);
+            result["engine_reason"] = json!(reason);
+        }
+        lock(&self.sessions).insert(session.id().to_owned(), session.clone());
+        outbox.send(json!({"id": req_id, "ok": result})).await;
         session.attach(conn, outbox, None, None);
-        Ok(Outcome::Replied)
+    }
+
+    /// `session.open` on the built-in engine. Falls back to OpenSSH when the
+    /// engine reports something it does not support.
+    #[allow(clippy::too_many_arguments)]
+    async fn open_remote(
+        &self,
+        conn: u64,
+        outbox: &Outbox,
+        req_id: &str,
+        p: proto::SessionOpenParams,
+        plan: plan::RusshPlan,
+        reason: String,
+        agent_sock: Option<PathBuf>,
+    ) {
+        let opened = self
+            .engine
+            .open_shell(&plan, agent_sock.clone(), p.cols, p.rows)
+            .await;
+        let result = match opened {
+            Ok((shell, lease)) => {
+                let id = uuid::Uuid::new_v4().simple().to_string();
+                let session = TermSession::spawn_remote(
+                    id,
+                    p.host_id.clone(),
+                    shell,
+                    Box::new(lease),
+                    p.cols,
+                    p.rows,
+                    self.cfg.scrollback_bytes,
+                    self.exit_hook(),
+                );
+                Ok((session, ("russh", reason)))
+            }
+            Err(error) if matches!(*error, SshError::Unsupported(_)) => {
+                let detail = error.to_string();
+                self.log
+                    .info("the built-in engine refused a host; using OpenSSH");
+                let reason = engine::choice::fallback_reason(&detail);
+                self.spawn_pty(&p, agent_sock)
+                    .await
+                    .map(|session| (session, ("openssh", reason)))
+            }
+            Err(error) => Err(ssh_shared(error)),
+        };
+        match result {
+            Ok((session, engine)) => {
+                self.publish(conn, outbox, req_id, session, Some(engine))
+                    .await
+            }
+            Err(f) => {
+                self.log.error(&format!("session.open failed: {}", f.code));
+                outbox.send(error_reply(req_id, f.code, &f.message)).await;
+            }
+        }
     }
 
     fn load_config(&self) -> Result<AppConfig, Failure> {
@@ -592,6 +911,14 @@ impl Daemon {
             .save(&config)
             .map_err(|e| fail("config_error", e.to_string()))
     }
+}
+
+fn ssh_fail(error: SshError) -> Failure {
+    fail(engine::error_code(&error), error.to_string())
+}
+
+fn ssh_shared(error: engine::SharedError) -> Failure {
+    fail(engine::error_code(&error), error.to_string())
 }
 
 fn error_reply(id: &str, code: &str, message: &str) -> Value {

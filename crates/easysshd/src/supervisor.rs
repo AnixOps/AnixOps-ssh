@@ -191,6 +191,21 @@ impl LinkHandler for Proxy {
     fn hosts_changed(&self) {
         self.user.hosts_changed();
     }
+    fn hostkey_prompt(&self, prompt: crate::link::HostKeyPrompt) {
+        self.user.hostkey_prompt(prompt);
+    }
+    fn hostkey_resolved(&self, id: u64) {
+        self.user.hostkey_resolved(id);
+    }
+    fn transfer_progress(&self, transfer_id: &str, bytes: u64) {
+        self.user.transfer_progress(transfer_id, bytes);
+    }
+    fn transfer_done(&self, transfer_id: &str, status: &str, error: Option<&str>) {
+        self.user.transfer_done(transfer_id, status, error);
+    }
+    fn tunnel_status(&self, status: crate::link::TunnelStatus) {
+        self.user.tunnel_status(status);
+    }
     fn lost(&self) {
         self.user.lost();
         if let Some(sup) = self.sup.upgrade() {
@@ -253,15 +268,31 @@ impl Supervisor {
         rows: u16,
         sink: SupervisedSink,
     ) -> Result<String, LinkError> {
+        Ok(self
+            .open_session_info(host_id, cols, rows, sink)
+            .await?
+            .session_id)
+    }
+
+    /// [`Supervisor::open_session`] that also reports the engine.
+    pub async fn open_session_info(
+        &self,
+        host_id: Option<&str>,
+        cols: u16,
+        rows: u16,
+        sink: SupervisedSink,
+    ) -> Result<crate::link::OpenedSession, LinkError> {
         let link = self.link().ok_or_else(unavailable)?;
         let tracked = Tracked::new(sink);
-        let id = link
-            .open_session(host_id, cols, rows, tracked.link_sink(link.alive_flag()))
+        let opened = link
+            .open_session_info(host_id, cols, rows, tracked.link_sink(link.alive_flag()))
             .await?;
         if !tracked.is_done() {
-            lock(&self.state).tracked.insert(id.clone(), tracked);
+            lock(&self.state)
+                .tracked
+                .insert(opened.session_id.clone(), tracked);
         }
-        Ok(id)
+        Ok(opened)
     }
 
     /// `session.attach`; `from_seq` `None` replays everything buffered.
