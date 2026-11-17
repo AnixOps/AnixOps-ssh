@@ -34,6 +34,21 @@ or `unknown_command` for an unknown kind) and the connection stays open.
   helper, and are never stored or logged. When a prompt is answered,
   cancelled or times out, every client gets `askpass.resolved {id}` and closes
   its dialog.
+- SSH engine: with `ssh_engine = russh` in the config (or `engine: russh` on
+  a host) the daemon runs the session on the built-in engine
+  (`easyssh-ssh`) instead of a PTY running `ssh`. Terminal, files
+  (`sftp.*`, `transfer.*`) and tunnels (`tunnel.*`) of one host share one SSH
+  connection, kept for 30 seconds after the last user left (`engine.connections`
+  shows what is open). The system OpenSSH still runs a host that needs
+  `ProxyCommand`, `Match`, `LocalCommand`, certificates, security keys, a
+  stored remote command or inline forwards, or when the built-in engine
+  reports `unsupported` while connecting; `session.open` answers with the
+  `engine` and the `engine_reason`. Passwords, passphrases and
+  keyboard-interactive prompts reuse `askpass.prompt` (with `kind`), and host
+  keys use `hostkey.prompt`/`hostkey.reply`/`hostkey.resolved`. Host keys are
+  recorded in a `known_hosts` file beside the host list, with
+  `~/.ssh/known_hosts` read as a fallback. A changed key is refused unless the
+  client answers `replace_and_save`.
 - A client that stops reading (4096 queued frames) is disconnected rather than
   buffered without bound; it can reconnect and replay with `from_seq`.
 - The daemon exits after 10 minutes with no clients and no running sessions,

@@ -211,6 +211,14 @@ Host e2e-target-via-bastion
     User keyuser
     ProxyJump e2e-bastion
 
+# The target through a ProxyCommand, which only OpenSSH can run: the daemon
+# must fall back to it.
+Host e2e-target-proxycmd
+    HostName target
+    Port 22
+    User keyuser
+    ProxyCommand ssh -W target:22 e2e-bastion
+
 Host e2e-target-pw
     HostName 127.0.0.1
     Port {TARGET_PORT}

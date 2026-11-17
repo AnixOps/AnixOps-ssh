@@ -17,9 +17,16 @@ travels is somebody else's concern.
   - Envelopes: `Command`, `Event`, `Reply`, `ProtoError`, `SchemaVersion`.
   - Commands and events: `proto.hello`, `hosts.list|save|delete`,
     `session.open|write|resize|close|list|attach|detach`,
-    `askpass.reply|endpoint`, `daemon.shutdown_when_idle`; events
+    `askpass.reply|endpoint`, `daemon.shutdown_when_idle`, and for the
+    built-in SSH engine `hostkey.reply`, `engine.resolve|connections`,
+    `sftp.open|list|mkdir|remove|rename|close`, `transfer.start|cancel`,
+    `tunnel.start|stop|list`; events
     `session.output` (optional per-session byte offset `seq`), `session.exit`,
-    `askpass.prompt`, `askpass.resolved`, `hosts.changed`. It will grow.
+    `askpass.prompt` (optional `kind` and `echo` for the built-in engine),
+    `askpass.resolved`, `hosts.changed`, `hostkey.prompt|resolved`,
+    `transfer.progress|done`, `tunnel.status`. It will grow.
+    `session.open` and `session.list` also report the optional `engine` and
+    `engine_reason`.
     `proto.hello` carries `schema_version` (any integer, so a daemon can answer
     a mismatch with `schema_mismatch`) and the build's `app_version`;
     `session.open` accepts the client's `ssh_auth_sock`; `hosts.save` accepts

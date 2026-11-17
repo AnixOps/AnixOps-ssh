@@ -1,0 +1,452 @@
+//! The built-in engine inside the daemon: one shared connection per host,
+//! prompts forwarded to the client, and the fallback to OpenSSH.
+#![cfg(unix)]
+
+use easyssh_core::{AppConfig, ConfigStore, Connection, SshEngine};
+use easyssh_e2e::russh_support::{echo_roundtrip, wait_for_port_open, within, within_for};
+use easyssh_e2e::{E2e, ECHO_PORT, PW_PASSWORD, TARGET_PORT};
+use easysshd::link::{
+    AskpassPrompt, HostKeyPrompt, Link, LinkError, LinkHandler, SessionMsg, SessionSink,
+};
+use easysshd::{Daemon, DaemonConfig, Server};
+use serde_json::{json, Value};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::net::TcpStream;
+
+/// An ed25519 public key that no container has.
+const OTHER_KEY: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIKxXnqrgYJGHpjbb27Ddo024CtOCBG5K2xV1JzRg3eRu";
+const TUNNEL_PORT: u16 = 17301;
+
+/// Answers prompts the way a user would and remembers what was asked.
+struct Client {
+    link: Mutex<Option<Link>>,
+    host_key_answer: Mutex<String>,
+    password: Mutex<Option<String>>,
+    host_keys: Mutex<Vec<HostKeyPrompt>>,
+    asks: Mutex<Vec<AskpassPrompt>>,
+}
+
+impl Client {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            link: Mutex::new(None),
+            host_key_answer: Mutex::new("accept_and_save".into()),
+            password: Mutex::new(None),
+            host_keys: Mutex::new(Vec::new()),
+            asks: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn link(&self) -> Link {
+        self.link.lock().unwrap().clone().expect("link attached")
+    }
+
+    fn answer_host_keys(&self, decision: &str) {
+        *self.host_key_answer.lock().unwrap() = decision.to_owned();
+    }
+}
+
+impl LinkHandler for Client {
+    fn askpass_prompt(&self, prompt: AskpassPrompt) {
+        let id = prompt.id;
+        self.asks.lock().unwrap().push(prompt);
+        let answer = self.password.lock().unwrap().clone();
+        let _ = self.link().askpass_reply(id, answer);
+    }
+
+    fn hostkey_prompt(&self, prompt: HostKeyPrompt) {
+        let id = prompt.id;
+        self.host_keys.lock().unwrap().push(prompt);
+        let decision = self.host_key_answer.lock().unwrap().clone();
+        let _ = self.link().hostkey_reply(id, &decision);
+    }
+}
+
+struct Rig {
+    e2e: E2e,
+    client: Arc<Client>,
+    link: Link,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    serving: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Rig {
+    /// A daemon with `ssh_engine = russh` and the given hosts.
+    async fn start(aliases: &[(&str, &str)], linger: Option<Duration>) -> (Rig, Vec<Connection>) {
+        let e2e = E2e::new();
+        let store = ConfigStore::at(e2e.dir.path().join("daemon").join("connections.json"));
+        let mut config = AppConfig::new();
+        config.ssh_engine = Some(SshEngine::Russh);
+        let hosts: Vec<Connection> = aliases
+            .iter()
+            .map(|(name, alias)| Connection::alias(*name, *alias))
+            .collect();
+        config.connections = hosts.clone();
+        store.save(&config).expect("write config");
+
+        let daemon = Daemon::new(DaemonConfig {
+            config_store: store,
+            local_shell: None,
+            scrollback_bytes: 1 << 20,
+            idle_timeout: Duration::from_secs(600),
+        })
+        .await
+        .expect("daemon");
+        daemon.set_known_hosts(e2e.dir.path().join("daemon").join("known_hosts"), None);
+        if let Some(linger) = linger {
+            daemon.set_connection_linger(linger);
+        }
+        let runtime = e2e.dir.path().join("run");
+        let server = Server::start_service(&runtime, daemon.clone()).expect("start server");
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let serving = tokio::spawn(async move {
+            server
+                .serve(async {
+                    let _ = stopped.await;
+                })
+                .await
+                .expect("serve")
+        });
+        let client = Client::new();
+        let link = Link::connect(&runtime, client.clone())
+            .await
+            .expect("connect");
+        *client.link.lock().unwrap() = Some(link.clone());
+        (
+            Rig {
+                e2e,
+                client,
+                link,
+                stop: Some(stop),
+                serving: Some(serving),
+            },
+            hosts,
+        )
+    }
+
+    fn known_hosts(&self) -> std::path::PathBuf {
+        self.e2e.dir.path().join("daemon").join("known_hosts")
+    }
+
+    async fn connections(&self) -> Value {
+        self.link
+            .request("engine.connections", json!({}))
+            .await
+            .expect("engine.connections")
+    }
+
+    async fn wait_live(&self, live: u64) {
+        within_for("connections to settle", Duration::from_secs(20), async {
+            while self.connections().await["live"].as_u64() != Some(live) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+    }
+
+    async fn finish(mut self) {
+        // Break the link <-> handler cycle so everything can go away.
+        *self.client.link.lock().unwrap() = None;
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(serving) = self.serving.take() {
+            let _ = serving.await;
+        }
+    }
+}
+
+type Seen = Arc<Mutex<Vec<SessionMsg>>>;
+
+fn collector() -> (Seen, SessionSink) {
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    (
+        seen,
+        Box::new(move |message| {
+            sink.lock().unwrap().push(message);
+            true
+        }),
+    )
+}
+
+fn text(seen: &Seen) -> String {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .filter_map(|message| match message {
+            SessionMsg::Data { data, .. } => Some(data.as_str()),
+            SessionMsg::Exit { .. } => None,
+        })
+        .collect()
+}
+
+async fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+    within_for(what, Duration::from_secs(60), async {
+        while !done() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+}
+
+/// Opens a shell on `host`, runs `command` and waits for `expect`.
+async fn shell_says(rig: &Rig, host: &Connection, command: &str, expect: &str) -> String {
+    let (seen, sink) = collector();
+    let opened = within(
+        "session.open",
+        rig.link.open_session_info(Some(&host.id), 100, 30, sink),
+    )
+    .await
+    .expect("session.open");
+    rig.link
+        .write_session(&opened.session_id, &format!("{command}\r"))
+        .unwrap();
+    eventually(expect, || text(&seen).contains(expect)).await;
+    opened.session_id
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn terminal_files_and_tunnel_share_one_connection() {
+    let (rig, hosts) = Rig::start(&[("target", "e2e-target")], None).await;
+    let host = &hosts[0];
+
+    // Terminal: the daemon says which engine runs it.
+    let (seen, sink) = collector();
+    let opened = within(
+        "session.open",
+        rig.link.open_session_info(Some(&host.id), 100, 30, sink),
+    )
+    .await
+    .expect("session.open");
+    assert_eq!(opened.engine.as_deref(), Some("russh"));
+    assert!(opened.engine_reason.is_some());
+    rig.link
+        .write_session(&opened.session_id, "echo shared-$((20+22))\r")
+        .unwrap();
+    eventually("shell output", || text(&seen).contains("shared-42")).await;
+    let listed = rig.link.list_sessions().await.expect("session.list");
+    assert_eq!(serde_json::to_value(&listed[0]).unwrap()["engine"], "russh");
+
+    // Files over the same connection.
+    let sftp = within(
+        "sftp.open",
+        rig.link.request("sftp.open", json!({"host_id": host.id})),
+    )
+    .await
+    .expect("sftp.open");
+    let sftp_id = sftp["sftp_id"].as_str().unwrap().to_owned();
+    let home = sftp["home"].as_str().unwrap().to_owned();
+    let name = easyssh_e2e::unique_name("daemon-dir");
+    let dir = format!("{home}/{name}");
+    rig.link
+        .request("sftp.mkdir", json!({"sftp_id": sftp_id, "path": dir}))
+        .await
+        .expect("sftp.mkdir");
+    let listing = rig
+        .link
+        .request("sftp.list", json!({"sftp_id": sftp_id, "path": home}))
+        .await
+        .expect("sftp.list");
+    assert!(
+        listing["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["name"] == name.as_str()),
+        "{listing}"
+    );
+    rig.link
+        .request(
+            "sftp.remove",
+            json!({"sftp_id": sftp_id, "path": dir, "directory": true}),
+        )
+        .await
+        .expect("sftp.remove");
+
+    // A -L tunnel to the echo service.
+    let tunnel = json!({
+        "id": "t-shared", "name": "echo", "host_id": host.id, "kind": "local",
+        "bind_address": "127.0.0.1", "bind_port": TUNNEL_PORT,
+        "target_host": "127.0.0.1", "target_port": ECHO_PORT,
+    });
+    within(
+        "tunnel.start",
+        rig.link.request("tunnel.start", json!({"tunnel": tunnel})),
+    )
+    .await
+    .expect("tunnel.start");
+    wait_for_port_open(TUNNEL_PORT, Duration::from_secs(10)).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", TUNNEL_PORT))
+        .await
+        .expect("connect to tunnel");
+    echo_roundtrip(&mut stream, "through-the-daemon").await;
+
+    // One SSH connection, three users.
+    let info = rig.connections().await;
+    assert_eq!(info["opened"], 1, "{info}");
+    assert_eq!(info["live"], 1, "{info}");
+    assert_eq!(info["connections"][0]["leases"], 3, "{info}");
+    assert_eq!(rig.client.host_keys.lock().unwrap().len(), 1);
+
+    rig.link
+        .request("tunnel.stop", json!({"id": "t-shared"}))
+        .await
+        .expect("tunnel.stop");
+    rig.link
+        .request("sftp.close", json!({"sftp_id": sftp_id}))
+        .await
+        .expect("sftp.close");
+    rig.link.close_session(&opened.session_id);
+    rig.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn jump_host_runs_on_the_built_in_engine() {
+    let (rig, hosts) = Rig::start(&[("via bastion", "e2e-target-via-bastion")], None).await;
+    let id = shell_says(&rig, &hosts[0], "echo jumped-$((40+2))", "jumped-42").await;
+    let info = rig.connections().await;
+    assert_eq!(
+        info["connections"][0]["jump"].as_array().unwrap().len(),
+        1,
+        "{info}"
+    );
+    rig.link.close_session(&id);
+    rig.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn password_is_asked_once_for_the_whole_connection() {
+    let (rig, hosts) = Rig::start(&[("pw", "e2e-target-pw")], None).await;
+    *rig.client.password.lock().unwrap() = Some(PW_PASSWORD.to_owned());
+    let id = shell_says(&rig, &hosts[0], "echo pw-$((6*7))", "pw-42").await;
+
+    // Files reuse the connection, so nobody is asked again.
+    rig.link
+        .request("sftp.open", json!({"host_id": hosts[0].id}))
+        .await
+        .expect("sftp.open");
+    let asks = rig.client.asks.lock().unwrap().clone();
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    assert_eq!(asks[0].kind.as_deref(), Some("password"));
+    assert_eq!(rig.connections().await["opened"], 1);
+    rig.link.close_session(&id);
+    rig.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn unknown_host_key_is_asked_once_then_remembered() {
+    let (rig, hosts) = Rig::start(
+        &[("target", "e2e-target")],
+        Some(Duration::from_millis(100)),
+    )
+    .await;
+    let id = shell_says(&rig, &hosts[0], "echo first-$((1+1))", "first-2").await;
+    {
+        let prompts = rig.client.host_keys.lock().unwrap();
+        assert_eq!(prompts.len(), 1, "{prompts:?}");
+        assert_eq!(prompts[0].status, "unknown");
+        assert_eq!(prompts[0].host, "127.0.0.1");
+        assert_eq!(prompts[0].port, TARGET_PORT);
+        assert!(prompts[0].fingerprint.starts_with("SHA256:"));
+    }
+    let stored = std::fs::read_to_string(rig.known_hosts()).expect("known_hosts written");
+    assert!(
+        stored.contains(&format!("[127.0.0.1]:{TARGET_PORT}")),
+        "{stored}"
+    );
+
+    // The connection goes away, a new one finds the key on record.
+    rig.link.close_session(&id);
+    rig.wait_live(0).await;
+    let id = shell_says(&rig, &hosts[0], "echo second-$((2+2))", "second-4").await;
+    assert_eq!(rig.client.host_keys.lock().unwrap().len(), 1);
+    assert_eq!(rig.connections().await["opened"], 2);
+    rig.link.close_session(&id);
+    rig.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn changed_host_key_is_refused_until_explicitly_replaced() {
+    let (rig, hosts) = Rig::start(
+        &[("target", "e2e-target")],
+        Some(Duration::from_millis(100)),
+    )
+    .await;
+    let id = shell_says(&rig, &hosts[0], "echo trusted-$((1+1))", "trusted-2").await;
+    rig.link.close_session(&id);
+    rig.wait_live(0).await;
+
+    let path = rig.known_hosts();
+    let stored = std::fs::read_to_string(&path).unwrap();
+    let mut fields: Vec<&str> = stored.split_whitespace().collect();
+    assert_eq!(fields.len(), 3, "{stored}");
+    assert_ne!(fields[2], OTHER_KEY);
+    fields[2] = OTHER_KEY;
+    std::fs::write(&path, format!("{}\n", fields.join(" "))).unwrap();
+
+    // Neither "accept and save" nor "reject" lets a changed key through.
+    for decision in ["accept_and_save", "accept_once", "reject"] {
+        rig.client.answer_host_keys(decision);
+        let (_, sink) = collector();
+        let error: LinkError = within(
+            "session.open",
+            rig.link
+                .open_session_info(Some(&hosts[0].id), 100, 30, sink),
+        )
+        .await
+        .expect_err("a changed key must be refused");
+        assert_eq!(error.code, "hostkey_changed", "{decision}: {error}");
+    }
+    {
+        let prompts = rig.client.host_keys.lock().unwrap();
+        assert!(prompts.iter().skip(1).all(|p| p.status == "changed"));
+        assert!(!prompts.last().unwrap().expected.is_empty());
+    }
+    assert!(std::fs::read_to_string(&path).unwrap().contains(OTHER_KEY));
+
+    // Only an explicit replacement works.
+    rig.client.answer_host_keys("replace_and_save");
+    let id = shell_says(&rig, &hosts[0], "echo replaced-$((3+4))", "replaced-7").await;
+    assert!(!std::fs::read_to_string(&path).unwrap().contains(OTHER_KEY));
+    rig.link.close_session(&id);
+    rig.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn proxy_command_falls_back_to_openssh() {
+    let (rig, hosts) = Rig::start(&[("proxycmd", "e2e-target-proxycmd")], None).await;
+    let (seen, sink) = collector();
+    let opened = within(
+        "session.open",
+        rig.link
+            .open_session_info(Some(&hosts[0].id), 100, 30, sink),
+    )
+    .await
+    .expect("session.open");
+    assert_eq!(opened.engine.as_deref(), Some("openssh"));
+    let reason = opened.engine_reason.clone().unwrap_or_default();
+    assert!(reason.contains("ProxyCommand"), "{reason}");
+    rig.link
+        .write_session(&opened.session_id, "echo proxied-$((8+8))\r")
+        .unwrap();
+    eventually("shell output", || text(&seen).contains("proxied-16")).await;
+    // No built-in connection was made.
+    assert_eq!(rig.connections().await["opened"], 0);
+
+    let resolved = rig
+        .link
+        .request("engine.resolve", json!({"host_id": hosts[0].id}))
+        .await
+        .expect("engine.resolve");
+    assert_eq!(resolved["engine"], "openssh");
+    rig.link.close_session(&opened.session_id);
+    rig.finish().await;
+}
