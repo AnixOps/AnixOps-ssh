@@ -8,6 +8,7 @@ import { FilesPane } from "@/components/app/FilesPane";
 import { ForwardsPanel } from "@/components/app/ForwardsPanel";
 import { HostEditor } from "@/components/app/HostEditor";
 import { HostList } from "@/components/app/HostList";
+import { ImportDialog } from "@/components/app/ImportDialog";
 import { IconRail, type NavKey } from "@/components/app/IconRail";
 import { EmptyWorkspace } from "@/components/app/Placeholders";
 import { SettingsPanel } from "@/components/app/SettingsPanel";
@@ -96,6 +97,7 @@ export function App() {
   // undefined: closed; null: a new host.
   const [editing, setEditing] = useState<Host | null | undefined>(undefined);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [status, setStatus] = useState<SshStatus | null>(null);
 
   const checkSsh = useCallback(() => {
@@ -355,6 +357,7 @@ export function App() {
             onOpen={openHost}
             onEdit={setEditing}
             onToggleFavorite={toggleFavorite}
+            onImport={() => setImporting(true)}
             searchRef={searchRef}
           />
         ) : nav === "snippets" ? (
@@ -435,6 +438,11 @@ export function App() {
       )}
       </AnimatePresence>
       <AnimatePresence>
+      {importing && (
+        <ImportDialog groups={snapshot.groups} onChanged={reload} onClose={() => setImporting(false)} />
+      )}
+      </AnimatePresence>
+      <AnimatePresence>
       {paletteOpen && (
         <CommandPalette
           hosts={snapshot.hosts}
@@ -444,6 +452,7 @@ export function App() {
           onOpenHost={openHost}
           onOpenLocal={openLocal}
           onNewHost={() => setEditing(null)}
+          onImport={() => setImporting(true)}
           onToggleFiles={toggleFiles}
           onPaneAction={paneAction}
           paneCount={activeTab ? leaves(activeTab.panes.tree).length : 0}

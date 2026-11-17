@@ -38,6 +38,39 @@ pub enum Format {
     OpenSsh,
 }
 
+impl Format {
+    /// Every format, in detection order.
+    pub const ALL: [Format; 8] = [
+        Format::Putty,
+        Format::SecureCrt,
+        Format::MobaXterm,
+        Format::Xshell,
+        Format::FinalShell,
+        Format::Termius,
+        Format::Csv,
+        Format::OpenSsh,
+    ];
+
+    /// The stable identifier used in the daemon protocol and the UI.
+    pub fn id(self) -> &'static str {
+        match self {
+            Format::Putty => "putty",
+            Format::SecureCrt => "securecrt",
+            Format::MobaXterm => "mobaxterm",
+            Format::Xshell => "xshell",
+            Format::FinalShell => "finalshell",
+            Format::Termius => "termius",
+            Format::Csv => "csv",
+            Format::OpenSsh => "openssh",
+        }
+    }
+
+    /// The format with this [`Format::id`].
+    pub fn from_id(id: &str) -> Option<Format> {
+        Format::ALL.into_iter().find(|format| format.id() == id)
+    }
+}
+
 /// Formats in detection order: specific markers first, the permissive
 /// OpenSSH syntax last.
 type Detector = fn(&[u8]) -> bool;

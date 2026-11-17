@@ -11,6 +11,7 @@ mod entities;
 pub mod app;
 pub mod cipher;
 pub mod error;
+pub mod import;
 mod known_hosts;
 pub mod meta;
 mod migrations;

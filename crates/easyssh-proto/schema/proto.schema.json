@@ -1016,6 +1016,281 @@
       "additionalProperties": false,
       "description": "Command `hosts.delete` payload. Reply: null."
     },
+    "ImportFormat": {
+      "type": "string",
+      "enum": [
+        "putty",
+        "securecrt",
+        "mobaxterm",
+        "xshell",
+        "finalshell",
+        "termius",
+        "csv",
+        "openssh"
+      ],
+      "description": "Source formats `easyssh-import` reads."
+    },
+    "ImportHost": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "hostname": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "username": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "group_path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Folders from the root, outermost first."
+        },
+        "identity_file": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Key file path the source referenced; never read."
+        },
+        "jump": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "openssh_only": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Reasons the host needs the OpenSSH engine."
+        },
+        "notes": {
+          "type": "string"
+        },
+        "exists": {
+          "type": "boolean",
+          "description": "Preview only: a stored host has the same hostname, port and user. Ignored by hosts.import_apply."
+        },
+        "problem": {
+          "type": "string",
+          "description": "Preview only: why the host cannot be imported. Ignored by hosts.import_apply."
+        }
+      },
+      "required": [
+        "label",
+        "hostname",
+        "port"
+      ],
+      "additionalProperties": false,
+      "description": "A host found in an import file. Never carries a secret."
+    },
+    "HostsImportPreviewParams": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File read by the daemon (use for large files; at most 8 MiB). Exactly one of `path` and `data`."
+        },
+        "data": {
+          "type": "string",
+          "description": "The file's bytes, base64. Exactly one of `path` and `data`; the frame limit (4 MiB) applies."
+        },
+        "file_name": {
+          "type": "string",
+          "description": "Name of the file, for formats that name a session after it."
+        },
+        "format": {
+          "$ref": "#/$defs/ImportFormat",
+          "description": "Overrides detection."
+        },
+        "base_dir": {
+          "type": "string",
+          "description": "Directory OpenSSH `Include` paths resolve in and may not leave. Only for the user's own `~/.ssh`, on their explicit action."
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `hosts.import_preview` payload. Reply: HostsImportPreviewResult. Writes nothing."
+    },
+    "HostsImportPreviewResult": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImportFormat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The format that was parsed."
+        },
+        "detected": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImportFormat"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What detection chose."
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImportHost"
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Records recognised but not importable."
+        }
+      },
+      "required": [
+        "format",
+        "detected",
+        "hosts",
+        "groups",
+        "warnings",
+        "skipped"
+      ],
+      "additionalProperties": false
+    },
+    "ImportDuplicatePolicy": {
+      "type": "string",
+      "enum": [
+        "skip",
+        "update",
+        "keep-both"
+      ],
+      "description": "What to do with an imported host that matches a stored one (same hostname, port and user)."
+    },
+    "ImportGroupMode": {
+      "type": "string",
+      "enum": [
+        "source",
+        "none",
+        "existing"
+      ],
+      "description": "`source`: the file's folders (stored groups of the same name are reused). `none`: no group for new hosts. `existing`: every host goes into `group_id`."
+    },
+    "HostsImportApplyParams": {
+      "type": "object",
+      "properties": {
+        "hosts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImportHost"
+          },
+          "maxItems": 5000,
+          "description": "The selected hosts."
+        },
+        "group_mode": {
+          "$ref": "#/$defs/ImportGroupMode"
+        },
+        "group_id": {
+          "type": "string",
+          "description": "Required with group_mode `existing`."
+        },
+        "duplicates": {
+          "$ref": "#/$defs/ImportDuplicatePolicy"
+        }
+      },
+      "required": [
+        "hosts",
+        "group_mode",
+        "duplicates"
+      ],
+      "additionalProperties": false,
+      "description": "Command `hosts.import_apply` payload. Reply: HostsImportApplyResult. Adds and updates only; nothing stored is ever removed. Broadcasts `hosts.changed` when something changed."
+    },
+    "HostsImportApplyResult": {
+      "type": "object",
+      "properties": {
+        "created": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unchanged": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Matches left alone."
+        },
+        "groups_created": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rejected": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "label",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "created",
+        "updated",
+        "unchanged",
+        "groups_created",
+        "rejected",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
     "KnownHostEntry": {
       "type": "object",
       "properties": {
@@ -1594,7 +1869,7 @@
       "properties": {},
       "required": [],
       "additionalProperties": false,
-      "description": "Event `hosts.changed` payload. Sent to every connected client after `hosts.save` or `hosts.delete`; clients refresh their host list."
+      "description": "Event `hosts.changed` payload. Sent to every connected client after `hosts.save`, `hosts.delete` or a `hosts.import_apply` that changed something; clients refresh their host list."
     },
     "AskpassResolvedEvent": {
       "type": "object",

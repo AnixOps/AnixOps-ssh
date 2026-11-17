@@ -15,7 +15,7 @@ travels is somebody else's concern.
     Fields with `#[serde(default)]` in `easyssh-core` are optional; everything
     else v1 writes is required, nullable fields included.
   - Envelopes: `Command`, `Event`, `Reply`, `ProtoError`, `SchemaVersion`.
-  - Commands and events: `proto.hello`, `hosts.list|save|delete`,
+  - Commands and events: `proto.hello`, `hosts.list|save|delete|import_preview|import_apply`,
     `known_hosts.list|import|remove`,
     `session.open|write|resize|close|list|attach|detach`,
     `askpass.reply|endpoint`, `daemon.shutdown_when_idle`, and for the

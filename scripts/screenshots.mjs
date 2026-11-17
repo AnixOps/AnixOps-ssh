@@ -33,6 +33,12 @@ const scenes = [
   { name: "snippets", query: "", open: ["prod-web-01"], nav: "命令片段", run: "磁盘用量" },
   { name: "new-host", query: "hosts=empty", click: "新建主机" },
   { name: "first-run", query: "hosts=empty" },
+  {
+    name: "import",
+    query: "",
+    clicks: [{ name: "添加" }, { name: "导入主机", role: "menuitem" }, { name: "从 ~/.ssh/config 导入" }],
+    waitText: "legacy-switch",
+  },
   { name: "terminal-en", query: "lang=en", open: ["prod-web-01", "home-nas"] },
 ];
 
@@ -87,6 +93,9 @@ for (const colorScheme of ["light", "dark"]) {
       await page.keyboard.press(scene.keys);
       await page.keyboard.type(scene.typeText ?? "");
     }
+    for (const step of scene.clicks ?? [])
+      await page.getByRole(step.role ?? "button", { name: step.name, exact: true }).first().click();
+    if (scene.waitText) await page.getByText(scene.waitText).first().waitFor();
     if (scene.click) await page.getByRole("button", { name: scene.click, exact: true }).first().click();
     await page.mouse.move(0, 0);
     await page.waitForTimeout(500);

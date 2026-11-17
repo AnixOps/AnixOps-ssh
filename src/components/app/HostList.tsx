@@ -1,6 +1,6 @@
-import { ChevronRight, Pencil, Plus, Search, Server, Star } from "lucide-react";
+import { ChevronRight, Download, Pencil, Plus, Search, Server, Star } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useMemo, useState, type Ref } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -40,6 +40,7 @@ export function HostList({
   onOpen,
   onEdit,
   onToggleFavorite,
+  onImport,
   searchRef,
 }: {
   hosts: Host[];
@@ -49,6 +50,7 @@ export function HostList({
   /** null creates a new host. */
   onEdit: (host: Host | null) => void;
   onToggleFavorite: (host: Host) => void;
+  onImport: () => void;
   searchRef: Ref<HTMLInputElement>;
 }) {
   const [query, setQuery] = useState("");
@@ -92,11 +94,7 @@ export function HostList({
             className="pl-9"
           />
         </div>
-        <Tooltip label={t.newHost}>
-          <Button variant="secondary" size="icon" aria-label={t.newHost} onClick={() => onEdit(null)}>
-            <Plus />
-          </Button>
-        </Tooltip>
+        <AddMenu onNew={() => onEdit(null)} onImport={onImport} />
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 pb-3">
@@ -105,10 +103,16 @@ export function HostList({
             <Server className="mx-auto mb-3 size-12 text-label-3" strokeWidth={1.5} />
             <p className="text-callout font-semibold text-label-1">{t.noHosts}</p>
             <p className="mt-1 text-caption font-normal text-label-2">{t.noHostsHint}</p>
-            <Button variant="primary" size="sm" className="mt-4" onClick={() => onEdit(null)}>
-              <Plus />
-              {t.newHost}
-            </Button>
+            <div className="mt-4 flex items-center justify-center gap-2">
+              <Button variant="primary" size="sm" onClick={() => onEdit(null)}>
+                <Plus />
+                {t.newHost}
+              </Button>
+              <Button variant="secondary" size="sm" onClick={onImport}>
+                <Download />
+                {t.importHosts}
+              </Button>
+            </div>
           </div>
         ) : normalized ? (
           matches.length === 0 ? (
@@ -173,6 +177,92 @@ export function HostList({
         <p className="border-t px-4 py-2 text-caption font-normal text-label-3">{t.previewData}</p>
       )}
     </aside>
+  );
+}
+
+/** The plus button: a small menu with "New host" and "Import hosts". */
+function AddMenu({ onNew, onImport }: { onNew: () => void; onImport: () => void }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  const choose = (run: () => void) => {
+    setOpen(false);
+    run();
+  };
+
+  return (
+    <div
+      ref={rootRef}
+      className="relative"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && open) {
+          event.stopPropagation();
+          setOpen(false);
+        }
+      }}
+    >
+      <Tooltip label={t.addHost}>
+        <Button
+          variant="secondary"
+          size="icon"
+          aria-label={t.addHost}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <Plus />
+        </Button>
+      </Tooltip>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            role="menu"
+            aria-label={t.addHost}
+            className="absolute top-full right-0 z-dropdown mt-1.5 w-44 origin-top-right rounded-sm bg-bg-elevated p-1 shadow-2 ring-1 ring-separator"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0, transition: { duration: duration.micro, ease: ease.standard } }}
+            exit={{ opacity: 0, y: -4, transition: { duration: duration.micro, ease: ease.exit } }}
+          >
+            <MenuItem icon={<Plus />} label={t.newHost} onClick={() => choose(onNew)} autoFocus />
+            <MenuItem icon={<Download />} label={t.importHosts} onClick={() => choose(onImport)} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function MenuItem({
+  icon,
+  label,
+  onClick,
+  autoFocus,
+}: {
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+  autoFocus?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      autoFocus={autoFocus}
+      onClick={onClick}
+      className="flex h-8 w-full items-center gap-2 rounded-xs px-2 text-left text-callout text-label-1 hover:bg-fill-1 focus-visible:bg-fill-1 focus-visible:outline-none [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:stroke-[1.5] [&_svg]:text-label-2"
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 
