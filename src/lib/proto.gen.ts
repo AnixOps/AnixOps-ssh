@@ -1246,6 +1246,14 @@ export interface SyncDevice {
   created_at: number;
   revoked: boolean;
   this_device: boolean;
+  /**
+   * Unix seconds on the server's clock; present when revoked. What the device sent before is still valid, what it sends after is refused.
+   */
+  revoked_at?: number;
+  /**
+   * Unix seconds. The device certificate is renewed automatically while signed in.
+   */
+  cert_expires_at?: number;
 }
 /**
  * Command `sync.devices.list` payload. Reply: SyncDevicesListResult.
@@ -1373,7 +1381,7 @@ export interface VaultMembersAddParams {
   fingerprint: string;
 }
 /**
- * Command `vault.members.remove` payload (owner only). The vault key is not rotated yet. Reply: null.
+ * Command `vault.members.remove` payload (owner only): removes the member and replaces the vault key, re-encrypting every record under the new one. Reply: null.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "VaultMembersRemoveParams".

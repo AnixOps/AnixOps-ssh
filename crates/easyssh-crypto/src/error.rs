@@ -21,6 +21,8 @@ pub enum CryptoError {
     BadSignature,
     #[error("device certificate is invalid or does not belong to this account")]
     BadCertificate,
+    #[error("device certificate has expired")]
+    CertificateExpired,
     #[error("envelope signer does not match the device certificate")]
     SignerMismatch,
     #[error("sealed key could not be opened (wrong recipient or corrupted)")]

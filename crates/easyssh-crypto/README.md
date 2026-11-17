@@ -89,35 +89,50 @@ counters, truncation and trailing bytes are errors. `compare` returns
 maximum.
 
 **Device certificate**, signed by the account Ed25519 key over
-`"easyssh/v1/device-cert" || device_public(32) || issued_at(i64, unix s) || lp(device_name)`.
-Wire form: `0x01 || device_public(32) || issued_at(i64) || lp(device_name) || signature(64)`.
+`"easyssh/v2/device-cert" || device_public(32) || issued_at(i64, unix s) || expires_at(i64, unix s) || lp(device_name)`.
+Wire form: `0x02 || device_public(32) || issued_at(i64) || expires_at(i64) || lp(device_name) || signature(64)`.
+A certificate is valid while `at <= expires_at` (`DeviceCert::check_valid_at`);
+`issued_at` is informational. New certificates last `CERT_LIFETIME_SECS`
+(one year) and are renewed while the device is signed in.
 
 **Envelope**, signed by the device Ed25519 key over (this is the canonical
 encoding; the signature is not part of it):
 
 ```text
-"easyssh/v1/envelope"          19 ASCII bytes, domain separation
+"easyssh/v2/envelope"          19 ASCII bytes, domain separation
 lp(record_id)                  UTF-8
 lp(vault_id)                   UTF-8
+lp(table)                      UTF-8, entity table (hosts, snippets, ...)
+key_generation                 u32 big-endian, generation of the vault key
 version_vector                 canonical encoding above (self-delimiting)
 deleted                        1 byte, 0x00 or 0x01 (tombstone)
 lp(ciphertext)                 the record blob; may be empty for a tombstone
 signer                         device public key, 32 bytes
 ```
 
-`verify_envelope(envelope, cert, account_public)` checks, in order: the
-certificate signature under the account key, `cert.device_public == envelope.signer`,
-and the envelope signature (`verify_strict`). Any changed field, an
-uncertified device or a certificate from another account fails.
+Version 2 of the certificate and envelope formats (both new before the first
+release, so there is no reader for version 1) added the certificate expiry
+and the signed `table` and `key_generation`. `deleted` was already signed.
+
+`verify_envelope(envelope, cert, account_public, at)` checks, in order: the
+certificate signature under the account key, that the certificate is not
+expired at `at` (the time the server received the envelope, or now),
+`cert.device_public == envelope.signer`, and the envelope signature
+(`verify_strict`). Any changed field, an uncertified device, an expired
+certificate or a certificate from another account fails.
 
 ## Out of scope
 
 - OPAQUE / server sign-in (phase 5); this crate only produces `AuthSecret`.
 - Rollback protection state (remembering the newest vector seen per record):
   `verify_envelope` is stateless, callers compare version vectors.
-- Certificate revocation and expiry policy, cert distribution.
+- Certificate revocation (the server records it, `easyssh-sync` applies it)
+  and cert distribution.
 - Rotating the account key pairs themselves (new random pairs would need every vault re-sealed and devices re-certified).
-- Authenticating who sealed a vault key; vault membership / key rotation.
+- Authenticating who sealed a vault key; vault membership. (Rotation of the
+  vault key itself is protocol in `easyssh-sync` and `easyssh-server`: the
+  generation is in the signed envelope, the keys are `VaultKey::generate` and
+  `seal_vault_key`.)
 - Session-log encryption (secretstream), SSH key handling, the SQLite schema.
 - Hardware-backed key unlock (Windows Hello, Touch ID, FIDO2).
 - Protection against a compromised host (memory scraping while unlocked) and

@@ -31,8 +31,8 @@ pub struct RecordVersion {
 }
 
 /// Exactly what is encrypted. The version vector lives in the envelope (and
-/// in the AAD), the table is repeated here because the signature does not
-/// cover it.
+/// in the AAD); the table is repeated here as a consistency check against
+/// the (signed) routing metadata.
 #[derive(Serialize, Deserialize)]
 struct Payload {
     v: u32,

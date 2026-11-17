@@ -59,8 +59,8 @@ function inStatus(): SyncStatus {
 
 function seed() {
   devices = [
-    { device_id: "dev-1", name: "This device", created_at: 1_760_000_000, revoked: false, this_device: true },
-    { device_id: "dev-2", name: "Work laptop", created_at: 1_761_000_000, revoked: false, this_device: false },
+    { device_id: "dev-1", name: "This device", created_at: 1_760_000_000, revoked: false, this_device: true, cert_expires_at: 1_791_000_000 },
+    { device_id: "dev-2", name: "Work laptop", created_at: 1_761_000_000, revoked: false, this_device: false, cert_expires_at: 1_792_000_000 },
   ];
   vaults = [
     { id: "personal", name: "Personal", kind: "personal", role: "owner" },

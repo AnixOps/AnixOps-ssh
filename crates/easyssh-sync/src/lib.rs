@@ -23,7 +23,9 @@ pub mod wire;
 
 pub use codec::{open_record, seal_record, DeviceIdentity};
 pub use engine::{HistoryVersion, Rejected, SyncEngine, SyncReport};
-pub use error::{AuthError, MergeError, SyncError, TransportError, VerifyError, WireError};
+pub use error::{
+    AuthError, MergeError, RotationFailure, SyncError, TransportError, VerifyError, WireError,
+};
 pub use http::HttpClient;
 pub use merge::{merge, Merged, Outcome, Overwritten, Side};
 pub use record::{RecordVersion, Stamp};

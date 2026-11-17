@@ -39,9 +39,10 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS sessions_by_device ON sessions(device_id);
 CREATE TABLE IF NOT EXISTS vaults (
-    id          TEXT PRIMARY KEY,
-    created_by  TEXT NOT NULL REFERENCES accounts(id),
-    created_at  INTEGER NOT NULL
+    id              TEXT PRIMARY KEY,
+    created_by      TEXT NOT NULL REFERENCES accounts(id),
+    created_at      INTEGER NOT NULL,
+    key_generation  INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS vault_members (
     vault_id    TEXT NOT NULL REFERENCES vaults(id),
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS records (
     record_id       TEXT NOT NULL,
     seq             INTEGER NOT NULL,
     tbl             TEXT NOT NULL,
+    key_generation  INTEGER NOT NULL,
     version_vector  TEXT NOT NULL,
     deleted         INTEGER NOT NULL,
     ciphertext      BLOB NOT NULL,
@@ -72,12 +74,14 @@ CREATE TABLE IF NOT EXISTS record_history (
     record_id       TEXT NOT NULL,
     seq             INTEGER NOT NULL,
     tbl             TEXT NOT NULL,
+    key_generation  INTEGER NOT NULL,
     version_vector  TEXT NOT NULL,
     deleted         INTEGER NOT NULL,
     ciphertext      BLOB NOT NULL,
     signer          BLOB NOT NULL,
     signature       BLOB NOT NULL,
     cert            BLOB NOT NULL,
+    updated_at      INTEGER NOT NULL,
     replaced_at     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS history_by_record ON record_history(vault_id, record_id, id);
