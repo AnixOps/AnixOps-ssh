@@ -75,6 +75,17 @@ features → OpenSSH Client**. The app checks this on start and in Settings.
 | File pane | Ctrl+Shift+E | ⌘E |
 | Find in terminal | Ctrl+Shift+F | ⌘F |
 | Copy and paste | Ctrl+Shift+C / V | ⌘C / ⌘V |
+| Split right | Ctrl+Shift+D | ⌘D |
+| Split down | Ctrl+Shift+Alt+D | ⌘⇧D |
+| Focus pane | Ctrl+Shift+Arrow | ⌘⌥Arrow |
+| Maximise or restore pane | Ctrl+Shift+Enter | ⌘⇧Enter |
+| Broadcast input to this tab | Ctrl+Shift+B | ⌘⇧B |
+
+Close tab closes the focused pane first; the last pane closes the tab.
+Broadcasting to all tabs is in the tab bar, the snippets panel and the command
+palette. Pasting text with a newline while broadcasting asks first. Drag a
+divider to resize panes, or focus it and use the arrow keys (Shift for bigger
+steps, Enter to centre).
 
 App shortcuts use Ctrl+Shift so that Ctrl+W, Ctrl+K and friends still reach
 the shell.
