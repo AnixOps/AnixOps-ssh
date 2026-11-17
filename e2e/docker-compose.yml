@@ -1,0 +1,21 @@
+# TEST ONLY. Two OpenSSH servers on one network.
+#   target   127.0.0.1:2222   users: keyuser (public key), pwuser (password)
+#   bastion  127.0.0.1:2223   same users; reaches the target as "target:22"
+# Run e2e/prepare.sh first so ./.keys holds the test key.
+services:
+  target:
+    build: .
+    image: easyssh-e2e-sshd
+    hostname: target
+    ports:
+      - "127.0.0.1:2222:22"
+    volumes:
+      - ./.keys:/keys:ro
+  bastion:
+    build: .
+    image: easyssh-e2e-sshd
+    hostname: bastion
+    ports:
+      - "127.0.0.1:2223:22"
+    volumes:
+      - ./.keys:/keys:ro
