@@ -84,7 +84,7 @@ it passed against v1 unchanged.
 | `exec` | `exec_through_endpoint_target` | passes | host, user and port instead of an alias |
 | `terminal` | `interactive_shell_on_a_pty` | passes | marker round trip, resize, exit ends ssh |
 | `sftp` | `browse_and_manage_files` | passes | connect, home, mkdir, list, upload, rename, remove, rmdir |
-| `sftp` | `missing_directory_lists_as_empty_and_session_survives` | passes | v1 shows a missing directory as empty ("Can't ls" is skipped as noise); session keeps working |
+| `sftp` | `missing_directory_is_reported_as_not_found_or_empty` | passes (either outcome) | listing a missing directory gives a "not found" error or an empty list depending on timing; see below |
 | `sftp` | `upload_and_download_through_sftp_transfer` | passes | 300 kB, bytes identical |
 | `sftp` | `download_of_a_missing_file_fails_with_a_reason` | passes | non-zero exit, no local file |
 | `sftp` | `upload_and_download_through_scp_invocation` | passes | ScpInvocation, bytes identical |
@@ -123,3 +123,13 @@ empty (CI run 43990861805). Browsing (`SftpSession`, no `-b`), exec and tunnels
 do prompt through askpass. In the app this means transfers to a host that only
 accepts passwords fail even though browsing it works; hosts with a key or an
 agent are not affected. Not fixed here (phase 0 changes no behaviour).
+
+### Listing a missing directory is timing dependent (observed, not fixed)
+
+`SftpSession::list` of a directory that does not exist returned an empty
+list in one CI run and `Failed("Can't ls: ... not found")` in the next, for
+the same code. The error text arrives on standard error, and `run_for`
+collects late standard-error lines for only 20 ms after the command's marker.
+When the line is later than that, the command looks successful. The test
+accepts both outcomes. Not investigated further: a late line could also be
+attributed to the next command, but no test has demonstrated that.
