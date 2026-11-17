@@ -1,0 +1,176 @@
+//! SFTP on a channel of the same connection.
+
+use crate::error::{Error, Result};
+use crate::session::Session;
+use russh_sftp::client::SftpSession;
+use std::time::SystemTime;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+/// A remote file opened for reading or writing (`AsyncRead`, `AsyncWrite`,
+/// `AsyncSeek`). Call `shutdown()` (or `close()`) after writing.
+pub use russh_sftp::client::fs::File as SftpFile;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    File,
+    Dir,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStat {
+    pub kind: EntryKind,
+    pub size: u64,
+    pub modified: Option<SystemTime>,
+    /// Permission bits (`0o755` style), if the server sent them.
+    pub permissions: Option<u32>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirEntry {
+    pub name: String,
+    pub stat: FileStat,
+}
+
+fn convert(metadata: &russh_sftp::client::fs::Metadata) -> FileStat {
+    use russh_sftp::protocol::FileType;
+    FileStat {
+        kind: match metadata.file_type() {
+            FileType::File => EntryKind::File,
+            FileType::Dir => EntryKind::Dir,
+            FileType::Symlink => EntryKind::Symlink,
+            FileType::Other => EntryKind::Other,
+        },
+        size: metadata.len(),
+        modified: metadata.modified().ok(),
+        permissions: metadata.permissions.map(|bits| bits & 0o7777),
+        uid: metadata.uid,
+        gid: metadata.gid,
+    }
+}
+
+pub struct Sftp {
+    session: SftpSession,
+}
+
+impl Session {
+    /// Opens an SFTP channel on this connection.
+    pub async fn sftp(&self) -> Result<Sftp> {
+        let channel = self.open_session_channel().await?;
+        channel.request_subsystem(true, "sftp").await?;
+        let session = SftpSession::new(channel.into_stream()).await?;
+        Ok(Sftp { session })
+    }
+}
+
+impl Sftp {
+    /// The user's home directory.
+    pub async fn home(&self) -> Result<String> {
+        self.realpath(".").await
+    }
+
+    pub async fn realpath(&self, path: &str) -> Result<String> {
+        Ok(self.session.canonicalize(path).await?)
+    }
+
+    /// Entries of a directory, sorted by name, without `.` and `..`.
+    pub async fn list(&self, path: &str) -> Result<Vec<DirEntry>> {
+        let mut entries: Vec<DirEntry> = self
+            .session
+            .read_dir(path)
+            .await?
+            .filter(|entry| {
+                let name = entry.file_name();
+                name != "." && name != ".."
+            })
+            .map(|entry| DirEntry {
+                name: entry.file_name(),
+                stat: convert(&entry.metadata()),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(entries)
+    }
+
+    /// Follows symbolic links.
+    pub async fn stat(&self, path: &str) -> Result<FileStat> {
+        Ok(convert(&self.session.metadata(path).await?))
+    }
+
+    /// Does not follow symbolic links.
+    pub async fn lstat(&self, path: &str) -> Result<FileStat> {
+        Ok(convert(&self.session.symlink_metadata(path).await?))
+    }
+
+    pub async fn exists(&self, path: &str) -> Result<bool> {
+        Ok(self.session.try_exists(path).await?)
+    }
+
+    pub async fn mkdir(&self, path: &str) -> Result<()> {
+        Ok(self.session.create_dir(path).await?)
+    }
+
+    pub async fn rename(&self, from: &str, to: &str) -> Result<()> {
+        Ok(self.session.rename(from, to).await?)
+    }
+
+    pub async fn remove_file(&self, path: &str) -> Result<()> {
+        Ok(self.session.remove_file(path).await?)
+    }
+
+    pub async fn remove_dir(&self, path: &str) -> Result<()> {
+        Ok(self.session.remove_dir(path).await?)
+    }
+
+    /// Opens an existing file for reading.
+    pub async fn open_read(&self, path: &str) -> Result<SftpFile> {
+        Ok(self.session.open(path).await?)
+    }
+
+    /// Creates the file (truncating an existing one) for writing.
+    pub async fn create(&self, path: &str) -> Result<SftpFile> {
+        Ok(self.session.create(path).await?)
+    }
+
+    /// Streams a remote file into `sink`; returns the byte count.
+    pub async fn download<W: AsyncWrite + Unpin>(&self, path: &str, sink: &mut W) -> Result<u64> {
+        let mut file = self.open_read(path).await?;
+        let copied = tokio::io::copy(&mut file, sink)
+            .await
+            .map_err(|e| Error::Sftp(format!("downloading {path}: {e}")))?;
+        sink.flush().await?;
+        Ok(copied)
+    }
+
+    /// Streams `source` into a remote file; returns the byte count.
+    pub async fn upload<R: AsyncRead + Unpin>(&self, path: &str, source: &mut R) -> Result<u64> {
+        let mut file = self.create(path).await?;
+        let copied = tokio::io::copy(source, &mut file)
+            .await
+            .map_err(|e| Error::Sftp(format!("uploading {path}: {e}")))?;
+        file.shutdown()
+            .await
+            .map_err(|e| Error::Sftp(format!("closing {path}: {e}")))?;
+        Ok(copied)
+    }
+
+    pub async fn read_file(&self, path: &str) -> Result<Vec<u8>> {
+        let mut file = self.open_read(path).await?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .await
+            .map_err(|e| Error::Sftp(format!("reading {path}: {e}")))?;
+        Ok(bytes)
+    }
+
+    pub async fn write_file(&self, path: &str, data: &[u8]) -> Result<()> {
+        self.upload(path, &mut &data[..]).await.map(drop)
+    }
+
+    pub async fn close(&self) -> Result<()> {
+        Ok(self.session.close().await?)
+    }
+}
