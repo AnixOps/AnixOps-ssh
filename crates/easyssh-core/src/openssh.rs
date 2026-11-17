@@ -59,6 +59,7 @@ impl SshInvocation {
                 }
                 args.push(hostname.clone());
             }
+            ConnectionTarget::Serial(_) => return Err(ValidationError::NotSsh.into()),
         }
         if let Some(jump) = &connection.proxy_jump {
             validate_alias(jump)?;
@@ -109,6 +110,7 @@ impl SshInvocation {
                 }
                 args.push(hostname.clone());
             }
+            ConnectionTarget::Serial(_) => return Err(ValidationError::NotSsh.into()),
         }
         if let Some(jump) = &connection.proxy_jump {
             validate_alias(jump)?;

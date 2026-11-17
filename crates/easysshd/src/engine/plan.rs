@@ -387,6 +387,10 @@ pub fn resolve(connection: &Connection, global: SshEngine) -> Resolution {
     };
 
     let target_facts = match &connection.target {
+        // Opened by the serial path before an engine is ever chosen.
+        ConnectionTarget::Serial(_) => {
+            return openssh(&found, Some("serial ports do not use an SSH engine".into()))
+        }
         ConnectionTarget::Alias { alias } => run_ssh_g(None, None, alias),
         ConnectionTarget::Endpoint {
             hostname,

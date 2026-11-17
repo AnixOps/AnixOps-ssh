@@ -13,7 +13,7 @@
 use crate::domain::{Connection, ConnectionTarget};
 use crate::openssh::{OpenSsh, OpenSshError};
 use crate::process::hide_window;
-use crate::security::{validate_alias, validate_connection};
+use crate::security::{validate_alias, validate_connection, ValidationError};
 use serde::Serialize;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
@@ -79,6 +79,7 @@ pub fn sftp_args(connection: &Connection, batch: bool) -> Result<Vec<String>, Op
                 None => args.push(host),
             }
         }
+        ConnectionTarget::Serial(_) => return Err(ValidationError::NotSsh.into()),
     }
     Ok(args)
 }

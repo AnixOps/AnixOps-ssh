@@ -108,7 +108,8 @@ replaces the hand-written Tauri commands and `src/lib/backend.ts` mirror.
 - FIDO2 `sk-ecdsa` / `sk-ed25519` support is added on top of russh, through
   libfido2, and offered upstream.
 - Serial ports join SSH and local shells as a session type. Mosh and Telnet
-  are not planned.
+  are not planned. As built: the `serialport` crate (no libudev), hosts of
+  kind `serial` (migration 0006), the same output path as SSH sessions.
 
 ## 6. Secrets and encryption
 
@@ -138,8 +139,13 @@ encrypted, with keys only you hold, in code anyone can audit".
   With a vault passphrase set, the device key is stored in the keychain only
   as a blob wrapped with a key derived by Argon2id (`device-key-wrapped/v1`);
   the raw item is removed. Locking drops the key from memory. Secrets are
-  local only and are not synced yet. Biometric and FIDO2 unlock are a TODO:
-  they plug in through `easyssh_vault::UnlockProvider`.
+  local only and are not synced yet. FIDO2 unlock is a TODO.
+  Windows Hello (`UserConsentVerifier`) and Touch ID (`LAContext`) plug in
+  through `easyssh_vault::UnlockProvider` as presence gates in front of the
+  keychain read (`easyssh-unlock`). They are opt-in, enabling one needs the
+  passphrase once, and the passphrase stays a fallback. The gate is software
+  presence checking, not a hardware boundary; user-presence keychain access
+  control remains a possible hardening.
 - The daemon answers `SSH_ASKPASS` password and passphrase prompts from the
   vault for the bound process (exact host and user) and reports
   `vault_locked` when it cannot. Saved keys apply to terminal sessions on the
@@ -267,7 +273,7 @@ end-to-end suite first.
 | 1. Daemon | 3 | `easyssh-proto`, `easysshd`, authenticated IPC; today's PTY sessions moved behind the daemon (still system OpenSSH); UI reattaches after reload. |
 | 2. Engine | 6 | russh engine behind a setting, OpenSSH fallback rules, one connection for terminal, files and tunnels. Done when russh passes the whole e2e suite; OpenSSH then becomes an advanced option. |
 | 3. Store | 3 | Release 2.0. SQLite with v1 migration, known hosts store, importers (ssh_config, PuTTY, SecureCRT, MobaXterm, Xshell, FinalShell, Termius exports, CSV). |
-| 4. Vault | 6 | Device key and keychain, passwords and private keys in the vault, Windows Hello, Secure Enclave, FIDO2, serial ports. |
+| 4. Vault | 6 | Device key and keychain, passwords and private keys in the vault, Windows Hello, Touch ID and serial ports (done), FIDO2 (open). |
 | 5. Sync | 8 | `easyssh-server`, sign-in without sending the passphrase, signed envelopes, field-level merge, history, team vaults and roles. |
 | 6. Terminal | 6 | Splits and broadcast, shell integration, completion specs, AI with the user's key, encrypted session logs and sharing. |
 | 7. Mobile | 10+ | Tauri mobile app with the embedded engine. |
@@ -280,4 +286,7 @@ To be decided at the start of the phase that needs them:
 - License of `easyssh-server` (MIT like the app, or AGPL to keep hosted forks
   open) (phase 5).
 - Which hosted offering, if any, and its pricing (after phase 5).
-- Serial port library and permissions on each platform (phase 4).
+- Serial port library and permissions on each platform: resolved in phase 4.
+  `serialport` 4 without libudev (Linux lists ports from sysfs). Linux needs
+  the `dialout` (or `uucp`) group, and the app shows that hint on EACCES.
+  macOS uses `/dev/cu.*` and needs no extra permission. Windows uses `COMn`.

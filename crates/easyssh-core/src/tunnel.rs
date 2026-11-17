@@ -111,6 +111,7 @@ pub fn tunnel_args(connection: &Connection, tunnel: &Tunnel) -> Result<Vec<Strin
             }
             args.push(hostname.clone());
         }
+        ConnectionTarget::Serial(_) => return Err(ValidationError::NotSsh.into()),
     }
     Ok(args)
 }

@@ -14,6 +14,14 @@ import type {
 
 /** Mirrors `display_target` and `display_command` in src-tauri/src/hosts.rs. */
 function describe(fields: HostFields): { target: string; command: string } {
+  const serial = fields.serial;
+  if (serial) {
+    const parity = { none: "N", odd: "O", even: "E" }[serial.parity];
+    return {
+      target: `${serial.port} · ${serial.baud} ${serial.dataBits}${parity}${serial.stopBits}`,
+      command: `screen ${serial.port} ${serial.baud}`,
+    };
+  }
   if (fields.alias) return { target: fields.alias, command: `ssh ${fields.alias}` };
   const user = fields.username ? `${fields.username}@` : "";
   const port = fields.port === 22 ? "" : `:${fields.port}`;
@@ -66,6 +74,21 @@ const store: HostsSnapshot =
           makeHost("5", "home-nas", endpoint("admin@192.168.1.10"), "home", { favorite: true }),
           makeHost("6", "raspberry-pi", endpoint("pi@192.168.1.42"), "home", { color: "chart-7" }),
           makeHost(
+            "7",
+            "switch-console",
+            {
+              alias: null,
+              hostname: "",
+              username: null,
+              port: 22,
+              proxyJump: null,
+              notes: "",
+              shellIntegration: false,
+              serial: { port: "/dev/ttyUSB0", baud: 9600, dataBits: 8, parity: "none", stopBits: 1, flowControl: "none" },
+            },
+            "home",
+          ),
+          makeHost(
             "ssh-config:bastion",
             "bastion",
             { alias: "bastion", hostname: "", username: null, port: 22, proxyJump: null, notes: "", shellIntegration: false },
@@ -75,6 +98,14 @@ const store: HostsSnapshot =
         ],
         warnings: [],
       };
+
+/** Ports the preview pretends to find. */
+export function previewSerialPorts(): { path: string; description: string | null }[] {
+  return [
+    { path: "/dev/ttyACM0", description: "Arduino Uno (USB 2341:0043)" },
+    { path: "/dev/ttyUSB0", description: "FTDI FT232R USB UART (USB 0403:6001)" },
+  ];
+}
 
 export function previewSnapshot(): HostsSnapshot {
   return structuredClone(store);

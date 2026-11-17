@@ -50,7 +50,7 @@ impl Binding {
             ConnectionTarget::Endpoint {
                 hostname, username, ..
             } => (username.clone(), Some(hostname.clone())),
-            ConnectionTarget::Alias { .. } => (None, None),
+            ConnectionTarget::Alias { .. } | ConnectionTarget::Serial(_) => (None, None),
         };
         Binding {
             host_id: connection.id.clone(),

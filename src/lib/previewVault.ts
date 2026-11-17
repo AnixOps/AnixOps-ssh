@@ -1,5 +1,15 @@
 import type { SecretsInput, SecretsStatus } from "./backend";
 
+/** Windows Hello, Touch ID: mirrors `UnlockMethodView` in src-tauri/src/vault.rs. */
+export interface UnlockMethod {
+  /** `windows_hello` or `touch_id`. */
+  name: string;
+  /** The OS offers it on this device right now. */
+  available: boolean;
+  /** The user turned it on. */
+  enabled: boolean;
+}
+
 /** Mirrors `VaultStatusView` in src-tauri/src/vault.rs. */
 export interface VaultStatus {
   passphraseSet: boolean;
@@ -8,21 +18,26 @@ export interface VaultStatus {
   autoLockMinutes: number;
   keychainAvailable: boolean;
   keychainError: string | null;
+  unlockMethods: UnlockMethod[];
 }
 
 /** In-memory stand-in for the vault in browser previews and CI screenshots.
  *  Values are kept only to track which secrets exist, as the real backend
  *  never returns them either. `?vault=locked` starts with a passphrase set
- *  and the vault locked; `?vault=nokeychain` simulates a machine without one. */
+ *  and the vault locked; `?vault=nokeychain` simulates a machine without one;
+ *  `?vault=hello` has a passphrase and Windows Hello available but off;
+ *  `?vault=hello-on` has it on and the vault locked. */
 const mode = new URLSearchParams(window.location.search).get("vault");
+const hello = mode === "hello" || mode === "hello-on";
 let state: VaultStatus = {
-  passphraseSet: mode === "locked",
-  unlocked: mode !== "locked",
+  passphraseSet: mode === "locked" || hello,
+  unlocked: mode !== "locked" && mode !== "hello-on",
   autoLockMinutes: 15,
   keychainAvailable: mode !== "nokeychain",
   keychainError: mode === "nokeychain" ? "no secret service is running" : null,
+  unlockMethods: hello ? [{ name: "windows_hello", available: true, enabled: mode === "hello-on" }] : [],
 };
-let passphrase = mode === "locked" ? "preview-passphrase" : "";
+let passphrase = mode === "locked" || hello ? "preview-passphrase" : "";
 const saved = new Map<string, SecretsStatus>([["3", { password: true, privateKey: false, passphrase: false }]]);
 const listeners = new Set<(unlocked: boolean) => void>();
 
@@ -55,7 +70,26 @@ export const previewVault = {
   removePassphrase: async (given: string): Promise<VaultStatus> => {
     if (given !== passphrase) wrong();
     passphrase = "";
-    state = { ...state, passphraseSet: false, unlocked: true };
+    state = {
+      ...state,
+      passphraseSet: false,
+      unlocked: true,
+      unlockMethods: state.unlockMethods.map((m) => ({ ...m, enabled: false })),
+    };
+    return changed();
+  },
+  unlockWith: async (method: string): Promise<VaultStatus> => {
+    if (!state.unlockMethods.some((m) => m.name === method && m.enabled)) throw new Error("the unlock was cancelled");
+    state = { ...state, unlocked: true };
+    return changed();
+  },
+  enableUnlock: async (method: string, given: string): Promise<VaultStatus> => {
+    if (given !== passphrase) wrong();
+    state = { ...state, unlockMethods: state.unlockMethods.map((m) => (m.name === method ? { ...m, enabled: true } : m)) };
+    return changed();
+  },
+  disableUnlock: async (method: string): Promise<VaultStatus> => {
+    state = { ...state, unlockMethods: state.unlockMethods.map((m) => (m.name === method ? { ...m, enabled: false } : m)) };
     return changed();
   },
   setAutoLock: async (minutes: number): Promise<VaultStatus> => {

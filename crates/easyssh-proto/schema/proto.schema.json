@@ -84,6 +84,58 @@
             "port"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "serial"
+            },
+            "port": {
+              "type": "string",
+              "description": "Device path: /dev/ttyUSB0, /dev/cu.usbserial-1410, COM3."
+            },
+            "baud": {
+              "type": "integer",
+              "minimum": 50,
+              "maximum": 4000000
+            },
+            "data_bits": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 8
+            },
+            "parity": {
+              "enum": [
+                "none",
+                "odd",
+                "even"
+              ]
+            },
+            "stop_bits": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2
+            },
+            "flow_control": {
+              "enum": [
+                "none",
+                "software",
+                "hardware"
+              ],
+              "description": "software = XON/XOFF, hardware = RTS/CTS."
+            }
+          },
+          "required": [
+            "kind",
+            "port",
+            "baud",
+            "data_bits",
+            "parity",
+            "stop_bits",
+            "flow_control"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -1651,6 +1703,54 @@
       ],
       "additionalProperties": false
     },
+    "SerialPortInfo": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Pass it as `port` of a serial host."
+        },
+        "description": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the OS knows: the USB product and vendor, or the kind of port."
+        }
+      },
+      "required": [
+        "path",
+        "description"
+      ],
+      "additionalProperties": false,
+      "description": "A serial port the OS lists."
+    },
+    "SerialPortsParams": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false,
+      "description": "Command `serial.ports` payload: list the serial ports of this machine. Reply: SerialPortsResult."
+    },
+    "SerialPortsResult": {
+      "type": "object",
+      "properties": {
+        "ports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SerialPortInfo"
+          }
+        }
+      },
+      "required": [
+        "ports"
+      ],
+      "additionalProperties": false
+    },
     "SessionAttachParams": {
       "type": "object",
       "properties": {
@@ -1923,6 +2023,13 @@
               "type": "null"
             }
           ]
+        },
+        "unlock_methods": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UnlockMethod"
+          },
+          "description": "Windows Hello, Touch ID: the methods this device can offer to open a passphrase vault. Absent from older daemons."
         }
       },
       "required": [
@@ -1934,6 +2041,30 @@
       ],
       "additionalProperties": false,
       "description": "The vault state. No secret is ever part of it."
+    },
+    "UnlockMethod": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "`windows_hello` or `touch_id`."
+        },
+        "available": {
+          "type": "boolean",
+          "description": "The OS offers it on this device right now; the UI shows only available methods."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "The user turned it on."
+        }
+      },
+      "required": [
+        "name",
+        "available",
+        "enabled"
+      ],
+      "additionalProperties": false,
+      "description": "A biometric or OS unlock method of the vault."
     },
     "VaultStatusParams": {
       "type": "object",
@@ -1954,6 +2085,49 @@
       ],
       "additionalProperties": false,
       "description": "Command `vault.unlock` payload. Reply: VaultStatus. Fails with `wrong_passphrase`."
+    },
+    "VaultUnlockWithParams": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.unlock_with` payload: open the vault with an enabled unlock method (the system prompt appears). Reply: VaultStatus. Fails with `unlock_cancelled` when the user declines; the passphrase still works."
+    },
+    "VaultEnableUnlockParams": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "passphrase": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "passphrase"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.enable_unlock` payload: turn an unlock method on. The passphrase is needed once; the system asks the user to confirm. Reply: VaultStatus."
+    },
+    "VaultDisableUnlockParams": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.disable_unlock` payload: turn an unlock method off and delete its stored key copy. Reply: VaultStatus."
     },
     "VaultLockParams": {
       "type": "object",

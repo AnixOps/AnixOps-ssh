@@ -1,9 +1,11 @@
-import { CircleAlert, Lock, LockOpen, ShieldCheck, Trash2 } from "lucide-react";
+import { CircleAlert, Fingerprint, Lock, LockOpen, ShieldCheck, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   onVaultChanged,
+  vaultDisableUnlock,
+  vaultEnableUnlock,
   vaultForgetAll,
   vaultLock,
   vaultRemovePassphrase,
@@ -13,7 +15,7 @@ import {
   type VaultStatus,
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
-import { requestVaultUnlock, vaultErrorText } from "@/lib/vaultUi";
+import { requestVaultUnlock, unlockMethodLabel, vaultErrorText } from "@/lib/vaultUi";
 import { cn } from "@/lib/utils";
 
 const AUTO_LOCK = [5, 15, 30, 60, 240, 0];
@@ -29,6 +31,8 @@ export function VaultSettings() {
   const [notice, setNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing>(null);
   const [confirmForget, setConfirmForget] = useState(false);
+  /** The unlock method whose passphrase prompt is open. */
+  const [enabling, setEnabling] = useState<string | null>(null);
 
   useEffect(() => {
     vaultStatus().then(setStatus).catch((reason) => setError(String(reason)));
@@ -129,6 +133,46 @@ export function VaultSettings() {
         />
       )}
 
+      {/* Only where the OS offers it, and only with a passphrase: without one
+          the keychain already opens the vault by itself. */}
+      {status.passphraseSet &&
+        status.unlockMethods
+          .filter((method) => method.available)
+          .map((method) => (
+            <div key={method.name}>
+              <VaultRow label={unlockMethodLabel(method.name)} hint={method.enabled ? t.unlockEnabled : t.unlockQuickHint}>
+                {method.enabled ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    aria-label={`${t.unlockDisable}: ${unlockMethodLabel(method.name)}`}
+                    onClick={() => void run(() => vaultDisableUnlock(method.name))}
+                  >
+                    {t.unlockDisable}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    aria-label={`${t.unlockEnable}: ${unlockMethodLabel(method.name)}`}
+                    onClick={() => setEnabling(enabling === method.name ? null : method.name)}
+                  >
+                    <Fingerprint />
+                    {t.unlockEnable}
+                  </Button>
+                )}
+              </VaultRow>
+              {enabling === method.name && !method.enabled && (
+                <UnlockEnableForm
+                  onCancel={() => setEnabling(null)}
+                  onSubmit={async (passphrase) => {
+                    if (await run(() => vaultEnableUnlock(method.name, passphrase))) setEnabling(null);
+                  }}
+                />
+              )}
+            </div>
+          ))}
+
       <VaultRow label={t.vaultAutoLock} hint={t.vaultAutoLockHint}>
         <select
           aria-label={t.vaultAutoLock}
@@ -174,6 +218,46 @@ export function VaultSettings() {
       )}
       {notice && <p className="px-3 py-2 text-caption font-normal text-label-2">{notice}</p>}
     </>
+  );
+}
+
+/** Asks for the vault passphrase once before a quick unlock method is turned on. */
+function UnlockEnableForm({
+  onCancel,
+  onSubmit,
+}: {
+  onCancel: () => void;
+  onSubmit: (passphrase: string) => Promise<void>;
+}) {
+  const [passphrase, setPassphrase] = useState("");
+  return (
+    <form
+      className="space-y-2 px-3 py-2.5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (passphrase !== "") void onSubmit(passphrase).then(() => setPassphrase(""));
+      }}
+    >
+      <Input
+        type="password"
+        autoComplete="off"
+        autoFocus
+        value={passphrase}
+        onChange={(event) => setPassphrase(event.target.value)}
+        aria-label={t.vaultCurrentPassphrase}
+        placeholder={t.vaultCurrentPassphrase}
+      />
+      <p className="text-caption font-normal text-label-3">{t.unlockEnableHint}</p>
+      <p className="text-caption font-normal text-label-3">{t.unlockCaveat}</p>
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="secondary" size="sm" onClick={onCancel}>
+          {t.cancel}
+        </Button>
+        <Button type="submit" variant="primary" size="sm" disabled={passphrase === ""}>
+          {t.unlockEnable}
+        </Button>
+      </div>
+    </form>
   );
 }
 

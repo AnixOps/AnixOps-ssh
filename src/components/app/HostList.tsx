@@ -1,4 +1,4 @@
-import { ChevronRight, Download, Pencil, Plus, Search, Server, Star } from "lucide-react";
+import { Cable, ChevronRight, Download, Pencil, Plus, Search, Server, Star } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,7 @@ export function HostList({
   onEdit,
   onToggleFavorite,
   onImport,
+  onNewSerial,
   searchRef,
 }: {
   hosts: Host[];
@@ -51,6 +52,7 @@ export function HostList({
   onEdit: (host: Host | null) => void;
   onToggleFavorite: (host: Host) => void;
   onImport: () => void;
+  onNewSerial: () => void;
   searchRef: Ref<HTMLInputElement>;
 }) {
   const [query, setQuery] = useState("");
@@ -94,7 +96,7 @@ export function HostList({
             className="pl-9"
           />
         </div>
-        <AddMenu onNew={() => onEdit(null)} onImport={onImport} />
+        <AddMenu onNew={() => onEdit(null)} onNewSerial={onNewSerial} onImport={onImport} />
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 pb-3">
@@ -180,8 +182,8 @@ export function HostList({
   );
 }
 
-/** The plus button: a small menu with "New host" and "Import hosts". */
-function AddMenu({ onNew, onImport }: { onNew: () => void; onImport: () => void }) {
+/** The plus button: a small menu with "New host", "New serial connection" and "Import hosts". */
+function AddMenu({ onNew, onNewSerial, onImport }: { onNew: () => void; onNewSerial: () => void; onImport: () => void }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -227,12 +229,13 @@ function AddMenu({ onNew, onImport }: { onNew: () => void; onImport: () => void 
           <motion.div
             role="menu"
             aria-label={t.addHost}
-            className="absolute top-full right-0 z-dropdown mt-1.5 w-44 origin-top-right rounded-sm bg-bg-elevated p-1 shadow-2 ring-1 ring-separator"
+            className="absolute top-full right-0 z-dropdown mt-1.5 w-52 origin-top-right rounded-sm bg-bg-elevated p-1 shadow-2 ring-1 ring-separator"
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0, transition: { duration: duration.micro, ease: ease.standard } }}
             exit={{ opacity: 0, y: -4, transition: { duration: duration.micro, ease: ease.exit } }}
           >
             <MenuItem icon={<Plus />} label={t.newHost} onClick={() => choose(onNew)} autoFocus />
+            <MenuItem icon={<Cable />} label={t.newSerialHost} onClick={() => choose(onNewSerial)} />
             <MenuItem icon={<Download />} label={t.importHosts} onClick={() => choose(onImport)} />
           </motion.div>
         )}
@@ -241,7 +244,7 @@ function AddMenu({ onNew, onImport }: { onNew: () => void; onImport: () => void 
   );
 }
 
-function MenuItem({
+export function MenuItem({
   icon,
   label,
   onClick,
@@ -344,7 +347,11 @@ export function HostTile({ host, selected = false, large = false }: { host: Host
         selected ? "bg-bg-elevated text-(--accent) shadow-1" : "bg-fill-2 text-label-2",
       )}
     >
-      <Server className={large ? "size-6" : "size-4"} strokeWidth={1.5} />
+      {host.fields.serial ? (
+        <Cable className={large ? "size-6" : "size-4"} strokeWidth={1.5} />
+      ) : (
+        <Server className={large ? "size-6" : "size-4"} strokeWidth={1.5} />
+      )}
       {host.color && (
         <span
           aria-hidden

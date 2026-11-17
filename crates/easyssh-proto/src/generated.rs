@@ -233,6 +233,135 @@ pub enum ConnectionTarget {
         #[serde(deserialize_with = "::std::option::Option::deserialize")]
         username: ::std::option::Option<::std::string::String>,
     },
+    #[serde(rename = "serial")]
+    Serial {
+        baud: i64,
+        data_bits: i64,
+        ///software = XON/XOFF, hardware = RTS/CTS.
+        flow_control: ConnectionTargetFlowControl,
+        parity: ConnectionTargetParity,
+        ///Device path: /dev/ttyUSB0, /dev/cu.usbserial-1410, COM3.
+        port: ::std::string::String,
+        stop_bits: ::std::num::NonZeroU64,
+    },
+}
+///software = XON/XOFF, hardware = RTS/CTS.
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ConnectionTargetFlowControl {
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "software")]
+    Software,
+    #[serde(rename = "hardware")]
+    Hardware,
+}
+impl ::std::fmt::Display for ConnectionTargetFlowControl {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::None => f.write_str("none"),
+            Self::Software => f.write_str("software"),
+            Self::Hardware => f.write_str("hardware"),
+        }
+    }
+}
+impl ::std::str::FromStr for ConnectionTargetFlowControl {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "none" => Ok(Self::None),
+            "software" => Ok(Self::Software),
+            "hardware" => Ok(Self::Hardware),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ConnectionTargetFlowControl {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for ConnectionTargetFlowControl {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`ConnectionTargetParity`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ConnectionTargetParity {
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "odd")]
+    Odd,
+    #[serde(rename = "even")]
+    Even,
+}
+impl ::std::fmt::Display for ConnectionTargetParity {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::None => f.write_str("none"),
+            Self::Odd => f.write_str("odd"),
+            Self::Even => f.write_str("even"),
+        }
+    }
+}
+impl ::std::str::FromStr for ConnectionTargetParity {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "none" => Ok(Self::None),
+            "odd" => Ok(Self::Odd),
+            "even" => Ok(Self::Even),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ConnectionTargetParity {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for ConnectionTargetParity {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
 }
 ///Command `daemon.shutdown_when_idle` payload. The daemon refuses new sessions (error `draining`) and exits once no session is running, even if clients stay connected. Reply: DaemonShutdownWhenIdleResult.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
@@ -1200,6 +1329,26 @@ pub struct SecretsStatusResult {
     pub passphrase: bool,
     pub password: bool,
     pub private_key: bool,
+}
+///A serial port the OS lists.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SerialPortInfo {
+    ///What the OS knows: the USB product and vendor, or the kind of port.
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub description: ::std::option::Option<::std::string::String>,
+    ///Pass it as `port` of a serial host.
+    pub path: ::std::string::String,
+}
+///Command `serial.ports` payload: list the serial ports of this machine. Reply: SerialPortsResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SerialPortsParams {}
+///`SerialPortsResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SerialPortsResult {
+    pub ports: ::std::vec::Vec<SerialPortInfo>,
 }
 ///Command `session.attach` payload. Subscribes this connection to the session's output and exit events: the reply comes first, then the buffered output from `from_seq` as `session.output` events, then (if the session already ended) `session.exit`, then live events. Attaching again replaces the earlier subscription of the same connection. Reply: SessionAttachResult.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -2309,6 +2458,17 @@ pub struct TunnelStatusEvent {
 pub struct TunnelStopParams {
     pub id: ::std::string::String,
 }
+///A biometric or OS unlock method of the vault.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct UnlockMethod {
+    ///The OS offers it on this device right now; the UI shows only available methods.
+    pub available: bool,
+    ///The user turned it on.
+    pub enabled: bool,
+    ///`windows_hello` or `touch_id`.
+    pub name: ::std::string::String,
+}
 ///Event `vault.changed` payload. Sent to every client when the vault locks or unlocks (also by auto-lock).
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
@@ -2320,6 +2480,19 @@ pub struct VaultChangedEvent {
 #[serde(deny_unknown_fields)]
 pub struct VaultCreateSharedParams {
     pub name: ::std::string::String,
+}
+///Command `vault.disable_unlock` payload: turn an unlock method off and delete its stored key copy. Reply: VaultStatus.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultDisableUnlockParams {
+    pub method: ::std::string::String,
+}
+///Command `vault.enable_unlock` payload: turn an unlock method on. The passphrase is needed once; the system asks the user to confirm. Reply: VaultStatus.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultEnableUnlockParams {
+    pub method: ::std::string::String,
+    pub passphrase: ::std::string::String,
 }
 ///Command `vault.forget_all` payload: delete every saved password, key and passphrase. Works while locked. Reply: VaultForgetAllResult.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
@@ -2735,6 +2908,9 @@ pub struct VaultStatus {
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub keychain_error: ::std::option::Option<::std::string::String>,
     pub passphrase_set: bool,
+    ///Windows Hello, Touch ID: the methods this device can offer to open a passphrase vault. Absent from older daemons.
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub unlock_methods: ::std::vec::Vec<UnlockMethod>,
     pub unlocked: bool,
 }
 ///Command `vault.status` payload. Reply: VaultStatus.
@@ -2746,6 +2922,12 @@ pub struct VaultStatusParams {}
 #[serde(deny_unknown_fields)]
 pub struct VaultUnlockParams {
     pub passphrase: ::std::string::String,
+}
+///Command `vault.unlock_with` payload: open the vault with an enabled unlock method (the system prompt appears). Reply: VaultStatus. Fails with `unlock_cancelled` when the user declines; the passphrase still works.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultUnlockWithParams {
+    pub method: ::std::string::String,
 }
 ///Command `vaults.list` payload. Reply: VaultsListResult.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]

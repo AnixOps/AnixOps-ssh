@@ -137,8 +137,15 @@ prompt jumps above. What the scripts do and the sequence format are in
   host key questions or any other prompt. A saved private key is written to a
   `0600` file in the runtime directory for the life of the `ssh` process and
   deleted afterwards (and swept on daemon start).
-- Biometric unlock (Windows Hello, Touch ID) and FIDO2 are not built yet. The
-  `UnlockProvider` trait in `easyssh-vault` is the hook point.
+- Windows Hello (Windows) and Touch ID (macOS) can unlock the vault, opt-in
+  from Settings, Vault, and shown only where the device supports them. The
+  passphrase always remains a fallback. The device key stays in the OS keychain
+  and the biometric prompt gates the read; this is a convenience gate, not a
+  hardware boundary. Linux has no biometric provider. FIDO2 is not built yet.
+- Serial ports are a session type: add a serial connection from the plus menu
+  (port, baud, data bits, parity, stop bits, flow control). Output goes through
+  the same terminal path as SSH, so scrollback and recording work. On Linux,
+  add your user to the `dialout` (or `uucp`) group to open ports.
 - The frontend only receives display data. Every `ssh`, `sftp` and tunnel
   command is built and validated in `easyssh-core`; values that could become
   extra options or commands are rejected.

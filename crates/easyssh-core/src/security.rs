@@ -1,4 +1,4 @@
-use crate::domain::{Connection, ConnectionTarget};
+use crate::domain::{Connection, ConnectionTarget, SerialSettings};
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -9,6 +9,12 @@ pub enum ValidationError {
     Unsafe { field: &'static str },
     #[error("port must be between 1 and 65535")]
     Port,
+    #[error("baud rate must be between 50 and 4000000")]
+    Baud,
+    #[error("data bits must be 5, 6, 7 or 8, and stop bits 1 or 2")]
+    SerialFraming,
+    #[error("a serial port has no SSH connection")]
+    NotSsh,
 }
 
 pub fn validate_connection(connection: &Connection) -> Result<(), ValidationError> {
@@ -29,7 +35,26 @@ pub fn validate_connection(connection: &Connection) -> Result<(), ValidationErro
             }
             Ok(())
         }
+        ConnectionTarget::Serial(serial) => validate_serial(serial),
     }
+}
+
+/// The settings of a serial port. The path is handed to the OS as is, so it
+/// only has to be a non-empty single line without NUL.
+pub fn validate_serial(serial: &SerialSettings) -> Result<(), ValidationError> {
+    validate_path(&serial.port, "serial port")?;
+    if serial.port.chars().any(char::is_control) {
+        return Err(ValidationError::Unsafe {
+            field: "serial port",
+        });
+    }
+    if !(50..=4_000_000).contains(&serial.baud) {
+        return Err(ValidationError::Baud);
+    }
+    if !(5..=8).contains(&serial.data_bits) || !(1..=2).contains(&serial.stop_bits) {
+        return Err(ValidationError::SerialFraming);
+    }
+    Ok(())
 }
 
 pub fn validate_alias(value: &str) -> Result<(), ValidationError> {
@@ -120,5 +145,71 @@ mod tests {
         assert!(validate_host("-oProxyCommand=x").is_err());
         assert!(validate_alias("host;id").is_err());
         assert!(validate_path("-target", "local path").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod serial_tests {
+    use super::*;
+    use crate::domain::{Connection, SerialSettings};
+
+    fn serial(settings: SerialSettings) -> Connection {
+        let mut connection = Connection::alias("console", "x");
+        connection.target = ConnectionTarget::Serial(settings);
+        connection
+    }
+
+    #[test]
+    fn a_default_serial_port_is_valid() {
+        validate_connection(&serial(SerialSettings::new("/dev/ttyUSB0"))).unwrap();
+        validate_connection(&serial(SerialSettings::new("COM3"))).unwrap();
+    }
+
+    #[test]
+    fn bad_serial_settings_are_refused() {
+        let mut s = SerialSettings::new("");
+        assert_eq!(
+            validate_connection(&serial(s.clone())),
+            Err(ValidationError::Required {
+                field: "serial port"
+            })
+        );
+        s.port = "/dev/tty\nUSB".into();
+        assert!(validate_connection(&serial(s.clone())).is_err());
+        s.port = "COM1".into();
+        s.baud = 10;
+        assert_eq!(
+            validate_connection(&serial(s.clone())),
+            Err(ValidationError::Baud)
+        );
+        s.baud = 9600;
+        s.data_bits = 9;
+        assert_eq!(
+            validate_connection(&serial(s.clone())),
+            Err(ValidationError::SerialFraming)
+        );
+        s.data_bits = 8;
+        s.stop_bits = 3;
+        assert_eq!(
+            validate_connection(&serial(s)),
+            Err(ValidationError::SerialFraming)
+        );
+    }
+
+    #[test]
+    fn serial_hosts_serialise_with_their_kind_and_never_become_ssh() {
+        let connection = serial(SerialSettings::new("/dev/ttyS0"));
+        let value = serde_json::to_value(&connection.target).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "kind": "serial", "port": "/dev/ttyS0", "baud": 115200,
+                "data_bits": 8, "parity": "none", "stop_bits": 1, "flow_control": "none"
+            })
+        );
+        let back: ConnectionTarget = serde_json::from_value(value).unwrap();
+        assert_eq!(back, connection.target);
+        assert!(crate::SshInvocation::for_connection(&crate::OpenSsh, &connection).is_err());
+        assert!(crate::sftp::sftp_args(&connection, false).is_err());
     }
 }

@@ -48,3 +48,5 @@ Install the build from the CI run or release, then:
 - [ ] A local tunnel turns Running and its port answers; turning it off frees the port.
 - [ ] Ctrl+Shift+K finds a host and opens it.
 - [ ] Quitting the app leaves no `ssh` or `sftp` processes behind.
+- [ ] Windows or macOS: with a passphrase set, enable Windows Hello or Touch ID in Settings, Vault; lock, then unlock with it, and cancel the prompt once (the passphrase still works).
+- [ ] With a USB serial adapter (or a loopback), a saved serial host opens from the new-tab menu, types and echoes; on Linux a port without access shows the `dialout` hint.

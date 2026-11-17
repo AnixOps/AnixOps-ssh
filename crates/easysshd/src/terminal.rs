@@ -13,6 +13,7 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc as async_mpsc;
@@ -202,9 +203,17 @@ enum RemoteCmd {
     Close,
 }
 
+/// The write side of a serial port, and the flag that tells its reader to stop.
+struct SerialIo {
+    port: Option<Box<dyn serialport::SerialPort>>,
+    closed: Arc<AtomicBool>,
+}
+
 enum Backend {
     /// A child process on a PTY (the system `ssh`, or a local shell).
     Pty(Mutex<Io>),
+    /// A serial port: the daemon reads and writes the device itself.
+    Serial(Mutex<SerialIo>),
     /// A shell channel of the built-in engine, owned by a tokio task.
     Remote(async_mpsc::UnboundedSender<RemoteCmd>),
 }
@@ -298,6 +307,54 @@ impl TermSession {
         });
         let pump = session.clone();
         std::thread::spawn(move || pump.pump(reader, &exit_rx));
+        if shell_integration {
+            let delivery = session.clone();
+            std::thread::spawn(move || delivery.deliver_integration());
+        }
+        Ok(session)
+    }
+
+    /// A session on a serial port. The port is read on its own thread, whose
+    /// output takes the same path as a PTY's (scrollback, session log, shell
+    /// integration), so everything downstream treats it like any terminal.
+    pub fn spawn_serial(
+        id: String,
+        host_id: Option<String>,
+        port: Box<dyn serialport::SerialPort>,
+        options: SpawnOptions,
+        on_exit: ExitHook,
+    ) -> Result<Arc<TermSession>, String> {
+        let SpawnOptions {
+            cols,
+            rows,
+            scrollback,
+            shell_integration,
+            recorder,
+        } = options;
+        let reader = port.try_clone().map_err(|e| e.to_string())?;
+        let closed = Arc::new(AtomicBool::new(false));
+        let size = pty_size(cols, rows);
+        let session = Arc::new(TermSession {
+            on_exit,
+            id,
+            host_id,
+            recorder,
+            state: Mutex::new(State {
+                scrollback: Scrollback::new(scrollback),
+                subscribers: Vec::new(),
+                exit: None,
+                cols: size.cols,
+                rows: size.rows,
+                integration: shell_integration.then(|| Integration::new(Instant::now())),
+            }),
+            io: Backend::Serial(Mutex::new(SerialIo {
+                port: Some(port),
+                closed: closed.clone(),
+            })),
+            engine: Mutex::new(None),
+        });
+        let pump = session.clone();
+        std::thread::spawn(move || pump.pump_serial(reader, &closed));
         if shell_integration {
             let delivery = session.clone();
             std::thread::spawn(move || delivery.deliver_integration());
@@ -426,6 +483,35 @@ impl TermSession {
         self.finish(code);
     }
 
+    /// Reads the serial port until it fails (unplugged), reaches its end or
+    /// the session is closed. The port has a short read timeout so the
+    /// `closed` flag is seen promptly.
+    fn pump_serial(&self, mut reader: Box<dyn serialport::SerialPort>, closed: &AtomicBool) {
+        let mut buffer = [0u8; 4096];
+        let mut decoder = Utf8Stream::default();
+        while !closed.load(Ordering::SeqCst) {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    let text = decoder.push(&buffer[..read]);
+                    if !text.is_empty() {
+                        self.output(&text);
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => break,
+            }
+        }
+        // A serial line has no exit status.
+        self.finish(None);
+    }
+
     fn output(&self, text: &str) {
         let mut state = lock(&self.state);
         let shown = match state.integration.as_mut() {
@@ -523,6 +609,11 @@ impl TermSession {
     fn write_raw(&self, data: &[u8]) -> Result<(), String> {
         let io = match &self.io {
             Backend::Pty(io) => io,
+            Backend::Serial(serial) => {
+                let mut serial = lock(serial);
+                let port = serial.port.as_mut().ok_or("session has ended")?;
+                return write_serial(port.as_mut(), data);
+            }
             Backend::Remote(commands) => {
                 return commands
                     .send(RemoteCmd::Write(data.to_vec()))
@@ -547,6 +638,8 @@ impl TermSession {
                 };
                 master.resize(size).map_err(|e| e.to_string())?;
             }
+            // A serial line has no window size; the terminal still wraps.
+            Backend::Serial(_) => {}
             Backend::Remote(commands) => {
                 // A shell that ended no longer cares.
                 let _ = commands.send(RemoteCmd::Resize(size.cols, size.rows));
@@ -563,6 +656,11 @@ impl TermSession {
         match &self.io {
             Backend::Pty(io) => {
                 let _ = lock(io).killer.kill();
+            }
+            Backend::Serial(serial) => {
+                let mut serial = lock(serial);
+                serial.closed.store(true, Ordering::SeqCst);
+                serial.port = None;
             }
             Backend::Remote(commands) => {
                 let _ = commands.send(RemoteCmd::Close);
@@ -642,6 +740,31 @@ impl TermSession {
     pub fn detach(&self, conn: u64) {
         lock(&self.state).subscribers.retain(|s| s.conn != conn);
     }
+}
+
+/// Writes all of `data`, riding out short stalls of a flow-controlled line.
+fn write_serial(port: &mut dyn serialport::SerialPort, mut data: &[u8]) -> Result<(), String> {
+    let mut stalls = 0;
+    while !data.is_empty() {
+        match port.write(data) {
+            Ok(0) => return Err("the serial port stopped accepting data".to_owned()),
+            Ok(written) => {
+                data = &data[written..];
+                stalls = 0;
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) && stalls < 50 =>
+            {
+                stalls += 1;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    port.flush().map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

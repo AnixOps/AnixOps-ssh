@@ -1,12 +1,13 @@
-import { LockKeyhole } from "lucide-react";
+import { Fingerprint, LockKeyhole } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Overlay } from "@/components/ui/overlay";
-import { vaultUnlock } from "@/lib/backend";
+import { vaultStatus, vaultUnlock, vaultUnlockWith, type UnlockMethod } from "@/lib/backend";
 import { t } from "@/lib/i18n";
-import { onVaultUnlockRequested, vaultErrorText } from "@/lib/vaultUi";
+import { enabledUnlockMethods } from "@/lib/serialUi";
+import { onVaultUnlockRequested, unlockWithLabel, vaultErrorText } from "@/lib/vaultUi";
 
 /** Asks for the vault passphrase when something needs a saved secret while
  *  the vault is locked (a terminal that uses a saved key, a failed save). */
@@ -15,9 +16,18 @@ export function VaultUnlockDialog() {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [methods, setMethods] = useState<UnlockMethod[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => onVaultUnlockRequested(() => setOpen(true)), []);
+  // Windows Hello and Touch ID, when the user turned them on: a button beside
+  // the passphrase, which always stays.
+  useEffect(() => {
+    if (!open) return;
+    vaultStatus()
+      .then((status) => setMethods(enabledUnlockMethods(status.unlockMethods)))
+      .catch(() => setMethods([]));
+  }, [open]);
   useEffect(() => {
     if (open) window.requestAnimationFrame(() => inputRef.current?.focus());
   }, [open]);
@@ -33,6 +43,19 @@ export function VaultUnlockDialog() {
     setError(null);
     try {
       await vaultUnlock(value);
+      close();
+    } catch (reason) {
+      setError(vaultErrorText(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const unlockWith = async (method: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await vaultUnlockWith(method);
       close();
     } catch (reason) {
       setError(vaultErrorText(reason));
@@ -67,6 +90,23 @@ export function VaultUnlockDialog() {
             <p role="alert" className="mt-2 text-caption font-normal text-danger">
               {error}
             </p>
+          )}
+          {methods.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {methods.map((method) => (
+                <Button
+                  key={method.name}
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void unlockWith(method.name)}
+                >
+                  <Fingerprint />
+                  {unlockWithLabel(method.name)}
+                </Button>
+              ))}
+            </div>
           )}
           <div className="mt-6 flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={close}>

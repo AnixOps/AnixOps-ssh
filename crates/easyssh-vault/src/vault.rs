@@ -35,6 +35,10 @@ pub enum VaultError {
     WrongPassphrase,
     #[error("{0}")]
     Passphrase(&'static str),
+    #[error("the unlock was cancelled")]
+    UnlockDeclined,
+    #[error("the system unlock failed: {0}")]
+    UnlockFailed(String),
     #[error("the operating system keychain is not available: {0}")]
     KeychainUnavailable(String),
     #[error("keychain error: {0}")]
@@ -54,6 +58,8 @@ impl VaultError {
             VaultError::Locked => "vault_locked",
             VaultError::WrongPassphrase => "wrong_passphrase",
             VaultError::Passphrase(_) => "invalid_passphrase",
+            VaultError::UnlockDeclined => "unlock_cancelled",
+            VaultError::UnlockFailed(_) => "unlock_failed",
             VaultError::KeychainUnavailable(_) => "keychain_unavailable",
             VaultError::KeyStore(_) => "keychain_error",
             VaultError::Input(_) => "invalid_command",
@@ -106,19 +112,62 @@ impl From<StoreError> for VaultError {
     }
 }
 
-/// A way to open a passphrase-protected vault without typing the passphrase.
+/// A way to open a passphrase-protected vault without typing the passphrase:
+/// Windows Hello, Touch ID, later FIDO2 keys.
 ///
-/// TODO(phase 4, later): Windows Hello, Touch ID and FIDO2 keys implement
-/// this. They must hand back the device key only after the user proved
-/// presence, keeping it in hardware-backed storage that the passphrase does
-/// not replace. Not implemented in this lane; the hook exists so the unlock
-/// path does not have to change.
+/// A provider keeps its own copy of the device key behind something the
+/// passphrase does not replace (a user-presence check in front of the OS
+/// keychain). The copy is made by [`Vault::enable_unlock`], which needs the
+/// passphrase once, and removed by [`Vault::disable_unlock`] or when the
+/// passphrase is removed. The passphrase always stays a way in.
+///
+/// `try_unlock` may block while the user answers a system prompt; the vault
+/// never calls it with its internal lock held.
 pub trait UnlockProvider: Send + Sync {
+    /// A stable identifier on the wire, for example `windows_hello`.
     fn name(&self) -> &'static str;
-    /// `Ok(None)` when this provider cannot or did not unlock (the caller
-    /// falls back to asking for the passphrase).
+    /// Whether the operating system can offer this method right now
+    /// (hardware present and set up). Unavailable providers are skipped and
+    /// not shown in the UI.
+    fn available(&self) -> bool {
+        true
+    }
+    /// Whether the user turned this method on, that is, whether a copy of
+    /// the device key is waiting behind it.
+    fn enrolled(&self) -> bool {
+        true
+    }
+    /// Stores the device key behind this method. Providers ask the user to
+    /// prove presence first, so a method that does not work is never turned
+    /// on.
+    fn enroll(&self, _key: &DeviceKey) -> Result<(), VaultError> {
+        Err(VaultError::Input(
+            "this unlock method cannot be turned on".into(),
+        ))
+    }
+    /// Removes the stored copy. Not being enrolled is not an error.
+    fn unenroll(&self) -> Result<(), VaultError> {
+        Ok(())
+    }
+    /// `Ok(None)` when the user declined or this provider could not unlock
+    /// (the caller falls back to the next provider and then the passphrase).
     fn try_unlock(&self) -> Result<Option<DeviceKey>, VaultError>;
 }
+
+/// One entry of [`VaultStatus::unlock_methods`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnlockMethod {
+    pub name: &'static str,
+    /// The OS offers it; only available methods are shown.
+    pub available: bool,
+    /// The user turned it on.
+    pub enabled: bool,
+}
+
+/// After a provider declined (or failed) on its own, it is not asked again
+/// for this long, so a background secret use does not raise a prompt storm.
+/// Explicit requests ([`Vault::unlock_with`]) ignore it.
+pub const PROVIDER_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// What the UI shows in Settings → Security.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,12 +181,16 @@ pub struct VaultStatus {
     /// False when there is no usable OS keychain (nothing can be stored).
     pub keychain_available: bool,
     pub keychain_error: Option<String>,
+    /// Biometric and OS unlock methods this vault knows about.
+    pub unlock_methods: Vec<UnlockMethod>,
 }
 
 struct Inner {
     last_used: Instant,
     auto_lock: Option<Duration>,
     providers: Vec<Arc<dyn UnlockProvider>>,
+    /// When a provider last declined an automatic attempt.
+    declined: Option<Instant>,
 }
 
 pub struct Vault {
@@ -145,6 +198,9 @@ pub struct Vault {
     cipher: Arc<DeviceKeyCipher>,
     kdf: KdfParams,
     inner: Mutex<Inner>,
+    /// Held while providers are asked, so two secret uses at once raise one
+    /// prompt, not two.
+    asking: Mutex<()>,
 }
 
 impl std::fmt::Debug for Vault {
@@ -181,7 +237,9 @@ impl Vault {
                 last_used: Instant::now(),
                 auto_lock: minutes(DEFAULT_AUTO_LOCK_MINUTES),
                 providers: Vec::new(),
+                declined: None,
             }),
+            asking: Mutex::new(()),
         }
     }
 
@@ -246,7 +304,24 @@ impl Vault {
             auto_lock_minutes: self.auto_lock_minutes(),
             keychain_available,
             keychain_error,
+            unlock_methods: self.unlock_methods(),
         }
+    }
+
+    /// The registered unlock providers and their state.
+    pub fn unlock_methods(&self) -> Vec<UnlockMethod> {
+        let providers = self.inner().providers.clone();
+        providers
+            .iter()
+            .map(|p| {
+                let available = p.available();
+                UnlockMethod {
+                    name: p.name(),
+                    available,
+                    enabled: available && p.enrolled(),
+                }
+            })
+            .collect()
     }
 
     /// Locks if the vault has been idle for the auto-lock time as of `now`.
@@ -275,32 +350,121 @@ impl Vault {
 
     /// Makes sure the key is loaded, or says why it cannot be. Counts as
     /// activity, so the idle timer restarts.
+    ///
+    /// A passphrase vault asks its enabled unlock providers in order; when
+    /// none opens it the answer is [`VaultError::Locked`] and the caller
+    /// asks for the passphrase.
     pub fn ensure_unlocked(&self) -> Result<(), VaultError> {
         self.lock_if_idle(Instant::now());
-        let mut inner = self.inner();
         if !self.cipher.is_unlocked() {
             match protect::protection(&*self.keystore)? {
                 Protection::DeviceOnly => {
                     let key = protect::open_device_key(&*self.keystore, None)?;
                     self.cipher.unlock(&key)?;
                 }
-                Protection::Passphrase => {
-                    let mut opened = false;
-                    for provider in &inner.providers {
-                        if let Some(key) = provider.try_unlock()? {
-                            self.cipher.unlock(&key)?;
-                            opened = true;
-                            break;
-                        }
-                    }
-                    if !opened {
-                        return Err(VaultError::Locked);
-                    }
-                }
+                Protection::Passphrase => self.unlock_from_providers(None)?,
             }
         }
+        self.inner().last_used = Instant::now();
+        Ok(())
+    }
+
+    /// Asks the providers (only `only` when given) for the key. Without
+    /// `only`, providers are not asked again for [`PROVIDER_COOLDOWN`] after
+    /// one declined, and every failure becomes [`VaultError::Locked`].
+    fn unlock_from_providers(&self, only: Option<&str>) -> Result<(), VaultError> {
+        let _asking = self.asking.lock().unwrap_or_else(|e| e.into_inner());
+        if self.cipher.is_unlocked() {
+            return Ok(());
+        }
+        let providers = {
+            let inner = self.inner();
+            let cooling = inner
+                .declined
+                .is_some_and(|at| at.elapsed() < PROVIDER_COOLDOWN);
+            if only.is_none() && cooling {
+                return Err(VaultError::Locked);
+            }
+            inner.providers.clone()
+        };
+        let mut failure = None;
+        let mut asked = false;
+        for provider in providers
+            .iter()
+            .filter(|p| only.is_none_or(|name| p.name() == name))
+            .filter(|p| p.available() && p.enrolled())
+        {
+            asked = true;
+            match provider.try_unlock() {
+                Ok(Some(key)) => {
+                    self.cipher.unlock(&key)?;
+                    self.inner().declined = None;
+                    return Ok(());
+                }
+                Ok(None) => {}
+                Err(error) => failure = Some(error),
+            }
+        }
+        if asked {
+            self.inner().declined = Some(Instant::now());
+        }
+        match only {
+            None => Err(VaultError::Locked),
+            Some(_) => Err(failure.unwrap_or(VaultError::UnlockDeclined)),
+        }
+    }
+
+    /// Opens the vault with one unlock method, as the user asked by pressing
+    /// its button. Raises the system prompt even when an earlier automatic
+    /// attempt was declined.
+    pub fn unlock_with(&self, method: &str) -> Result<(), VaultError> {
+        self.provider(method)?;
+        match protect::protection(&*self.keystore)? {
+            Protection::DeviceOnly => self.ensure_unlocked(),
+            Protection::Passphrase => {
+                self.unlock_from_providers(Some(method))?;
+                self.inner().last_used = Instant::now();
+                Ok(())
+            }
+        }
+    }
+
+    fn provider(&self, method: &str) -> Result<Arc<dyn UnlockProvider>, VaultError> {
+        self.inner()
+            .providers
+            .iter()
+            .find(|p| p.name() == method)
+            .cloned()
+            .ok_or_else(|| VaultError::Input(format!("unknown unlock method {method:?}")))
+    }
+
+    /// Turns an unlock method on. Needs the vault passphrase once, to read
+    /// the device key; the provider then checks the user's presence and
+    /// stores its copy.
+    pub fn enable_unlock(&self, method: &str, passphrase: &str) -> Result<(), VaultError> {
+        let provider = self.provider(method)?;
+        if !provider.available() {
+            return Err(VaultError::Input(
+                "this unlock method is not available on this device".into(),
+            ));
+        }
+        if protect::protection(&*self.keystore)? != Protection::Passphrase {
+            return Err(VaultError::Passphrase(
+                "set a vault passphrase before turning on another unlock method",
+            ));
+        }
+        let key = protect::open_device_key(&*self.keystore, Some(passphrase.as_bytes()))?;
+        provider.enroll(&key)?;
+        self.cipher.unlock(&key)?;
+        let mut inner = self.inner();
+        inner.declined = None;
         inner.last_used = Instant::now();
         Ok(())
+    }
+
+    /// Turns an unlock method off and deletes its stored copy of the key.
+    pub fn disable_unlock(&self, method: &str) -> Result<(), VaultError> {
+        self.provider(method)?.unenroll()
     }
 
     /// Unlocks a passphrase-protected vault. A vault without a passphrase
@@ -340,6 +504,12 @@ impl Vault {
     pub fn remove_passphrase(&self, passphrase: &str) -> Result<(), VaultError> {
         let key = protect::open_device_key(&*self.keystore, Some(passphrase.as_bytes()))?;
         protect::remove_passphrase(&*self.keystore, passphrase.as_bytes())?;
+        // Without a passphrase the keychain item opens the vault by itself;
+        // the copies behind the other methods are stale now.
+        let providers = self.inner().providers.clone();
+        for provider in providers {
+            let _ = provider.unenroll();
+        }
         self.cipher.unlock(&key)?;
         self.inner().last_used = Instant::now();
         Ok(())

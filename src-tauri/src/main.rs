@@ -11,6 +11,7 @@ mod files;
 mod hosts;
 mod import;
 mod known_hosts;
+mod serial;
 mod session_logs;
 mod sessions;
 mod settings;
@@ -71,6 +72,7 @@ fn main() {
             backup::sync_setup,
             backup::sync_push,
             backup::sync_pull,
+            serial::serial_ports,
             sessions::session_open,
             sessions::session_write,
             sessions::session_resize,
@@ -92,6 +94,9 @@ fn main() {
             vault::vault_status,
             vault::vault_unlock,
             vault::vault_lock,
+            vault::vault_unlock_with,
+            vault::vault_enable_unlock,
+            vault::vault_disable_unlock,
             vault::vault_set_passphrase,
             vault::vault_remove_passphrase,
             vault::vault_set_auto_lock,
