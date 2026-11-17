@@ -1,6 +1,10 @@
-import { CircleAlert, Lock, LockOpen, ShieldCheck, Trash2 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Lock, LockOpen, ShieldCheck, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
+import { Notice } from "@/components/ui/form";
+import { SettingsRow } from "@/components/ui/settings";
+import { Select } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import {
   onVaultChanged,
@@ -14,7 +18,6 @@ import {
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { requestVaultUnlock, vaultErrorText } from "@/lib/vaultUi";
-import { cn } from "@/lib/utils";
 
 const AUTO_LOCK = [5, 15, 30, 60, 240, 0];
 const MIN_PASSPHRASE = 8;
@@ -28,7 +31,7 @@ export function VaultSettings() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing>(null);
-  const [confirmForget, setConfirmForget] = useState(false);
+  const confirm = useConfirm();
 
   useEffect(() => {
     vaultStatus().then(setStatus).catch((reason) => setError(String(reason)));
@@ -48,7 +51,7 @@ export function VaultSettings() {
   };
 
   if (!status) {
-    return <p className="px-3 py-2 text-caption font-normal text-label-3">{error ?? "…"}</p>;
+    return <p className="px-3 py-2 text-callout text-label-3">{error ?? "…"}</p>;
   }
 
   const autoLockChoices = AUTO_LOCK.includes(status.autoLockMinutes)
@@ -59,27 +62,18 @@ export function VaultSettings() {
     <>
       <div className="flex items-start gap-2 px-3 py-2.5">
         <ShieldCheck className="mt-0.5 size-4 shrink-0 text-(--accent)" strokeWidth={1.5} />
-        <p className="text-caption font-normal text-label-2">
+        <p className="text-callout text-label-2">
           {status.passphraseSet ? t.vaultIntroPassphrase : t.vaultIntroKeychain}
         </p>
       </div>
       {!status.keychainAvailable && (
-        <p className="flex items-start gap-2 px-3 py-2 text-caption font-normal text-warning">
-          <CircleAlert className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
-          <span>
-            {t.vaultKeychainMissing}
-            {status.keychainError ? `: ${status.keychainError}` : ""}
-          </span>
-        </p>
+  <Notice tone="warning" className="m-3">
+          {t.vaultKeychainMissing}
+          {status.keychainError ? `: ${status.keychainError}` : ""}
+        </Notice>
       )}
 
-      <VaultRow label={t.vaultState}>
-        <span
-          className={cn("flex items-center gap-1.5 text-caption font-normal", status.unlocked ? "text-label-2" : "text-label-3")}
-        >
-          {status.unlocked ? <LockOpen className="size-3.5" strokeWidth={1.5} /> : <Lock className="size-3.5" strokeWidth={1.5} />}
-          {status.unlocked ? t.vaultUnlocked : t.vaultLocked}
-        </span>
+      <SettingsRow label={t.vaultState} hint={status.unlocked ? t.vaultUnlocked : t.vaultLocked}>
         {status.unlocked ? (
           <Button variant="secondary" size="sm" onClick={() => void run(vaultLock)}>
             <Lock />
@@ -91,18 +85,13 @@ export function VaultSettings() {
             {t.vaultUnlock}
           </Button>
         )}
-      </VaultRow>
+      </SettingsRow>
 
-      <VaultRow label={t.vaultPassphrase} hint={status.passphraseSet ? t.vaultPassphraseSet : t.vaultPassphraseUnset}>
+      <SettingsRow label={t.vaultPassphrase} hint={status.passphraseSet ? t.vaultPassphraseSet : t.vaultPassphraseUnset}>
         {status.passphraseSet ? (
-          <>
-            <Button variant="secondary" size="sm" onClick={() => setEditing(editing === "change" ? null : "change")}>
-              {t.vaultChangePassphrase}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setEditing(editing === "remove" ? null : "remove")}>
-              {t.vaultRemovePassphrase}
-            </Button>
-          </>
+          <Button variant="secondary" size="sm" onClick={() => setEditing(editing === "change" ? null : "change")}>
+            {t.vaultChangePassphrase}
+          </Button>
         ) : (
           <Button
             variant="secondary"
@@ -113,7 +102,14 @@ export function VaultSettings() {
             {t.vaultSetPassphrase}
           </Button>
         )}
-      </VaultRow>
+      </SettingsRow>
+      {status.passphraseSet && (
+        <SettingsRow label={t.vaultRemovePassphrase}>
+          <Button variant="danger" size="sm" onClick={() => setEditing(editing === "remove" ? null : "remove")}>
+            {t.vaultRemovePassphrase}
+          </Button>
+        </SettingsRow>
+      )}
       {editing && (
         <PassphraseForm
           mode={editing}
@@ -129,63 +125,42 @@ export function VaultSettings() {
         />
       )}
 
-      <VaultRow label={t.vaultAutoLock} hint={t.vaultAutoLockHint}>
-        <select
+      <SettingsRow label={t.vaultAutoLock} hint={t.vaultAutoLockHint}>
+        <Select
           aria-label={t.vaultAutoLock}
           value={status.autoLockMinutes}
           onChange={(event) => void run(() => vaultSetAutoLock(Number(event.target.value)))}
-          className="h-7 rounded-xs bg-fill-1 px-2 text-callout text-label-1 outline-none focus-visible:ring-2 focus-visible:ring-(--accent)"
+          className="h-7 w-auto"
         >
           {autoLockChoices.map((minutes) => (
             <option key={minutes} value={minutes}>
               {minutes === 0 ? t.vaultNever : `${minutes} ${t.vaultMinutes}`}
             </option>
           ))}
-        </select>
-      </VaultRow>
+        </Select>
+      </SettingsRow>
 
-      <div className="space-y-2 px-3 py-2.5">
-        <p className="text-caption font-normal text-label-3">{t.vaultForgetHint}</p>
+      <SettingsRow label={t.vaultForgetAll} hint={t.vaultForgetHint}>
         <Button
-          variant={confirmForget ? "destructive" : "secondary"}
+          variant="danger"
           size="sm"
-          onClick={() => {
-            if (!confirmForget) {
-              setConfirmForget(true);
-              return;
-            }
-            setConfirmForget(false);
+          onClick={async () => {
+            const typed = t.vaultForgetWord;
+            if (!(await confirm({ title: t.vaultForgetTitle, body: t.vaultForgetBody, verb: t.vaultForgetButton, typed }))) return;
             setError(null);
             vaultForgetAll()
               .then((hosts) => setNotice(`${t.vaultForgotten}: ${hosts}`))
               .catch((reason) => setError(String(reason)));
           }}
-          onBlur={() => setConfirmForget(false)}
         >
           <Trash2 />
-          {confirmForget ? t.vaultForgetConfirm : t.vaultForgetAll}
+          {t.vaultForgetButton}
         </Button>
-      </div>
+      </SettingsRow>
 
-      {error && (
-        <p role="alert" className="px-3 py-2 text-caption font-normal text-danger">
-          {error}
-        </p>
-      )}
-      {notice && <p className="px-3 py-2 text-caption font-normal text-label-2">{notice}</p>}
+      {error && <Notice className="m-3">{error}</Notice>}
+      {notice && <p role="status" className="px-4 py-2 text-callout text-label-2">{notice}</p>}
     </>
-  );
-}
-
-function VaultRow({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return (
-    <div className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-1.5">
-      <div className="min-w-0 flex-1 basis-32">
-        <p className="text-callout text-label-1">{label}</p>
-        {hint && <p className="text-caption font-normal text-label-2">{hint}</p>}
-      </div>
-      <div className="flex items-center gap-2">{children}</div>
-    </div>
   );
 }
 
@@ -230,8 +205,8 @@ function PassphraseForm({
       {needsCurrent && field(t.vaultCurrentPassphrase, current, setCurrent)}
       {needsNew && field(t.vaultNewPassphrase, next, setNext)}
       {needsNew && field(t.vaultRepeatPassphrase, again, setAgain)}
-      {problem && <p className="text-caption font-normal text-danger">{problem}</p>}
-      {needsNew && <p className="text-caption font-normal text-label-3">{t.vaultPassphraseWarning}</p>}
+      {problem && <Notice>{problem}</Notice>}
+      {needsNew && <p className="text-callout text-label-3">{t.vaultPassphraseWarning}</p>}
       <div className="flex justify-end gap-2">
         <Button type="button" variant="secondary" size="sm" onClick={onCancel}>
           {t.cancel}

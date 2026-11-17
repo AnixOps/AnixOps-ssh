@@ -64,7 +64,7 @@ export function VaultUnlockDialog() {
             className="mt-5"
           />
           {error && (
-            <p role="alert" className="mt-2 text-caption font-normal text-danger">
+            <p role="alert" className="mt-2 text-callout text-danger">
               {error}
             </p>
           )}

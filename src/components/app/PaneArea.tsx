@@ -132,11 +132,11 @@ function PaneButton({
   return (
     <Tooltip label={`${label} (${hint})`}>
       <Button
-        variant="ghost"
+        variant="quiet"
         size="icon-sm"
         aria-label={label}
         onClick={onClick}
-        className="bg-bg-elevated/80 shadow-1 ring-1 ring-separator"
+        className="bg-bg-elevated shadow-1 ring-1 ring-separator"
       >
         {children}
       </Button>

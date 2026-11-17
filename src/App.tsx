@@ -1,5 +1,4 @@
-import { CircleAlert } from "lucide-react";
-import { AnimatePresence, MotionConfig, motion } from "motion/react";
+import { AnimatePresence, MotionConfig } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AskpassDialog } from "@/components/app/AskpassDialog";
 import { HostKeyDialog } from "@/components/app/HostKeyDialog";
@@ -18,6 +17,9 @@ import { TeamVaults } from "@/components/app/TeamVaults";
 import { TabBar, type Tab } from "@/components/app/TabBar";
 import { PaneArea } from "@/components/app/PaneArea";
 import type { SessionStatus } from "@/components/app/TerminalView";
+import { ShortcutList } from "@/components/app/ShortcutList";
+import { ConfirmProvider } from "@/components/ui/confirm";
+import { Notice } from "@/components/ui/form";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -27,6 +29,7 @@ import {
   onHostsChanged,
   setFavorite,
   sshStatus,
+  deleteHost,
   type Host,
   type HostsSnapshot,
   type SshStatus,
@@ -34,7 +37,6 @@ import {
 import { setPanes, toggleGlobalBroadcast, toggleTabBroadcast, useBroadcast } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
 import { loadLayout, planRestore, saveLayout, setWindowLabel } from "@/lib/layoutStore";
-import { duration, ease } from "@/lib/motion";
 import {
   closeInState,
   cycleFocus,
@@ -53,7 +55,7 @@ import {
 } from "@/lib/panes";
 import { loadSettings } from "@/lib/settings";
 import { FirstRunPrompt } from "@/components/app/FirstRunPrompt";
-import { appShortcut, type AppShortcut } from "@/lib/shortcuts";
+import { appShortcut, inTerminal, type AppShortcut } from "@/lib/shortcuts";
 import { terminalFor } from "@/lib/terminals";
 
 let nextTab = 1;
@@ -100,6 +102,7 @@ export function App() {
   const [editing, setEditing] = useState<Host | null | undefined>(undefined);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [status, setStatus] = useState<SshStatus | null>(null);
 
   const checkSsh = useCallback(() => {
@@ -129,6 +132,15 @@ export function App() {
   const toggleFavorite = useCallback(
     (host: Host) => {
       setFavorite(host.id, !host.favorite)
+        .then(reload)
+        .catch((reason) => setLoadError(String(reason)));
+    },
+    [reload],
+  );
+
+  const removeHost = useCallback(
+    (host: Host) => {
+      deleteHost(host.id)
         .then(reload)
         .catch((reason) => setLoadError(String(reason)));
     },
@@ -319,7 +331,19 @@ export function App() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const shortcut = appShortcut(event);
+      const here = inTerminal(event);
       if (shortcut === "search-hosts") setPaletteOpen(true);
+      else if (shortcut === "shortcut-list") setShortcutsOpen(true);
+      else if (shortcut === "settings") setNav("settings");
+      else if (shortcut === "go-hosts") setNav("hosts");
+      else if (shortcut === "go-forwards") setNav("forwards");
+      else if (shortcut === "go-snippets") setNav("snippets");
+      else if (shortcut === "go-team") setNav("team");
+      else if (shortcut === "import") setImporting(true);
+      else if (shortcut === "new-host") setEditing(null);
+      // In a terminal "find" is the terminal's own; elsewhere it finds a host.
+      else if (shortcut === "find" && !here) focusSearch();
+      else if (shortcut === "find") return;
       else if (shortcut === "new-local") openLocal();
       // Closing acts on the focused pane first; the last pane closes the tab.
       else if (shortcut === "close-tab" && activeTab) closePane(activeTab.key, activeTab.panes.focused);
@@ -340,17 +364,13 @@ export function App() {
 
   return (
     <MotionConfig reducedMotion="user">
-    <TooltipProvider delayDuration={400}>
+    <TooltipProvider delayDuration={500}>
+    <ConfirmProvider>
       <div className="flex h-full">
         <FirstRunPrompt />
         <IconRail active={nav} onChange={setNav} />
-        {/* Switching sections cross-fades the second column. */}
-        <motion.div
-          key={nav}
-          className="flex shrink-0"
-          initial={{ opacity: 0, x: -6 }}
-          animate={{ opacity: 1, x: 0, transition: { duration: duration.toggle, ease: ease.standard } }}
-        >
+        {/* Switching sections is immediate in a desktop window (M9). */}
+        <div key={nav} className="flex shrink-0">
         {nav === "hosts" ? (
           <HostList
             hosts={snapshot.hosts}
@@ -359,6 +379,7 @@ export function App() {
             onOpen={openHost}
             onEdit={setEditing}
             onToggleFavorite={toggleFavorite}
+            onDelete={removeHost}
             onImport={() => setImporting(true)}
             searchRef={searchRef}
           />
@@ -371,7 +392,7 @@ export function App() {
         ) : (
           <SettingsPanel status={status} onRecheck={checkSsh} onDataChanged={reload} />
         )}
-        </motion.div>
+        </div>
         <main className="flex min-w-0 flex-1 flex-col bg-bg">
           {tabs.length > 0 && (
             <TabBar
@@ -385,15 +406,9 @@ export function App() {
             />
           )}
           {loadError && (
-            <p
-              role="alert"
-              className="m-4 flex items-start gap-2 rounded-sm bg-danger-soft px-3 py-2 text-callout text-danger"
-            >
-              <CircleAlert className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
-              <span>
-                {t.loadFailed}: {loadError}
-              </span>
-            </p>
+            <Notice className="m-4">
+              {t.loadFailed}: {loadError}
+            </Notice>
           )}
           <div className="min-h-0 flex-1">
             {tabs.map((tab) => (
@@ -470,6 +485,8 @@ export function App() {
       <AskpassDialog />
       <HostKeyDialog />
       <VaultUnlockDialog />
+      <AnimatePresence>{shortcutsOpen && <ShortcutList onClose={() => setShortcutsOpen(false)} />}</AnimatePresence>
+    </ConfirmProvider>
     </TooltipProvider>
     </MotionConfig>
   );

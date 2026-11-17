@@ -50,20 +50,20 @@ export function SecretField({
             {...common}
             rows={4}
             className={cn(
-              "w-full resize-none rounded-sm bg-fill-1 px-3 py-2 font-mono text-caption text-label-1 outline-none placeholder:text-label-3 focus-visible:ring-2 focus-visible:ring-(--accent) disabled:opacity-60",
+              "w-full resize-none rounded-sm bg-fill-1 px-3 py-2 font-mono text-callout text-label-1 outline-none placeholder:text-label-3 focus-visible:ring-2 focus-visible:ring-(--accent) disabled:opacity-60",
               !shown && "[-webkit-text-security:disc]",
             )}
           />
         ) : (
           <Input {...common} type={shown ? "text" : "password"} className="font-mono disabled:opacity-60" />
         )}
-        {cleared && <p className="mt-1 text-caption font-normal text-label-3">{t.secretWillClear}</p>}
+        {cleared && <p className="mt-1 text-callout text-label-3">{t.secretWillClear}</p>}
         {actions}
       </div>
       <Tooltip label={shown ? t.secretHide : t.secretShow}>
         <Button
           type="button"
-          variant="ghost"
+          variant="quiet"
           size="icon"
           aria-label={`${shown ? t.secretHide : t.secretShow}: ${label}`}
           aria-pressed={shown}
@@ -75,7 +75,7 @@ export function SecretField({
       <Tooltip label={cleared ? t.secretUndo : t.secretClear}>
         <Button
           type="button"
-          variant="ghost"
+          variant="quiet"
           size="icon"
           aria-label={`${cleared ? t.secretUndo : t.secretClear}: ${label}`}
           disabled={!hasSomething && !cleared}

@@ -1,12 +1,13 @@
-import { ChevronRight, Download, Pencil, Plus, Search, Server, Star } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
+import { ChevronRight, Copy, Download, Pencil, Plus, Search, Server, Star, Trash2 } from "lucide-react";
+import { useMemo, useState, type KeyboardEvent, type Ref } from "react";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
 import { Input } from "@/components/ui/input";
+import { Menu, type MenuEntry } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { hostColor, isTauri, type Group, type Host } from "@/lib/backend";
 import { t } from "@/lib/i18n";
-import { duration, ease, reflow, slide } from "@/lib/motion";
+import { shortcutHint } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 
 interface Section {
@@ -40,6 +41,7 @@ export function HostList({
   onOpen,
   onEdit,
   onToggleFavorite,
+  onDelete,
   onImport,
   searchRef,
 }: {
@@ -50,6 +52,7 @@ export function HostList({
   /** null creates a new host. */
   onEdit: (host: Host | null) => void;
   onToggleFavorite: (host: Host) => void;
+  onDelete: (host: Host) => void;
   onImport: () => void;
   searchRef: Ref<HTMLInputElement>;
 }) {
@@ -77,9 +80,54 @@ export function HostList({
       return next;
     });
 
+  // The list is one Tab stop; arrows move between rows (K7). The selected host, or
+  // the first row, is the stop.
+  const visible = normalized
+    ? matches
+    : sections.filter((section) => !collapsed.has(section.id)).flatMap((section) => section.hosts);
+  const stopId = visible.find((host) => host.id === selectedId)?.id ?? visible[0]?.id;
+  // Hosts repeat under "收藏"; only the first row for the stop's host is tabbable.
+  let stopTaken = false;
+  const isStop = (host: Host) => {
+    if (host.id !== stopId || stopTaken) return false;
+    stopTaken = true;
+    return true;
+  };
+  const moveRow = (event: KeyboardEvent<HTMLDivElement>) => {
+    const rows = [...event.currentTarget.querySelectorAll<HTMLElement>("[data-host-row]")];
+    const index = rows.indexOf(document.activeElement as HTMLElement);
+    if (index < 0) return;
+    const to =
+      event.key === "ArrowDown"
+        ? index + 1
+        : event.key === "ArrowUp"
+          ? index - 1
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? rows.length - 1
+              : null;
+    if (to === null) return;
+    event.preventDefault();
+    rows[Math.max(0, Math.min(rows.length - 1, to))]?.focus();
+  };
+
+  const row = (host: Host) => (
+    <HostRow
+      key={host.id}
+      host={host}
+      tabStop={isStop(host)}
+      selected={host.id === selectedId}
+      onOpen={onOpen}
+      onEdit={onEdit}
+      onToggleFavorite={onToggleFavorite}
+      onDelete={onDelete}
+    />
+  );
+
   return (
     <aside className="material-sidebar flex w-72 shrink-0 flex-col border-r">
-      <div className="flex items-center gap-1.5 px-3 pt-3 pb-2">
+      <div className="flex items-center gap-2 px-3 pt-3 pb-2">
         <div className="relative min-w-0 flex-1">
           <Search
             className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-label-3"
@@ -89,20 +137,38 @@ export function HostList({
             ref={searchRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && query) {
+                event.stopPropagation();
+                setQuery("");
+              } else if (event.key === "ArrowDown") {
+                event.preventDefault();
+                document.querySelector<HTMLElement>("[data-host-row]")?.focus();
+              }
+            }}
             placeholder={t.searchHosts}
             aria-label={t.searchHosts}
             className="pl-9"
           />
         </div>
-        <AddMenu onNew={() => onEdit(null)} onImport={onImport} />
+        <Menu
+          label={t.addHost}
+          icon={<Plus />}
+          variant="secondary"
+          size="icon"
+          items={[
+            { key: "new", label: t.newHost, icon: <Plus />, shortcut: shortcutHint("new-host"), onSelect: () => onEdit(null) },
+            { key: "import", label: t.importHosts, icon: <Download />, shortcut: shortcutHint("import"), onSelect: onImport },
+          ]}
+        />
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2 pb-3">
+      <div className="flex-1 overflow-y-auto px-2 pb-3" onKeyDown={moveRow}>
         {hosts.length === 0 ? (
           <div className="px-3 pt-10 text-center">
             <Server className="mx-auto mb-3 size-12 text-label-3" strokeWidth={1.5} />
-            <p className="text-callout font-semibold text-label-1">{t.noHosts}</p>
-            <p className="mt-1 text-caption font-normal text-label-2">{t.noHostsHint}</p>
+            <p className="text-callout font-medium text-label-1">{t.noHosts}</p>
+            <p className="mt-1 text-callout text-label-2">{t.noHostsHint}</p>
             <div className="mt-4 flex items-center justify-center gap-2">
               <Button variant="primary" size="sm" onClick={() => onEdit(null)}>
                 <Plus />
@@ -118,218 +184,145 @@ export function HostList({
           matches.length === 0 ? (
             <p className="px-3 pt-6 text-center text-callout text-label-2">{t.noMatches}</p>
           ) : (
-            <ul className="mt-1 space-y-0.5">
-              {matches.map((host) => (
-                <HostRow key={host.id} host={host} group="search" selected={host.id === selectedId} onOpen={onOpen} onEdit={onEdit} onToggleFavorite={onToggleFavorite} />
-              ))}
-            </ul>
+            <ul className="mt-1 space-y-0.5">{matches.map(row)}</ul>
           )
         ) : (
           sections.map((section) => {
             const isCollapsed = collapsed.has(section.id);
             return (
-              <motion.section key={section.id} layout="position" transition={reflow} className="mt-2">
+              <section key={section.id} className="mt-2">
                 <button
                   type="button"
                   onClick={() => toggle(section.id)}
                   aria-expanded={!isCollapsed}
-                  className="flex h-7 w-full items-center gap-1 rounded-xs px-2 text-caption text-label-2 hover:text-label-1"
+                  className="flex h-7 w-full items-center gap-1 rounded-xs px-2 text-callout text-label-2 hover:text-label-1"
                 >
                   <ChevronRight
-                    className={cn(
-                      "size-3.5 transition-transform duration-toggle ease-standard",
-                      !isCollapsed && "rotate-90",
-                    )}
+                    className={cn("size-4 transition-transform duration-toggle ease-standard", !isCollapsed && "rotate-90")}
                     strokeWidth={1.5}
                   />
                   <span className="truncate">{section.title}</span>
-                  <span className="ml-auto font-normal text-label-3">{section.hosts.length}</span>
+                  <span className="ml-auto text-label-3 tabular-nums">{section.hosts.length}</span>
                 </button>
-                <AnimatePresence initial={false}>
-                {!isCollapsed && (
-                  <motion.ul
-                    className="space-y-0.5"
-                    initial={{ opacity: 0, y: -4 }}
-                    animate={{ opacity: 1, y: 0, transition: { duration: duration.toggle, ease: ease.standard } }}
-                    exit={{ opacity: 0, y: -4, transition: { duration: duration.micro, ease: ease.exit } }}
-                  >
-                    {section.hosts.map((host) => (
-                      <HostRow
-                        key={host.id}
-                        host={host}
-                        group={section.id}
-                        selected={host.id === selectedId}
-                        onOpen={onOpen}
-                        onEdit={onEdit}
-                        onToggleFavorite={onToggleFavorite}
-                      />
-                    ))}
-                  </motion.ul>
-                )}
-                </AnimatePresence>
-              </motion.section>
+                {!isCollapsed && <ul className="space-y-0.5">{section.hosts.map(row)}</ul>}
+              </section>
             );
           })
         )}
       </div>
 
-      {!isTauri && (
-        <p className="border-t px-4 py-2 text-caption font-normal text-label-3">{t.previewData}</p>
-      )}
+      {!isTauri && <p className="border-t px-4 py-2 text-callout text-label-3">{t.previewData}</p>}
     </aside>
-  );
-}
-
-/** The plus button: a small menu with "New host" and "Import hosts". */
-function AddMenu({ onNew, onImport }: { onNew: () => void; onImport: () => void }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
-
-  const choose = (run: () => void) => {
-    setOpen(false);
-    run();
-  };
-
-  return (
-    <div
-      ref={rootRef}
-      className="relative"
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && open) {
-          event.stopPropagation();
-          setOpen(false);
-        }
-      }}
-    >
-      <Tooltip label={t.addHost}>
-        <Button
-          variant="secondary"
-          size="icon"
-          aria-label={t.addHost}
-          aria-haspopup="menu"
-          aria-expanded={open}
-          onClick={() => setOpen((current) => !current)}
-        >
-          <Plus />
-        </Button>
-      </Tooltip>
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            role="menu"
-            aria-label={t.addHost}
-            className="absolute top-full right-0 z-dropdown mt-1.5 w-44 origin-top-right rounded-sm bg-bg-elevated p-1 shadow-2 ring-1 ring-separator"
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0, transition: { duration: duration.micro, ease: ease.standard } }}
-            exit={{ opacity: 0, y: -4, transition: { duration: duration.micro, ease: ease.exit } }}
-          >
-            <MenuItem icon={<Plus />} label={t.newHost} onClick={() => choose(onNew)} autoFocus />
-            <MenuItem icon={<Download />} label={t.importHosts} onClick={() => choose(onImport)} />
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-function MenuItem({
-  icon,
-  label,
-  onClick,
-  autoFocus,
-}: {
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-  autoFocus?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      autoFocus={autoFocus}
-      onClick={onClick}
-      className="flex h-8 w-full items-center gap-2 rounded-xs px-2 text-left text-callout text-label-1 hover:bg-fill-1 focus-visible:bg-fill-1 focus-visible:outline-none [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:stroke-[1.5] [&_svg]:text-label-2"
-    >
-      {icon}
-      {label}
-    </button>
   );
 }
 
 function HostRow({
   host,
-  group,
+  tabStop,
   selected,
   onOpen,
   onEdit,
   onToggleFavorite,
+  onDelete,
 }: {
   host: Host;
-  /** Selection slides within a section; favorites repeat hosts elsewhere. */
-  group: string;
+  tabStop: boolean;
   selected: boolean;
   onOpen: (host: Host) => void;
   onEdit: (host: Host) => void;
   onToggleFavorite: (host: Host) => void;
+  onDelete: (host: Host) => void;
 }) {
   const saved = host.source === "saved";
+  const confirm = useConfirm();
+  const remove = async () => {
+    const title = t.hostDeleteTitle.replace("{name}", host.name);
+    if (await confirm({ title, body: t.hostDeleteBody, verb: t.delete })) onDelete(host);
+  };
+  const menu: MenuEntry[] = [
+    {
+      key: "edit",
+      label: saved ? t.editHost : t.saveToHosts,
+      icon: <Pencil />,
+      shortcut: saved ? shortcutHint("rename") : undefined,
+      onSelect: () => onEdit(host),
+    },
+    ...(saved
+      ? [
+          {
+            key: "favorite",
+            label: host.favorite ? t.removeFavorite : t.addFavorite,
+            icon: <Star />,
+            onSelect: () => onToggleFavorite(host),
+          },
+        ]
+      : []),
+    { key: "copy", label: t.copyAddress, icon: <Copy />, onSelect: () => void navigator.clipboard?.writeText(host.target) },
+    ...(saved
+      ? [
+          "separator" as const,
+          { key: "delete", label: t.delete, icon: <Trash2 />, danger: true, shortcut: shortcutHint("remove"), onSelect: () => void remove() },
+        ]
+      : []),
+  ];
   return (
-    <li className="group relative">
+    <li
+      className="group relative"
+      onKeyDown={(event) => {
+        // Keys on a focused row (keyboard.md, lists): F2 edits, Delete removes after a
+        // confirmation, the menu key opens the row menu.
+        if (event.key === "F2" && saved) onEdit(host);
+        else if (event.key === "Delete" && saved) void remove();
+        else if ((event.key === "F10" && event.shiftKey) || event.key === "ContextMenu")
+          event.currentTarget.querySelector<HTMLElement>("[data-row-menu]")?.click();
+        else return;
+        event.preventDefault();
+      }}
+    >
       <button
         type="button"
+        data-host-row
+        tabIndex={tabStop ? 0 : -1}
         onClick={() => onOpen(host)}
         aria-current={selected ? "true" : undefined}
         className={cn(
-          "relative flex w-full items-center gap-3 rounded-sm py-1.5 pr-16 pl-2 text-left transition-colors duration-micro ease-standard",
-          !selected && "hover:bg-fill-1",
+          "relative flex w-full items-center gap-3 rounded-sm py-1.5 pr-16 pl-2 text-left",
+          selected ? "bg-accent-soft" : "hover:bg-fill-1",
         )}
       >
-        {selected && (
-          <motion.span layoutId={`host-selected-${group}`} transition={slide} className="absolute inset-0 rounded-sm bg-accent-soft" />
-        )}
         <HostTile host={host} selected={selected} />
         <span className="relative min-w-0 flex-1">
-          <span className="block truncate text-callout font-medium text-label-1">{host.name}</span>
-          <span className="block truncate font-mono text-caption font-normal text-label-2">{host.target}</span>
+          <span className="block truncate text-callout font-medium text-label-1" title={host.name}>
+            {host.name}
+          </span>
+          <span className="block truncate font-mono text-callout text-label-2" title={host.target}>
+            {host.target}
+          </span>
         </span>
       </button>
-      <span className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center">
-        <Tooltip label={saved ? t.editHost : t.saveToHosts}>
-          <button
-            type="button"
-            aria-label={saved ? t.editHost : t.saveToHosts}
-            onClick={() => onEdit(host)}
-            className="flex size-7 items-center justify-center rounded-xs text-label-3 opacity-0 group-hover:opacity-100 hover:bg-fill-2 hover:text-label-1 focus-visible:opacity-100"
-          >
-            <Pencil className="size-3.5" strokeWidth={1.5} />
-          </button>
-        </Tooltip>
+      {/* S3: one icon action and the "more" menu, in space that is always reserved so
+          nothing moves under the pointer (M13). */}
+      <span
+        className={cn(
+          "absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center transition-opacity duration-micro",
+          !host.favorite && "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
+        )}
+      >
         {saved && (
           <Tooltip label={host.favorite ? t.removeFavorite : t.addFavorite}>
-            <button
-              type="button"
+            <Button
+              variant="quiet"
+              size="icon-sm"
+              tabIndex={-1}
               aria-label={host.favorite ? t.removeFavorite : t.addFavorite}
               aria-pressed={host.favorite}
               onClick={() => onToggleFavorite(host)}
-              className={cn(
-                "flex size-7 items-center justify-center rounded-xs hover:bg-fill-2 focus-visible:opacity-100",
-                host.favorite ? "text-label-3" : "text-label-3 opacity-0 group-hover:opacity-100",
-              )}
             >
-              <Star className={cn("size-3.5", host.favorite && "fill-current")} strokeWidth={1.5} />
-            </button>
+              <Star className={cn(host.favorite && "fill-current")} />
+            </Button>
           </Tooltip>
         )}
+        <Menu label={t.more} items={menu} buttonProps={{ tabIndex: -1, "data-row-menu": "" }} />
       </span>
     </li>
   );

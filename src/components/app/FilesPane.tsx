@@ -22,6 +22,9 @@ import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useConfirm } from "@/components/ui/confirm";
+import { Notice } from "@/components/ui/form";
+import { Menu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   cancelTransfer,
@@ -35,7 +38,8 @@ import {
   type TransferEvent,
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
-import { appear, duration, ease, reflow } from "@/lib/motion";
+import { shortcutHint } from "@/lib/shortcuts";
+import { appear, duration, ease } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 interface TransferItem {
@@ -96,7 +100,7 @@ export function FilesPane({
   const [actionError, setActionError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
-  const [confirming, setConfirming] = useState<string | null>(null);
+  const confirm = useConfirm();
   const [transfers, setTransfers] = useState<TransferItem[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const paneRef = useRef<HTMLElement>(null);
@@ -114,7 +118,6 @@ export function FilesPane({
         cwdRef.current = path;
         setSelected(null);
         setEditing(null);
-        setConfirming(null);
       } catch (reason) {
         setActionError(String(reason));
         setPathInput(cwdRef.current);
@@ -245,9 +248,9 @@ export function FilesPane({
       <PaneFrame paneRef={paneRef} visible={visible} onClose={onClose}>
         <div className="flex flex-1 flex-col items-center px-6 pt-16 text-center">
           <CircleAlert className="mb-3 size-12 text-label-3" strokeWidth={1.5} />
-          <p className="text-callout font-semibold text-label-1">{t.filesFailed}</p>
-          <p className="selectable mt-2 text-caption font-normal break-all text-label-2">{connectError}</p>
-          <p className="mt-3 text-caption font-normal text-label-2">{t.filesAuthHint}</p>
+          <p className="text-callout font-medium text-label-1">{t.filesFailed}</p>
+          <p className="selectable mt-2 text-callout break-all text-label-2">{connectError}</p>
+          <p className="mt-3 text-callout text-label-2">{t.filesAuthHint}</p>
           <Button variant="secondary" size="sm" className="mt-5" onClick={() => setAttempt((n) => n + 1)}>
             <RotateCw />
             {t.retry}
@@ -302,18 +305,17 @@ export function FilesPane({
           }}
           aria-label={t.path}
           spellCheck={false}
-          className="h-8 font-mono text-caption font-normal"
+          className="h-8 font-mono text-callout"
         />
       </div>
 
       {actionError && (
-        <p role="alert" className="mx-3 mb-2 flex items-start gap-2 rounded-sm bg-danger-soft px-3 py-2 text-caption font-normal text-danger">
-          <CircleAlert className="mt-px size-4 shrink-0" strokeWidth={1.5} />
-          <span className="selectable min-w-0 flex-1 break-all">{actionError}</span>
-          <button type="button" aria-label={t.cancel} onClick={() => setActionError(null)} className="shrink-0">
-            <X className="size-4" strokeWidth={1.5} />
-          </button>
-        </p>
+        <div className="mx-3 mb-2 flex items-start gap-1">
+          <Notice className="min-w-0 flex-1 break-all">{actionError}</Notice>
+          <IconButton label={t.close} onClick={() => setActionError(null)}>
+            <X />
+          </IconButton>
+        </div>
       )}
 
       <div
@@ -352,17 +354,17 @@ export function FilesPane({
               key={entry.name}
               entry={entry}
               selected={selected === entry.name}
-              confirming={confirming === entry.name}
               onSelect={() => setSelected(entry.name)}
               onOpen={() => open(entry)}
               onDownload={() => void transfer(false, joinPath(cwd, entry.name), undefined, entry.kind === "file" ? entry.size : null)}
               onRename={() => setEditing({ kind: "rename", from: entry.name, value: entry.name })}
-              onDelete={() => setConfirming(entry.name)}
-              onConfirmDelete={() => {
-                setConfirming(null);
-                void run(() => handle.remove(joinPath(cwd, entry.name), entry.kind === "directory"));
+              onDelete={async () => {
+                const directory = entry.kind === "directory";
+                const title = t.fileDeleteTitle.replace("{name}", entry.name);
+                const body = directory ? t.folderDeleteBody : t.fileDeleteBody;
+                if (await confirm({ title, body, verb: t.delete }))
+                  void run(() => handle.remove(joinPath(cwd, entry.name), directory));
               }}
-              onCancelDelete={() => setConfirming(null)}
             />
           ),
         )}
@@ -380,15 +382,16 @@ export function FilesPane({
       {transfers.length > 0 && (
         <section className="max-h-56 shrink-0 overflow-y-auto border-t px-2 pt-2 pb-3">
           <div className="flex items-center px-2 pb-1">
-            <h3 className="text-caption text-label-2">{t.transfers}</h3>
+            <h3 className="text-callout text-label-2">{t.transfers}</h3>
             {finished && (
-              <button
-                type="button"
-                className="ml-auto text-caption font-normal text-label-2 hover:text-label-1"
+              <Button
+                variant="quiet"
+                size="sm"
+                className="ml-auto"
                 onClick={() => setTransfers((current) => current.filter((item) => item.state === "running"))}
               >
                 {t.clearFinished}
-              </button>
+              </Button>
             )}
           </div>
           <ul className="space-y-1">
@@ -425,16 +428,16 @@ function PaneFrame({
       ref={paneRef}
       aria-label={t.files}
       aria-hidden={!visible}
-      className="material-sidebar flex w-[400px] shrink-0 flex-col border-l"
-      initial={{ opacity: 0, x: 24 }}
+      className="material-sidebar flex w-100 shrink-0 flex-col border-l"
+      initial={{ opacity: 0 }}
       animate={
         visible
-          ? { opacity: 1, x: 0, display: "flex", transition: { duration: duration.overlay, ease: ease.emphasized } }
-          : { opacity: 0, x: 24, transitionEnd: { display: "none" }, transition: { duration: 0.18, ease: ease.exit } }
+          ? { opacity: 1, display: "flex", transition: { duration: duration.toggle, ease: ease.standard } }
+          : { opacity: 0, transitionEnd: { display: "none" }, transition: { duration: duration.micro, ease: ease.exit } }
       }
     >
       <div className="flex h-11 shrink-0 items-center gap-0.5 border-b pr-2 pl-4">
-        <h2 className="mr-auto text-callout font-semibold">{t.files}</h2>
+        <h2 className="mr-auto text-title-3">{t.files}</h2>
         {actions}
         <IconButton label={t.closeFiles} onClick={onClose}>
           <X />
@@ -458,7 +461,7 @@ function IconButton({
 }) {
   return (
     <Tooltip label={label}>
-      <Button variant="ghost" size="icon-sm" aria-label={label} onClick={onClick} disabled={disabled}>
+      <Button variant="quiet" size="icon-sm" aria-label={label} onClick={onClick} disabled={disabled}>
         {children}
       </Button>
     </Tooltip>
@@ -473,25 +476,19 @@ function EntryIcon({ entry }: { entry: RemoteFile }) {
 function EntryRow({
   entry,
   selected,
-  confirming,
   onSelect,
   onOpen,
   onDownload,
   onRename,
   onDelete,
-  onConfirmDelete,
-  onCancelDelete,
 }: {
   entry: RemoteFile;
   selected: boolean;
-  confirming: boolean;
   onSelect: () => void;
   onOpen: () => void;
   onDownload: () => void;
   onRename: () => void;
   onDelete: () => void;
-  onConfirmDelete: () => void;
-  onCancelDelete: () => void;
 }) {
   return (
     <div
@@ -501,46 +498,43 @@ function EntryRow({
       onClick={onSelect}
       onDoubleClick={onOpen}
       onKeyDown={(event) => {
+        // Keyboard.md, lists: Enter opens, F2 renames, Delete removes after a confirmation.
         if (event.key === "Enter") onOpen();
-        if (event.key === "Delete") onDelete();
+        else if (event.key === "F2") onRename();
+        else if (event.key === "Delete") onDelete();
+        else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          const next = event.currentTarget[event.key === "ArrowDown" ? "nextElementSibling" : "previousElementSibling"];
+          if (next instanceof HTMLElement && next.getAttribute("role") === "option") next.focus();
+        } else return;
+        event.preventDefault();
       }}
       className={cn(
-        "group relative flex h-8 items-center gap-2 rounded-xs px-2 text-callout transition-colors duration-micro",
+        "group relative flex h-7 items-center gap-2 rounded-xs px-2 text-callout transition-colors duration-micro",
         selected ? "bg-accent-soft" : "hover:bg-fill-1",
       )}
     >
       <EntryIcon entry={entry} />
-      <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-      {confirming ? (
-        <span className="flex shrink-0 items-center gap-1">
-          <Button variant="destructive" size="sm" className="h-6 px-2" onClick={onConfirmDelete}>
-            {t.confirmDelete}
-          </Button>
-          <Button variant="ghost" size="sm" className="h-6 px-2" onClick={onCancelDelete}>
-            {t.cancel}
-          </Button>
-        </span>
-      ) : (
-        <>
-          <span className="w-16 shrink-0 text-right text-caption font-normal text-label-3 group-hover:invisible">
-            {entry.kind === "directory" ? "" : formatSize(entry.size)}
-          </span>
-          <span className="w-24 shrink-0 truncate text-right text-caption font-normal text-label-3 group-hover:invisible">
-            {entry.modified}
-          </span>
-          <span className="invisible absolute right-1 flex items-center gap-0.5 group-hover:visible group-focus-within:visible">
-            <IconButton label={t.download} onClick={onDownload}>
-              <Download />
-            </IconButton>
-            <IconButton label={t.rename} onClick={onRename}>
-              <Pencil />
-            </IconButton>
-            <IconButton label={t.delete} onClick={onDelete}>
-              <Trash2 />
-            </IconButton>
-          </span>
-        </>
-      )}
+      <span className="min-w-0 flex-1 truncate" title={entry.name}>
+        {entry.name}
+      </span>
+      <span className="w-16 shrink-0 text-right text-callout text-label-3 tabular-nums">
+        {entry.kind === "directory" ? "—" : formatSize(entry.size)}
+      </span>
+      <span className="w-24 shrink-0 truncate text-right text-callout text-label-3 tabular-nums">{entry.modified}</span>
+      {/* S3: one icon action and the "more" menu, in reserved space. */}
+      <span className="flex w-14 shrink-0 items-center justify-end opacity-0 transition-opacity duration-micro group-focus-within:opacity-100 group-hover:opacity-100">
+        <IconButton label={t.download} onClick={onDownload}>
+          <Download />
+        </IconButton>
+        <Menu
+          label={t.more}
+          items={[
+            { key: "rename", label: t.rename, icon: <Pencil />, shortcut: shortcutHint("rename"), onSelect: onRename },
+            "separator",
+            { key: "delete", label: t.delete, icon: <Trash2 />, danger: true, shortcut: shortcutHint("remove"), onSelect: onDelete },
+          ]}
+        />
+      </span>
     </div>
   );
 }
@@ -583,7 +577,7 @@ function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => v
   const progress = item.total ? Math.min(1, item.bytes / item.total) : null;
   const Direction = item.upload ? ArrowUp : ArrowDown;
   return (
-    <motion.li layout="position" transition={reflow} {...appear} className="rounded-xs px-2 py-1.5">
+    <motion.li {...appear} className="rounded-xs px-2 py-1.5">
       <div className="flex items-center gap-2 text-callout">
         <Direction className="size-4 shrink-0 text-label-2" strokeWidth={1.5} aria-label={item.upload ? t.upload : t.download} />
         <span className="min-w-0 flex-1 truncate">{item.name}</span>
@@ -602,24 +596,24 @@ function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => v
       {item.state === "running" && progress !== null && (
         <div className="mt-1.5 h-1 overflow-hidden rounded-pill bg-fill-2">
           <div
-            className="h-full origin-left rounded-pill bg-accent-fill transition-transform duration-overlay ease-standard"
+            className="h-full origin-left rounded-pill bg-accent-fill"
             style={{ transform: `scaleX(${progress})` }}
           />
         </div>
       )}
       {item.state === "failed" && item.message && (
-        <p className="selectable mt-1 text-caption font-normal break-all text-danger">{item.message}</p>
+        <p className="selectable mt-1 text-callout break-all text-danger">{item.message}</p>
       )}
     </motion.li>
   );
 }
 
 function TransferStatus({ item }: { item: TransferItem }) {
-  const text = "shrink-0 text-caption font-normal";
+  const text = "shrink-0 text-callout";
   if (item.state === "running") {
     return (
       <span className={cn(text, "flex items-center gap-1 text-label-2")}>
-        <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" strokeWidth={1.5} />
+        <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" strokeWidth={1.5} />
         {item.bytes > 0 ? formatSize(item.bytes) : ""}
       </span>
     );
@@ -627,7 +621,7 @@ function TransferStatus({ item }: { item: TransferItem }) {
   if (item.state === "done") {
     return (
       <span className={cn(text, "flex items-center gap-1 text-success")}>
-        <Check className="size-3.5" strokeWidth={1.5} />
+        <Check className="size-4" strokeWidth={1.5} />
         {t.transferDone}
       </span>
     );
@@ -635,7 +629,7 @@ function TransferStatus({ item }: { item: TransferItem }) {
   if (item.state === "failed") {
     return (
       <span className={cn(text, "flex items-center gap-1 text-danger")}>
-        <CircleAlert className="size-3.5" strokeWidth={1.5} />
+        <CircleAlert className="size-4" strokeWidth={1.5} />
         {t.transferFailed}
       </span>
     );

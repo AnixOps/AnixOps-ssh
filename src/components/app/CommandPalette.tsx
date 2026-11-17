@@ -291,7 +291,7 @@ export function CommandPalette({
             const Icon = item.icon;
             return (
               <div key={item.id}>
-                {showSection && <p className="px-3 pt-2 pb-1 text-caption text-label-3">{item.section}</p>}
+                {showSection && <p className="px-3 pt-2 pb-1 text-callout text-label-3">{item.section}</p>}
                 <div
                   id={`palette-${item.id}`}
                   role="option"
@@ -310,7 +310,7 @@ export function CommandPalette({
                   />
                   <span className="min-w-0 flex-1 truncate text-callout text-label-1">{item.title}</span>
                   {item.subtitle && (
-                    <span className="max-w-[45%] truncate font-mono text-caption font-normal text-label-3">
+                    <span className="max-w-[45%] truncate font-mono text-callout text-label-3">
                       {item.subtitle}
                     </span>
                   )}

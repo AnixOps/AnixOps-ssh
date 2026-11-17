@@ -1,6 +1,9 @@
-import { Ban, CircleAlert, LoaderCircle, LogIn, LogOut, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Ban, LoaderCircle, LogIn, LogOut, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
+import { Notice } from "@/components/ui/form";
+import { SettingsRow } from "@/components/ui/settings";
 import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
 import { t } from "@/lib/i18n";
@@ -34,7 +37,7 @@ export function SyncSettings() {
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ server: "", username: "", passphrase: "", device: "" });
-  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const confirm = useConfirm();
 
   const run = async (kind: Exclude<Busy, null>, action: () => Promise<unknown>) => {
     setBusy(kind);
@@ -62,7 +65,7 @@ export function SyncSettings() {
   };
 
   if (!status) {
-    return <p className="px-3 py-2 text-caption font-normal text-label-3">{statusError ?? "…"}</p>;
+    return <p className="px-3 py-2 text-callout text-label-3">{statusError ?? "…"}</p>;
   }
 
   const view = statusView(status);
@@ -77,7 +80,7 @@ export function SyncSettings() {
           submit("signin");
         }}
       >
-        <p className="text-caption font-normal text-label-2">{t.syncIntro}</p>
+        <p className="text-callout text-label-2">{t.syncIntro}</p>
         <Input
           value={form.server}
           onChange={(event) => setForm({ ...form, server: event.target.value })}
@@ -85,7 +88,7 @@ export function SyncSettings() {
           aria-label={t.syncServer}
           autoComplete="off"
           spellCheck={false}
-          className="h-8 font-mono text-caption font-normal"
+          className="h-8 font-mono text-callout"
         />
         <Input
           value={form.username}
@@ -94,7 +97,7 @@ export function SyncSettings() {
           aria-label={t.syncAccountName}
           autoComplete="off"
           spellCheck={false}
-          className="h-8 text-caption font-normal"
+          className="h-8 text-callout"
         />
         <Input
           type="password"
@@ -103,7 +106,7 @@ export function SyncSettings() {
           placeholder={t.syncAccountPassphrase}
           aria-label={t.syncAccountPassphrase}
           autoComplete="off"
-          className="h-8 text-caption font-normal"
+          className="h-8 text-callout"
         />
         <Input
           value={form.device}
@@ -111,9 +114,9 @@ export function SyncSettings() {
           placeholder={t.syncDeviceName}
           aria-label={t.syncDeviceName}
           autoComplete="off"
-          className="h-8 text-caption font-normal"
+          className="h-8 text-callout"
         />
-        <p className="text-caption font-normal text-label-3">{t.syncPassphraseHint}</p>
+        <p className="text-callout text-label-3">{t.syncPassphraseHint}</p>
         <Message text={error ?? statusError} />
         <div className="flex justify-end gap-1.5">
           <Button
@@ -139,62 +142,51 @@ export function SyncSettings() {
 
   return (
     <>
-      <Row label={t.syncSignedInAs}>
-        <span className="truncate text-caption font-normal text-label-2">{status.username}</span>
-      </Row>
-      <Row label={t.syncServerRow}>
-        <span className="truncate font-mono text-caption font-normal text-label-2" title={status.server_url ?? ""}>
+      <SettingsRow label={t.syncSignedInAs}>
+        <span className="truncate text-callout text-label-2">{status.username}</span>
+      </SettingsRow>
+      <SettingsRow label={t.syncServerRow}>
+        <span className="truncate font-mono text-callout text-label-2" title={status.server_url ?? ""}>
           {status.server_url}
         </span>
-      </Row>
+      </SettingsRow>
       <div className="flex items-start gap-2 px-3 py-2.5">
         <span className="shrink-0 text-callout text-label-1">{t.syncStatusRow}</span>
-        <p role="status" className={cn("min-w-0 flex-1 text-right text-caption font-normal break-words", TONE[view.tone])}>
+        <p role="status" className={cn("min-w-0 flex-1 text-right text-callout break-words", TONE[view.tone])}>
           {view.tone === "busy" && <LoaderCircle className="mr-1 inline size-3.5 animate-spin motion-reduce:animate-none" strokeWidth={1.5} />}
           <span className="selectable">{statusText(view)}</span>
         </p>
       </div>
-      <div className="flex items-center justify-end gap-1.5 px-3 py-2">
-        {confirmSignOut ? (
-          <>
-            <span className="mr-auto text-caption font-normal text-warning">{t.syncSignOutHint}</span>
-            <Button variant="ghost" size="sm" onClick={() => setConfirmSignOut(false)}>
-              {t.cancel}
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => {
-                setConfirmSignOut(false);
-                void run("signout", syncSignout);
-              }}
-            >
-              {t.syncSignOutConfirm}
-            </Button>
-          </>
-        ) : (
-          <>
-            <Button variant="secondary" size="sm" disabled={busy !== null} onClick={() => setConfirmSignOut(true)}>
-              <LogOut />
-              {t.syncSignOut}
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={busy !== null || status.state === "syncing"}
-              onClick={() => void run("now", syncNow)}
-            >
-              {busy === "now" ? <Spinner /> : <RefreshCw />}
-              {t.syncNow}
-            </Button>
-          </>
-        )}
-      </div>
+      <SettingsRow label={t.syncNow}>
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={busy !== null || status.state === "syncing"}
+          onClick={() => void run("now", syncNow)}
+        >
+          {busy === "now" ? <Spinner /> : <RefreshCw />}
+          {t.syncNow}
+        </Button>
+      </SettingsRow>
+      <SettingsRow label={t.syncSignOut}>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={busy !== null}
+          onClick={async () => {
+            const ok = await confirm({ title: t.syncSignOutTitle, body: t.syncSignOutHint, verb: t.syncSignOut, destructive: false });
+            if (ok) void run("signout", syncSignout);
+          }}
+        >
+          <LogOut />
+          {t.syncSignOut}
+        </Button>
+      </SettingsRow>
       <Message text={error ?? statusError} />
       {groups.length > 0 && (
         <div className="px-3 py-2.5">
           <p className="text-callout text-label-1">{t.syncSafetyNumber}</p>
-          <p className="mt-0.5 text-caption font-normal text-label-2">{t.syncSafetyHint}</p>
+          <p className="mt-0.5 text-callout text-label-2">{t.syncSafetyHint}</p>
           <SafetyNumber groups={groups} />
         </div>
       )}
@@ -208,7 +200,7 @@ export function SafetyNumber({ groups }: { groups: string[] }) {
   return (
     <ul
       aria-label={groups.join(" ")}
-      className="selectable mt-1.5 grid grid-cols-3 gap-x-3 gap-y-1 rounded-sm bg-fill-1 px-3 py-2 font-mono text-caption font-normal tabular-nums text-label-1"
+      className="selectable mt-1.5 grid grid-cols-3 gap-x-3 gap-y-1 rounded-sm bg-fill-1 px-3 py-2 font-mono text-callout tabular-nums text-label-1"
     >
       {groups.map((group, index) => (
         <li key={index} aria-hidden="true">
@@ -221,7 +213,7 @@ export function SafetyNumber({ groups }: { groups: string[] }) {
 
 function Devices({ signedIn, onError }: { signedIn: boolean; onError: (text: string | null) => void }) {
   const [devices, setDevices] = useState<SyncDevice[]>([]);
-  const [confirming, setConfirming] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const reload = useCallback(() => {
     if (!signedIn) return;
@@ -231,8 +223,9 @@ function Devices({ signedIn, onError }: { signedIn: boolean; onError: (text: str
   }, [signedIn, onError]);
   useEffect(reload, [reload]);
 
-  const revoke = async (id: string) => {
-    setConfirming(null);
+  const revoke = async (id: string, name: string) => {
+    const title = t.syncRevokeTitle.replace("{name}", name);
+    if (!(await confirm({ title, body: t.syncRevokeHint, verb: t.syncRevoke }))) return;
     try {
       await syncRevokeDevice(id);
       onError(null);
@@ -249,39 +242,29 @@ function Devices({ signedIn, onError }: { signedIn: boolean; onError: (text: str
         {devices.map((device) => (
           <li key={device.device_id} className="flex min-h-8 items-center gap-2">
             <div className="min-w-0 flex-1">
-              <p className={cn("truncate text-caption", device.revoked ? "text-label-3 line-through" : "text-label-1")}>
+              <p className={cn("truncate text-callout", device.revoked ? "text-label-3 line-through" : "text-label-1")}>
                 {device.name}
               </p>
-              <p className="text-caption font-normal text-label-3">
+              <p className="text-callout text-label-3">
                 {device.this_device ? t.syncThisDevice : device.revoked ? t.syncRevoked : new Date(device.created_at * 1000).toLocaleDateString()}
               </p>
             </div>
-            {!device.this_device && !device.revoked &&
-              (confirming === device.device_id ? (
-                <>
-                  <Button variant="ghost" size="sm" onClick={() => setConfirming(null)}>
-                    {t.cancel}
-                  </Button>
-                  <Button variant="destructive" size="sm" onClick={() => void revoke(device.device_id)}>
-                    {t.syncRevokeConfirm}
-                  </Button>
-                </>
-              ) : (
-                <Tooltip label={`${t.syncRevoke}: ${device.name}`}>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`${t.syncRevoke}: ${device.name}`}
-                    onClick={() => setConfirming(device.device_id)}
-                  >
-                    <Ban />
-                  </Button>
-                </Tooltip>
-              ))}
+            {!device.this_device && !device.revoked && (
+              <Tooltip label={`${t.syncRevoke}: ${device.name}`}>
+                <Button
+                  variant="danger"
+                  size="icon-sm"
+                  aria-label={`${t.syncRevoke}: ${device.name}`}
+                  onClick={() => void revoke(device.device_id, device.name)}
+                >
+                  <Ban />
+                </Button>
+              </Tooltip>
+            )}
           </li>
         ))}
       </ul>
-      <p className="mt-1 text-caption font-normal text-label-3">{t.syncRevokeHint}</p>
+      <p className="mt-1 text-callout text-label-3">{t.syncRevokeHint}</p>
     </div>
   );
 }
@@ -289,19 +272,7 @@ function Devices({ signedIn, onError }: { signedIn: boolean; onError: (text: str
 function Message({ text }: { text: string | null }) {
   if (!text) return null;
   return (
-    <p role="alert" className="flex items-start gap-2 px-3 py-2 text-caption font-normal break-words text-danger">
-      <CircleAlert className="mt-px size-3.5 shrink-0" strokeWidth={1.5} />
-      <span className="selectable min-w-0">{text}</span>
-    </p>
-  );
-}
-
-function Row({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex min-h-11 items-center gap-3 px-3 py-1.5">
-      <span className="shrink-0 text-callout text-label-1">{label}</span>
-      <div className="flex min-w-0 flex-1 justify-end">{children}</div>
-    </div>
+    <Notice className="m-3">{text}</Notice>
   );
 }
 
