@@ -89,11 +89,12 @@ app checks this on start and in Settings.
 | Find in terminal | Ctrl+Shift+F | ⌘F |
 | Copy and paste | Ctrl+Shift+C / V | ⌘C / ⌘V |
 | Split right | Ctrl+Shift+D | ⌘D |
-| Split down | Ctrl+Shift+Alt+D | ⌘⇧D |
+| Split down | Ctrl+Shift+O | ⌘⇧D |
 | Focus pane | Ctrl+Shift+Arrow | ⌘⌥Arrow |
 | Maximise or restore pane | Ctrl+Shift+Enter | ⌘⇧Enter |
 | Broadcast input to this tab | Ctrl+Shift+B | ⌘⇧B |
 | Previous / next prompt (needs shell integration) | Ctrl+Shift+PageUp / PageDown | ⌘↑ / ⌘↓ |
+| Show all shortcuts | Ctrl+/ (Ctrl+Shift+/ in a terminal) | ⌘/ |
 
 Close tab closes the focused pane first; the last pane closes the tab.
 Broadcasting to all tabs is in the tab bar, the snippets panel and the command

@@ -1,6 +1,7 @@
 import { CircleAlert, Download, LoaderCircle, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
 import { Tooltip } from "@/components/ui/tooltip";
 import { importKnownHosts, listKnownHosts, removeKnownHost, type KnownHost } from "@/lib/backend";
 import { t } from "@/lib/i18n";
@@ -10,6 +11,7 @@ const VISIBLE = 200;
 
 /** Stored host keys with a remove button each, and an import of ~/.ssh/known_hosts. */
 export function KnownHosts() {
+  const confirm = useConfirm();
   const [entries, setEntries] = useState<KnownHost[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
@@ -38,9 +40,11 @@ export function KnownHosts() {
     }
   };
 
-  const remove = (id: string) => {
+  const remove = async (entry: KnownHost) => {
+    const name = entry.hashed ? t.knownHostsHashed : entry.host;
+    if (!(await confirm({ title: `${t.knownHostsRemove}: ${name}`, body: t.knownHostsRemoveBody, verb: t.delete }))) return;
     setMessage(null);
-    removeKnownHost(id)
+    removeKnownHost(entry.id)
       .catch((reason) => setMessage({ text: String(reason), error: true }))
       .finally(reload);
   };
@@ -86,7 +90,7 @@ export function KnownHosts() {
                   variant="quiet"
                   size="icon-sm"
                   aria-label={`${t.knownHostsRemove}: ${entry.hashed ? t.knownHostsHashed : entry.host}`}
-                  onClick={() => remove(entry.id)}
+                  onClick={() => void remove(entry)}
                 >
                   <Trash2 />
                 </Button>
