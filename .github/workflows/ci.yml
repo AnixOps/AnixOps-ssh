@@ -29,6 +29,9 @@ jobs:
       - name: Typecheck and build
         run: npm run build 2>&1 | tee logs/frontend-build.log
         shell: bash -o pipefail {0}
+      - name: Unit tests
+        run: npm test 2>&1 | tee logs/frontend-test.log
+        shell: bash -o pipefail {0}
       - name: Screenshots
         shell: bash -o pipefail {0}
         run: |
