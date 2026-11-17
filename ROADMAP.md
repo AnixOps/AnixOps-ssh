@@ -45,12 +45,12 @@ first. Details per phase are in
 
 | Phase | Version | Theme | Scope |
 |---|---|---|---|
-| 0 | v1.1 | Baseline | End-to-end tests against an OpenSSH server container, recorded against v1 |
+| 0 | v1.1 | Baseline | End-to-end tests against an OpenSSH server container on Linux, recorded against v1 |
 | 1 | v1.2 | Daemon | JSON Schema contract, `easysshd` with authenticated local IPC, sessions survive UI reloads |
-| 2 | v1.3 | Engine | russh engine with OpenSSH fallback; one connection for terminal, files and tunnels |
-| 3 | v1.4 | Store | SQLite with v1 migration, known hosts store, importers from every common client |
-| 4 | v1.5 | Vault | Encrypted passwords and keys, Windows Hello, Secure Enclave, FIDO2, serial ports |
-| 5 | v2.0 | Sync | Open-source self-hosted server, signed end-to-end encrypted sync, team vaults |
+| 2 | v1.3 | Engine | russh engine with OpenSSH fallback; one connection for terminal, files and tunnels; OpenSSH becomes an advanced option once russh passes the whole e2e suite |
+| 3 | v2.0 | Store | SQLite with v1 migration, known hosts store, importers from every common client |
+| 4 | v2.1 | Vault | Encrypted passwords and keys, Windows Hello, Secure Enclave, FIDO2, serial ports |
+| 5 | v2.2 | Sync | Open-source self-hosted server, signed end-to-end encrypted sync, team vaults |
 | 6 | v2.x | Terminal | Splits and broadcast, shell integration, completion specs, AI with your own key, encrypted logs |
 | 7 | — | Mobile | Tauri mobile app with the embedded engine |
 
