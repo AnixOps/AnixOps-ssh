@@ -72,14 +72,60 @@ fn flow_control(flow: SerialFlowControl) -> FlowControl {
 
 /// Opens the port with the host's settings and a short read timeout.
 pub fn open(settings: &SerialSettings) -> Result<Box<dyn SerialPort>, OpenError> {
-    serialport::new(&settings.port, settings.baud)
+    // On macOS serialport sets every speed with the IOSSIOSPEED ioctl, which
+    // only real serial drivers implement: pseudo terminals and some USB
+    // adapters answer ENOTTY. Open without a speed there and set it below.
+    let open_baud = if cfg!(target_os = "macos") {
+        0
+    } else {
+        settings.baud
+    };
+    let builder = serialport::new(&settings.port, open_baud)
         .data_bits(data_bits(settings.data_bits))
         .parity(parity(settings.parity))
         .stop_bits(stop_bits(settings.stop_bits))
         .flow_control(flow_control(settings.flow_control))
-        .timeout(READ_TIMEOUT)
-        .open()
-        .map_err(|error| open_error(&settings.port, &error))
+        .timeout(READ_TIMEOUT);
+    #[cfg(target_os = "macos")]
+    {
+        let mut port = serialport::TTYPort::open(&builder)
+            .map_err(|error| open_error(&settings.port, &error))?;
+        set_speed_macos(&mut port, settings)?;
+        Ok(Box::new(port))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        builder
+            .open()
+            .map_err(|error| open_error(&settings.port, &error))
+    }
+}
+
+/// Sets the speed with plain termios first, which every tty accepts for the
+/// standard rates, and falls back to IOSSIOSPEED for rates termios refuses.
+#[cfg(target_os = "macos")]
+fn set_speed_macos(
+    port: &mut serialport::TTYPort,
+    settings: &SerialSettings,
+) -> Result<(), OpenError> {
+    use std::os::fd::AsRawFd;
+    let fd = port.as_raw_fd();
+    let speed = settings.baud as libc::speed_t;
+    // SAFETY: `fd` belongs to the open port for the whole block, and `termios`
+    // is only read after tcgetattr has filled it in.
+    let termios_ok = unsafe {
+        let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+        libc::tcgetattr(fd, termios.as_mut_ptr()) == 0 && {
+            let mut termios = termios.assume_init();
+            libc::cfsetspeed(&mut termios, speed) == 0
+                && libc::tcsetattr(fd, libc::TCSANOW, &termios) == 0
+        }
+    };
+    if !termios_ok {
+        port.set_baud_rate(settings.baud)
+            .map_err(|error| open_error(&settings.port, &error))?;
+    }
+    Ok(())
 }
 
 /// Turns the OS's failure into a message that says what to do about it.
