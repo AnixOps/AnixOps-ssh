@@ -297,7 +297,8 @@ jobs:
         continue-on-error: true
         run: |
           brew install xcodegen > /dev/null 2>&1 || true
-          npx tauri ios init --ci 2>&1 | tee logs/ios-init.log
+          # The Xcode project is checked in; generate it only when it is missing.
+          [ -d src-tauri/gen/apple ] || npx tauri ios init --ci 2>&1 | tee logs/ios-init.log
           npx tauri ios build --debug --target aarch64-sim --ci 2>&1 | tee logs/ios-build.log
       - if: always()
         uses: actions/upload-artifact@v4
@@ -305,9 +306,10 @@ jobs:
           name: logs-iOS
           path: |
             logs/
-            src-tauri/gen/apple/project.yml
-            src-tauri/gen/apple/*/Info.plist
-            src-tauri/gen/apple/*/*.entitlements
+            src-tauri/gen/apple/
+            !src-tauri/gen/apple/build/
+            !src-tauri/gen/apple/Externals/
+            !src-tauri/gen/apple/assets/
           if-no-files-found: ignore
 
   # Publishes logs and screenshots to the `ci-results/<branch>` branch so they

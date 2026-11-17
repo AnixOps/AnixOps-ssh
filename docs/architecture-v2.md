@@ -321,7 +321,7 @@ end-to-end suite first.
 | 4. Vault | 6 | Device key and keychain, passwords and private keys in the vault, Windows Hello, Touch ID and serial ports (done), FIDO2 (open). |
 | 5. Sync | 8 | `easyssh-server`, sign-in without sending the passphrase, signed envelopes, field-level merge, history, team vaults and roles. |
 | 6. Terminal | 6 | Splits and broadcast, shell integration, completion specs, AI with the user's key, encrypted session logs and sharing. |
-| 7. Mobile | 10+ | Tauri mobile app with the embedded engine. |
+| 7. Mobile | 10+ | Tauri mobile app with the embedded engine. A one-week viability prototype is done ([mobile-prototype.md](mobile-prototype.md)): the engine crates build for Android and iOS, `easyssh-engine` is the in-process engine, CI builds an Android debug APK and an iOS simulator app, and the recommendation is to commit to Tauri mobile, Android first, after one device test. The rest of the phase (registry, files and tunnels in the engine, Keystore and Keychain vault, session policy under background limits, sync, release engineering) is not started. |
 
 ## 13. Open questions
 
@@ -335,3 +335,17 @@ To be decided at the start of the phase that needs them:
   `serialport` 4 without libudev (Linux lists ports from sysfs). Linux needs
   the `dialout` (or `uucp`) group, and the app shows that hint on EACCES.
   macOS uses `/dev/cu.*` and needs no extra permission. Windows uses `COMn`.
+- Mobile (phase 7), from the prototype in [mobile-prototype.md](mobile-prototype.md):
+  - Tauri mobile or not: the evidence supports committing, Android first, behind
+    one device test of terminal input (soft keyboard, selection, rotation,
+    background and resume). Waiting for the owner's decision.
+  - Device key on mobile: Android Keystore and iOS Keychain implementations of the
+    vault's key store, and whether biometric unlock is a gate or releases the key
+    (the second needs an authentication-bound Keystore or Keychain item).
+  - Sessions under background limits: tmux or screen reattach per host, relay
+    through the sync server, or reconnect only. A foreground service is a store
+    policy question.
+  - Terminal widget: xterm.js with the key bar, or a native widget if touch input
+    and selection prove too weak.
+  - How much of `easysshd`'s engine moves into `easyssh-engine` (the registry,
+    files and tunnels), and when the daemon drops its copies of the prompt types.
