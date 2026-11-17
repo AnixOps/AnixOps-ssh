@@ -136,7 +136,10 @@ export type ErrorKey =
   | "fingerprintMismatch"
   | "vaultLocked"
   | "forbidden"
-  | "rateLimited";
+  | "rateLimited"
+  | "certificateExpired"
+  | "rotationFailed"
+  | "staleKey";
 
 const ERROR_KEYS: Record<string, ErrorKey> = {
   wrong_passphrase: "wrongPassphrase",
@@ -150,6 +153,9 @@ const ERROR_KEYS: Record<string, ErrorKey> = {
   vault_locked: "vaultLocked",
   forbidden: "forbidden",
   rate_limited: "rateLimited",
+  certificate_expired: "certificateExpired",
+  rotation_failed: "rotationFailed",
+  stale_key_generation: "staleKey",
 };
 
 export function errorKey(code: string | null | undefined): ErrorKey | null {

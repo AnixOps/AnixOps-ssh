@@ -2,7 +2,7 @@ import { ArrowLeftRight, Server, Settings, SquareCode, Users, type LucideIcon } 
 import mark from "@/assets/mark.svg";
 import { Tooltip } from "@/components/ui/tooltip";
 import { t } from "@/lib/i18n";
-import { shortcutHint, type ShortcutId } from "@/lib/shortcuts";
+import { shortcutHint, type ShortcutId } from "@/lib/shortcutTable";
 import { cn } from "@/lib/utils";
 
 export type NavKey = "hosts" | "forwards" | "snippets" | "team" | "settings";

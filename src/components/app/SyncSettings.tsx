@@ -246,7 +246,13 @@ function Devices({ signedIn, onError }: { signedIn: boolean; onError: (text: str
                 {device.name}
               </p>
               <p className="text-callout text-label-3">
-                {device.this_device ? t.syncThisDevice : device.revoked ? t.syncRevoked : new Date(device.created_at * 1000).toLocaleDateString()}
+                {device.this_device
+                  ? t.syncThisDevice
+                  : device.revoked
+                    ? device.revoked_at
+                      ? `${t.syncRevoked} · ${new Date(device.revoked_at * 1000).toLocaleDateString()}`
+                      : t.syncRevoked
+                    : new Date(device.created_at * 1000).toLocaleDateString()}
               </p>
             </div>
             {!device.this_device && !device.revoked && (

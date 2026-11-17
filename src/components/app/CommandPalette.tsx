@@ -33,7 +33,7 @@ import {
   type Tunnel,
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
-import { shortcutHint } from "@/lib/shortcuts";
+import { shortcutHint } from "@/lib/shortcutTable";
 import { terminalFor } from "@/lib/terminals";
 import { describeTunnel } from "@/lib/tunnels";
 import { cn } from "@/lib/utils";

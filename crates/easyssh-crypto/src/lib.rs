@@ -34,7 +34,7 @@ pub use record::{decrypt_record, encrypt_record, Aad};
 pub use secret::{AccountKey, AuthSecret, DeviceKey, SecretText, VaultKey};
 pub use sign::{
     certify_device, sign_envelope, verify_envelope, DeviceCert, DeviceSigningKey, Envelope,
-    EnvelopeFields,
+    EnvelopeFields, CERT_LIFETIME_SECS,
 };
 pub use version_vector::{Ordering, VersionVector};
 

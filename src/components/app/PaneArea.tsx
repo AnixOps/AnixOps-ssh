@@ -13,7 +13,7 @@ import {
   type PaneState,
   type Rect,
 } from "@/lib/panes";
-import { shortcutHint } from "@/lib/shortcuts";
+import { shortcutHint } from "@/lib/shortcutTable";
 import { cn } from "@/lib/utils";
 
 const KEY_STEP = 0.02;

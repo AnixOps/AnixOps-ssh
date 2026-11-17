@@ -7,7 +7,7 @@ import { Menu, type MenuEntry } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { hostColor, isTauri, type Group, type Host } from "@/lib/backend";
 import { t } from "@/lib/i18n";
-import { shortcutHint } from "@/lib/shortcuts";
+import { shortcutHint } from "@/lib/shortcutTable";
 import { cn } from "@/lib/utils";
 
 interface Section {

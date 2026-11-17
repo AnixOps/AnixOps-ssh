@@ -3,18 +3,25 @@
 //! See the crate README for the exact canonical byte encodings. In short:
 //!
 //! ```text
-//! cert message     = "easyssh/v1/device-cert" || device_pub(32) || issued_at(i64 BE) || lp(device_name)
-//! envelope message = "easyssh/v1/envelope" || lp(record_id) || lp(vault_id)
-//!                    || version_vector_canonical || deleted(1) || lp(ciphertext) || signer(32)
+//! cert message     = "easyssh/v2/device-cert" || device_pub(32) || issued_at(i64 BE)
+//!                    || expires_at(i64 BE) || lp(device_name)
+//! envelope message = "easyssh/v2/envelope" || lp(record_id) || lp(vault_id) || lp(table)
+//!                    || key_generation(u32 BE) || version_vector_canonical || deleted(1)
+//!                    || lp(ciphertext) || signer(32)
 //! ```
+//!
+//! Version 2 of both formats (before any release) added the certificate
+//! expiry, and the table and vault key generation to the signed envelope.
 
 use crate::keystore::{KeyStore, KeyStoreError, DEVICE_SIGNING_ACCOUNT, SERVICE};
 use crate::{fill_random, put_lp, AccountSigningKey, CryptoError, Result, VersionVector};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
-pub const CERT_CONTEXT: &[u8] = b"easyssh/v1/device-cert";
-pub const ENVELOPE_CONTEXT: &[u8] = b"easyssh/v1/envelope";
-pub const CERT_VERSION: u8 = 1;
+pub const CERT_CONTEXT: &[u8] = b"easyssh/v2/device-cert";
+pub const ENVELOPE_CONTEXT: &[u8] = b"easyssh/v2/envelope";
+pub const CERT_VERSION: u8 = 2;
+/// How long a freshly issued device certificate is valid (one year).
+pub const CERT_LIFETIME_SECS: i64 = 365 * 24 * 60 * 60;
 
 /// Ed25519 key a device signs sync envelopes with.
 pub struct DeviceSigningKey(SigningKey);
@@ -63,32 +70,57 @@ pub struct DeviceCert {
     pub device_name: String,
     /// Unix seconds.
     pub issued_at: i64,
+    /// Unix seconds; the certificate is not valid after this instant.
+    pub expires_at: i64,
     pub signature: [u8; 64],
 }
 
 impl DeviceCert {
-    fn message(device_public: &[u8; 32], device_name: &str, issued_at: i64) -> Vec<u8> {
-        let mut m = Vec::with_capacity(CERT_CONTEXT.len() + 32 + 8 + 4 + device_name.len());
+    fn message(
+        device_public: &[u8; 32],
+        device_name: &str,
+        issued_at: i64,
+        expires_at: i64,
+    ) -> Vec<u8> {
+        let mut m = Vec::with_capacity(CERT_CONTEXT.len() + 32 + 16 + 4 + device_name.len());
         m.extend_from_slice(CERT_CONTEXT);
         m.extend_from_slice(device_public);
         m.extend_from_slice(&issued_at.to_be_bytes());
+        m.extend_from_slice(&expires_at.to_be_bytes());
         put_lp(&mut m, device_name.as_bytes());
         m
     }
 
     /// Check the certificate against the account's signing public key.
     pub fn verify(&self, account_public: &VerifyingKey) -> Result<()> {
-        let msg = Self::message(&self.device_public, &self.device_name, self.issued_at);
+        let msg = Self::message(
+            &self.device_public,
+            &self.device_name,
+            self.issued_at,
+            self.expires_at,
+        );
         account_public
             .verify_strict(&msg, &Signature::from_bytes(&self.signature))
             .map_err(|_| CryptoError::BadCertificate)
     }
 
-    /// `0x01 || device_pub(32) || issued_at(i64 BE) || lp(device_name) || signature(64)`.
+    /// Is the certificate within its validity at `at` (unix seconds)?
+    /// The check is `at <= expires_at`; `issued_at` is not enforced, so a
+    /// device whose clock runs slow is not locked out.
+    pub fn check_valid_at(&self, at: i64) -> Result<()> {
+        if at > self.expires_at {
+            Err(CryptoError::CertificateExpired)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// `0x02 || device_pub(32) || issued_at(i64 BE) || expires_at(i64 BE) || lp(device_name) || signature(64)`.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = vec![CERT_VERSION];
         out.extend_from_slice(&self.device_public);
         out.extend_from_slice(&self.issued_at.to_be_bytes());
+        out.extend_from_slice(&self.expires_at.to_be_bytes());
         put_lp(&mut out, self.device_name.as_bytes());
         out.extend_from_slice(&self.signature);
         out
@@ -102,40 +134,45 @@ impl DeviceCert {
                 .map_or(bad, |v| CryptoError::UnsupportedVersion(*v)));
         }
         let rest = &bytes[1..];
-        if rest.len() < 32 + 8 + 4 + 64 {
+        if rest.len() < 32 + 16 + 4 + 64 {
             return Err(CryptoError::Malformed("device certificate"));
         }
         let device_public: [u8; 32] = rest[..32].try_into().expect("32");
         let issued_at = i64::from_be_bytes(rest[32..40].try_into().expect("8"));
-        let n = u32::from_be_bytes(rest[40..44].try_into().expect("4")) as usize;
-        if rest.len() != 44 + n + 64 {
+        let expires_at = i64::from_be_bytes(rest[40..48].try_into().expect("8"));
+        let n = u32::from_be_bytes(rest[48..52].try_into().expect("4")) as usize;
+        if rest.len() != 52 + n + 64 {
             return Err(CryptoError::Malformed("device certificate"));
         }
-        let device_name = std::str::from_utf8(&rest[44..44 + n])
+        let device_name = std::str::from_utf8(&rest[52..52 + n])
             .map_err(|_| CryptoError::Malformed("device certificate"))?
             .to_owned();
-        let signature: [u8; 64] = rest[44 + n..].try_into().expect("64");
+        let signature: [u8; 64] = rest[52 + n..].try_into().expect("64");
         Ok(Self {
             device_public,
             device_name,
             issued_at,
+            expires_at,
             signature,
         })
     }
 }
 
-/// Certify `device_public` for the account that owns `account_signing_key`.
+/// Certify `device_public` for the account that owns `account_signing_key`,
+/// valid until `expires_at` (see [`CERT_LIFETIME_SECS`]).
 pub fn certify_device(
     account_signing_key: &AccountSigningKey,
     device_public: &[u8; 32],
     device_name: &str,
     issued_at: i64,
+    expires_at: i64,
 ) -> DeviceCert {
-    let msg = DeviceCert::message(device_public, device_name, issued_at);
+    let msg = DeviceCert::message(device_public, device_name, issued_at, expires_at);
     DeviceCert {
         device_public: *device_public,
         device_name: device_name.to_owned(),
         issued_at,
+        expires_at,
         signature: account_signing_key.0.sign(&msg).to_bytes(),
     }
 }
@@ -145,6 +182,12 @@ pub fn certify_device(
 pub struct EnvelopeFields {
     pub record_id: String,
     pub vault_id: String,
+    /// Entity table (`hosts`, `snippets`, ...); routing metadata the server
+    /// may not change.
+    pub table: String,
+    /// Generation of the vault key the ciphertext is encrypted under. It
+    /// starts at 1 and grows by one at every key rotation.
+    pub key_generation: u32,
     pub version_vector: VersionVector,
     /// `true` makes this a tombstone (the ciphertext may then be empty).
     pub deleted: bool,
@@ -156,6 +199,8 @@ pub struct EnvelopeFields {
 pub struct Envelope {
     pub record_id: String,
     pub vault_id: String,
+    pub table: String,
+    pub key_generation: u32,
     pub version_vector: VersionVector,
     pub deleted: bool,
     pub ciphertext: Vec<u8>,
@@ -168,48 +213,42 @@ impl Envelope {
     /// The exact bytes that are signed.
     pub fn signing_bytes(&self) -> Vec<u8> {
         signing_bytes(
-            &self.record_id,
-            &self.vault_id,
-            &self.version_vector,
-            self.deleted,
-            &self.ciphertext,
+            &EnvelopeFields {
+                record_id: self.record_id.clone(),
+                vault_id: self.vault_id.clone(),
+                table: self.table.clone(),
+                key_generation: self.key_generation,
+                version_vector: self.version_vector.clone(),
+                deleted: self.deleted,
+                ciphertext: self.ciphertext.clone(),
+            },
             &self.signer,
         )
     }
 }
 
-fn signing_bytes(
-    record_id: &str,
-    vault_id: &str,
-    vv: &VersionVector,
-    deleted: bool,
-    ciphertext: &[u8],
-    signer: &[u8; 32],
-) -> Vec<u8> {
-    let mut m = Vec::with_capacity(ENVELOPE_CONTEXT.len() + 128 + ciphertext.len());
+fn signing_bytes(fields: &EnvelopeFields, signer: &[u8; 32]) -> Vec<u8> {
+    let mut m = Vec::with_capacity(ENVELOPE_CONTEXT.len() + 128 + fields.ciphertext.len());
     m.extend_from_slice(ENVELOPE_CONTEXT);
-    put_lp(&mut m, record_id.as_bytes());
-    put_lp(&mut m, vault_id.as_bytes());
-    m.extend_from_slice(&vv.to_canonical_bytes());
-    m.push(u8::from(deleted));
-    put_lp(&mut m, ciphertext);
+    put_lp(&mut m, fields.record_id.as_bytes());
+    put_lp(&mut m, fields.vault_id.as_bytes());
+    put_lp(&mut m, fields.table.as_bytes());
+    m.extend_from_slice(&fields.key_generation.to_be_bytes());
+    m.extend_from_slice(&fields.version_vector.to_canonical_bytes());
+    m.push(u8::from(fields.deleted));
+    put_lp(&mut m, &fields.ciphertext);
     m.extend_from_slice(signer);
     m
 }
 
 pub fn sign_envelope(fields: EnvelopeFields, device_key: &DeviceSigningKey) -> Envelope {
     let signer = device_key.public();
-    let msg = signing_bytes(
-        &fields.record_id,
-        &fields.vault_id,
-        &fields.version_vector,
-        fields.deleted,
-        &fields.ciphertext,
-        &signer,
-    );
+    let msg = signing_bytes(&fields, &signer);
     Envelope {
         record_id: fields.record_id,
         vault_id: fields.vault_id,
+        table: fields.table,
+        key_generation: fields.key_generation,
         version_vector: fields.version_vector,
         deleted: fields.deleted,
         ciphertext: fields.ciphertext,
@@ -218,17 +257,21 @@ pub fn sign_envelope(fields: EnvelopeFields, device_key: &DeviceSigningKey) -> E
     }
 }
 
-/// Accept `envelope` only if `cert` is signed by `account_public`, the cert
-/// belongs to the envelope's signer, and the signature covers every field.
+/// Accept `envelope` only if `cert` is signed by `account_public`, is not
+/// expired at `at` (unix seconds: the time the envelope reached the server,
+/// or now when that is unknown), the cert belongs to the envelope's signer,
+/// and the signature covers every field.
 ///
 /// Rollback protection (comparing the version vector with ones already
-/// seen) is stateful and left to the caller.
+/// seen) and device revocation are stateful and left to the caller.
 pub fn verify_envelope(
     envelope: &Envelope,
     cert: &DeviceCert,
     account_public: &VerifyingKey,
+    at: i64,
 ) -> Result<()> {
     cert.verify(account_public)?;
+    cert.check_valid_at(at)?;
     if cert.device_public != envelope.signer {
         return Err(CryptoError::SignerMismatch);
     }
@@ -247,6 +290,8 @@ mod tests {
     use super::*;
     use crate::{AccountKeyPair, MemoryKeyStore};
 
+    const ISSUED: i64 = 1_700_000_000;
+
     struct Setup {
         account: AccountKeyPair,
         device: DeviceSigningKey,
@@ -257,11 +302,19 @@ mod tests {
     fn setup() -> Setup {
         let account = AccountKeyPair::from_seeds([1; 32], [11; 32]);
         let device = DeviceSigningKey::from_seed([2; 32]);
-        let cert = certify_device(&account.signing, &device.public(), "laptop", 1_700_000_000);
+        let cert = certify_device(
+            &account.signing,
+            &device.public(),
+            "laptop",
+            ISSUED,
+            ISSUED + CERT_LIFETIME_SECS,
+        );
         let env = sign_envelope(
             EnvelopeFields {
                 record_id: "rec".into(),
                 vault_id: "vault".into(),
+                table: "hosts".into(),
+                key_generation: 1,
                 version_vector: VersionVector::from_entries([("dev1", 3), ("dev2", 1)]),
                 deleted: false,
                 ciphertext: vec![1, 2, 3, 4],
@@ -279,7 +332,7 @@ mod tests {
     #[test]
     fn valid_envelope_verifies() {
         let s = setup();
-        verify_envelope(&s.env, &s.cert, &s.account.signing.public()).unwrap();
+        verify_envelope(&s.env, &s.cert, &s.account.signing.public(), ISSUED).unwrap();
         assert_eq!(s.env.signer, s.device.public());
     }
 
@@ -293,6 +346,12 @@ mod tests {
         cases.push(e);
         let mut e = s.env.clone();
         e.vault_id = "other".into();
+        cases.push(e);
+        let mut e = s.env.clone();
+        e.table = "snippets".into();
+        cases.push(e);
+        let mut e = s.env.clone();
+        e.key_generation = 2;
         cases.push(e);
         let mut e = s.env.clone();
         e.version_vector.increment("dev1");
@@ -313,14 +372,17 @@ mod tests {
         e.signature[0] ^= 1;
         cases.push(e);
         for (i, e) in cases.iter().enumerate() {
-            assert!(verify_envelope(e, &s.cert, &pk).is_err(), "case {i}");
+            assert!(
+                verify_envelope(e, &s.cert, &pk, ISSUED).is_err(),
+                "case {i}"
+            );
         }
         // changed signer: different device, same cert
         let other = DeviceSigningKey::from_seed([3; 32]);
         let mut e = s.env.clone();
         e.signer = other.public();
         assert_eq!(
-            verify_envelope(&e, &s.cert, &pk),
+            verify_envelope(&e, &s.cert, &pk, ISSUED),
             Err(CryptoError::SignerMismatch)
         );
     }
@@ -333,6 +395,8 @@ mod tests {
             EnvelopeFields {
                 record_id: "rec".into(),
                 vault_id: "vault".into(),
+                table: "hosts".into(),
+                key_generation: 1,
                 version_vector: VersionVector::new(),
                 deleted: false,
                 ciphertext: vec![],
@@ -341,14 +405,14 @@ mod tests {
         );
         // using the legit device's cert for a rogue signer
         assert_eq!(
-            verify_envelope(&env, &s.cert, &s.account.signing.public()),
+            verify_envelope(&env, &s.cert, &s.account.signing.public(), ISSUED),
             Err(CryptoError::SignerMismatch)
         );
         // rogue self-made cert signed by a different key
         let fake_acct = AccountSigningKey::from_seed([7; 32]);
-        let fake_cert = certify_device(&fake_acct, &rogue.public(), "rogue", 1);
+        let fake_cert = certify_device(&fake_acct, &rogue.public(), "rogue", 1, ISSUED * 2);
         assert_eq!(
-            verify_envelope(&env, &fake_cert, &s.account.signing.public()),
+            verify_envelope(&env, &fake_cert, &s.account.signing.public(), ISSUED),
             Err(CryptoError::BadCertificate)
         );
     }
@@ -357,9 +421,15 @@ mod tests {
     fn cert_from_another_account_fails() {
         let s = setup();
         let other = AccountKeyPair::from_seeds([5; 32], [15; 32]);
-        let cert = certify_device(&other.signing, &s.device.public(), "laptop", 1_700_000_000);
+        let cert = certify_device(
+            &other.signing,
+            &s.device.public(),
+            "laptop",
+            ISSUED,
+            ISSUED + CERT_LIFETIME_SECS,
+        );
         assert_eq!(
-            verify_envelope(&s.env, &cert, &s.account.signing.public()),
+            verify_envelope(&s.env, &cert, &s.account.signing.public(), ISSUED),
             Err(CryptoError::BadCertificate)
         );
     }
@@ -373,6 +443,9 @@ mod tests {
         assert!(c.verify(&pk).is_err());
         let mut c = s.cert.clone();
         c.issued_at += 1;
+        assert!(c.verify(&pk).is_err());
+        let mut c = s.cert.clone();
+        c.expires_at += 1;
         assert!(c.verify(&pk).is_err());
         let mut c = s.cert.clone();
         c.device_public[0] ^= 1;
@@ -391,10 +464,10 @@ mod tests {
         t.push(0);
         assert!(DeviceCert::from_bytes(&t).is_err());
         let mut t = b;
-        t[0] = 2;
+        t[0] = 3;
         assert_eq!(
             DeviceCert::from_bytes(&t),
-            Err(CryptoError::UnsupportedVersion(2))
+            Err(CryptoError::UnsupportedVersion(3))
         );
     }
 
@@ -405,16 +478,65 @@ mod tests {
             EnvelopeFields {
                 record_id: "rec".into(),
                 vault_id: "vault".into(),
+                table: "hosts".into(),
+                key_generation: 1,
                 version_vector: VersionVector::from_entries([("dev1", 4)]),
                 deleted: true,
                 ciphertext: vec![],
             },
             &s.device,
         );
-        verify_envelope(&env, &s.cert, &s.account.signing.public()).unwrap();
+        verify_envelope(&env, &s.cert, &s.account.signing.public(), ISSUED).unwrap();
         let mut undeleted = env.clone();
         undeleted.deleted = false;
-        assert!(verify_envelope(&undeleted, &s.cert, &s.account.signing.public()).is_err());
+        assert!(verify_envelope(&undeleted, &s.cert, &s.account.signing.public(), ISSUED).is_err());
+    }
+
+    #[test]
+    fn expired_certificates_are_rejected_but_the_last_second_is_valid() {
+        let s = setup();
+        let pk = s.account.signing.public();
+        let last = s.cert.expires_at;
+        verify_envelope(&s.env, &s.cert, &pk, last).unwrap();
+        assert_eq!(
+            verify_envelope(&s.env, &s.cert, &pk, last + 1),
+            Err(CryptoError::CertificateExpired)
+        );
+        // An envelope received long before expiry stays valid when judged
+        // at that time.
+        verify_envelope(&s.env, &s.cert, &pk, ISSUED + 10).unwrap();
+        // A cert that expired before it was issued never validates.
+        let dead = certify_device(&s.account.signing, &s.device.public(), "d", 10, 5);
+        assert_eq!(dead.check_valid_at(6), Err(CryptoError::CertificateExpired));
+    }
+
+    #[test]
+    fn signed_routing_fields_are_the_whole_envelope() {
+        // table and key_generation change the signing bytes.
+        let s = setup();
+        let mut e = s.env.clone();
+        e.table.push('x');
+        assert_ne!(e.signing_bytes(), s.env.signing_bytes());
+        let mut e = s.env.clone();
+        e.key_generation += 1;
+        assert_ne!(e.signing_bytes(), s.env.signing_bytes());
+        // lp() keeps record_id/vault_id/table boundaries unambiguous.
+        let a = EnvelopeFields {
+            record_id: "ab".into(),
+            vault_id: "c".into(),
+            table: "d".into(),
+            key_generation: 1,
+            version_vector: VersionVector::new(),
+            deleted: false,
+            ciphertext: vec![],
+        };
+        let mut b = a.clone();
+        b.record_id = "a".into();
+        b.vault_id = "bc".into();
+        assert_ne!(
+            sign_envelope(a, &s.device).signing_bytes(),
+            sign_envelope(b, &s.device).signing_bytes()
+        );
     }
 
     #[test]

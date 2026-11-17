@@ -130,7 +130,7 @@ export function TeamVaults() {
                 onError={setError}
               />
             ))}
-            <p className="px-1 text-callout text-label-3">{t.teamNoRotation}</p>
+            <p className="px-1 text-callout text-label-3">{t.teamRotates}</p>
           </>
         )}
       </div>
@@ -230,7 +230,7 @@ function Members({ vault, onError }: { vault: VaultInfo; onError: (text: string 
                       aria-label={`${t.teamRemove}: ${member.username}`}
                       onClick={async () => {
                         const title = t.teamRemoveTitle.replace("{name}", member.username).replace("{vault}", vault.name);
-                        const ok = await confirm({ title, body: t.teamNoRotation, verb: t.teamRemove, typed: member.username });
+                        const ok = await confirm({ title, body: t.teamRotates, verb: t.teamRemove, typed: member.username });
                         if (ok) void act(() => removeMember(vault.id, member.account_id));
                       }}
                     >

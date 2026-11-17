@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/form";
 import type { SshStatus } from "@/lib/backend";
 import { t } from "@/lib/i18n";
-import { shortcutHint } from "@/lib/shortcuts";
+import { shortcutHint } from "@/lib/shortcutTable";
 
 export function EmptyWorkspace({ onOpenLocal, status }: { onOpenLocal: () => void; status: SshStatus | null }) {
   const shortcuts = [

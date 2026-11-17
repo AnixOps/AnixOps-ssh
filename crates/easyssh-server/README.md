@@ -64,6 +64,7 @@ Flag / environment variable (flags win):
 | `--session-days` | `EASYSSH_SESSION_DAYS` | `30` |
 | `--allow-registration` | `EASYSSH_ALLOW_REGISTRATION` | `true` (set `false` after creating your accounts) |
 | `--max-body-bytes` | `EASYSSH_MAX_BODY_BYTES` | `2097152` |
+| `--max-rotate-body-bytes` | `EASYSSH_MAX_ROTATE_BODY_BYTES` | `67108864` (a key rotation carries every record of a vault) |
 | `--auth-rate-per-minute` | `EASYSSH_AUTH_RATE_PER_MINUTE` | `30` (per client address, and per username) |
 | `--trust-proxy` | `EASYSSH_TRUST_PROXY` | `false` |
 | `--log-format` | `EASYSSH_LOG_FORMAT` | `text` (`json` for structured logs; `RUST_LOG` filters) |
@@ -94,8 +95,11 @@ the `auth/*` endpoints. Binary fields are base64. Types live in
 | `POST /devices`, `GET /devices`, `DELETE /devices/{id}` | session | register (account-signed cert required), list, revoke |
 | `POST /vaults`, `GET /vaults` | session | create (caller becomes owner), list mine with sealed keys |
 | `GET /vaults/{v}/members` | member | |
-| `PUT`/`DELETE /vaults/{v}/members/{account}` | owner | add (needs sealed key), change role, remove; last owner is protected |
-| `POST /vaults/{v}/records` | owner, editor | compare-and-set push; 409 returns the server copy |
+| `PUT /vaults/{v}/members/{account}` | owner | add (needs the sealed key and its generation), change role |
+| `POST /vaults/{v}/rotate` | owner | replace the vault key, optionally removing a member in the same transaction; all or nothing; the only way to remove a member; last owner is protected |
+| `GET /vaults/{v}/revoked-devices` | member | revoked devices of the members, with the revocation time |
+| `POST /vaults/{v}/records` | owner, editor | compare-and-set push; 409 returns the server copy; 412 for an old key generation |
+| `POST /vaults/{v}/records/batch` | owner, editor | up to 500 pushes, all or nothing, per-item report |
 | `GET /vaults/{v}/records?since=&limit=` | member | pull by monotonic sequence |
 | `GET /vaults/{v}/records/{r}/history` | member | last 50 replaced envelopes, newest first |
 
@@ -113,10 +117,18 @@ rate limited per client address and per username (HTTP 429 with `Retry-After`).
 
 ## Known limits
 
-- Removing a vault member does not rotate the vault key; the former member
-  keeps the key (and any data they already pulled). Key rotation is future work.
-- A revoked device's earlier envelopes stay valid (their certificate is
-  unchanged); revocation stops new pushes and ends its sessions.
+- A removed member keeps the old vault key and what they already pulled; the
+  server cannot take that back. Removal replaces the key and re-encrypts the
+  vault, so they can read nothing written afterwards. History the server keeps
+  from before a rotation stays under the old key.
+- A revoked device's earlier envelopes stay valid: revocation records the
+  time, stops new pushes, ends its sessions and tells clients to refuse what it
+  sends after that time. The receive time is the server's word.
+- Device certificates expire after a year; a device that stays signed in
+  renews them, one that was off for longer signs in again.
+- The database schema of this version is new: a database from a build before
+  the signed key generation and certificate expiry cannot be opened (nothing
+  was released with the old one).
 - Public keys shown to a sharing owner come from the server. A malicious
   server could substitute its own; verify account fingerprints out of band
   for vaults that matter (not automated yet).

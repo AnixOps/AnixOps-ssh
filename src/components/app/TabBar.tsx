@@ -8,7 +8,7 @@ import { scopeOf, toggleGlobalBroadcast, toggleTabBroadcast, useBroadcast } from
 import { t } from "@/lib/i18n";
 import { appear } from "@/lib/motion";
 import type { Axis, PaneState } from "@/lib/panes";
-import { shortcutHint } from "@/lib/shortcuts";
+import { shortcutHint } from "@/lib/shortcutTable";
 import { hostColor } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 

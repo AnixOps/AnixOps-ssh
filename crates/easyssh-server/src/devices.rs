@@ -48,6 +48,13 @@ pub async fn register(
             "certificate is for a different device key",
         ));
     }
+    if cert.check_valid_at(now()).is_err() {
+        return Err(ApiError::coded(
+            StatusCode::FORBIDDEN,
+            easyssh_sync::wire::ErrorCode::CertificateExpired,
+            "the device certificate has already expired",
+        ));
+    }
     let device_id = device_id_for(&public);
     state
         .db
@@ -81,7 +88,13 @@ pub async fn register(
                         "this device key was revoked",
                     ));
                 }
-                Some(_) => {}
+                // A live device registering again renews its certificate.
+                Some(_) => {
+                    tx.execute(
+                        "UPDATE devices SET cert = ?1, name = ?2 WHERE id = ?3",
+                        params![request.cert, request.name, device_id],
+                    )?;
+                }
                 None => {
                     tx.execute(
                         "INSERT INTO devices(id, account_id, name, public, cert, created_at) \
@@ -113,13 +126,17 @@ pub async fn register(
 }
 
 fn row_to_info(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceInfo> {
+    let cert: Vec<u8> = r.get(3)?;
+    let revoked_at: Option<i64> = r.get(5)?;
     Ok(DeviceInfo {
         device_id: r.get(0)?,
         name: r.get(1)?,
         device_public: r.get(2)?,
-        cert: r.get(3)?,
+        cert_expires_at: DeviceCert::from_bytes(&cert).map_or(0, |c| c.expires_at),
+        cert,
         created_at: r.get(4)?,
-        revoked: r.get::<_, Option<i64>>(5)?.is_some(),
+        revoked: revoked_at.is_some(),
+        revoked_at,
     })
 }
 
@@ -142,8 +159,10 @@ pub async fn list(
         .await
 }
 
-/// Revoke a device: its key can no longer push and its sessions end.
-/// Records it already signed stay valid (their certificate is unchanged).
+/// Revoke a device: its key can no longer push and its sessions end. The
+/// time is recorded; records the server received before it stay valid, and
+/// clients refuse anything the device signed that arrived later (the server
+/// itself refuses its pushes from now on).
 pub async fn revoke(
     State(state): State<AppState>,
     auth: Authed,

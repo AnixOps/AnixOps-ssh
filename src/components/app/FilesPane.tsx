@@ -38,7 +38,7 @@ import {
   type TransferEvent,
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
-import { shortcutHint } from "@/lib/shortcuts";
+import { shortcutHint } from "@/lib/shortcutTable";
 import { appear, duration, ease } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 

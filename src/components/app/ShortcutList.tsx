@@ -4,7 +4,8 @@ import { Kbd } from "@/components/ui/form";
 import { Overlay } from "@/components/ui/overlay";
 import { Tooltip } from "@/components/ui/tooltip";
 import { t } from "@/lib/i18n";
-import { isMac, shortcutTable, type ShortcutRow } from "@/lib/shortcuts";
+import { isMac } from "@/lib/shortcuts";
+import { shortcutTable, type ShortcutRow } from "@/lib/shortcutTable";
 
 const groups: { id: ShortcutRow["group"]; title: () => string }[] = [
   { id: "app", title: () => t.shortcutsApp },

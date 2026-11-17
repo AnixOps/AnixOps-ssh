@@ -185,17 +185,18 @@ be `https`; plain `http` is accepted only for this machine, for testing.
   secret notes.
 - **When**: on start, two minutes apart, and shortly after a local change.
   **Sync now** runs one at once. The status line shows the last success and the
-  last error. A revoked device (Settings › Sync › Devices) can no longer push
-  or pull.
+  last error. A revoked device (Settings › Sync › Devices) can no longer sync;
+  what it wrote before is kept.
 - **Team vaults** (the people icon in the sidebar): create a shared vault, add
   members as owner, editor or viewer, and move hosts into it from the host
   editor. Before someone is added you both read the **safety number** (twelve
   groups of five digits derived from their public keys); add them only when the
   numbers are identical, over a channel you trust. If their keys later change
   the member is shown as "Keys changed".
-- **Known limits**: removing a member does not rotate the vault key, so what
-  they already synced stays with them (create a new vault and move the hosts if
-  that matters). A new device needs the account passphrase. When a token has
+- **Removing a member** replaces the vault key and re-encrypts the whole
+  vault: they keep only what they had already synced and cannot read anything
+  newer. Only an owner can do it, and it can take a moment in a big vault.
+- **Known limits**: a new device needs the account passphrase. When a token has
   expired you sign in again.
 - **Backup to Git** (Settings › Backup) is the former Git sync, kept as an
   export and import target. It is not a sync channel.
