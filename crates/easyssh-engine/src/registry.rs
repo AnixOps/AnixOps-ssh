@@ -153,6 +153,22 @@ impl<S: Pooled, E: Clone + Send + 'static> Registry<S, E> {
         out
     }
 
+    /// The `engine.connections` report: how many connections were opened and
+    /// which ones are up now.
+    pub async fn report(&self) -> serde_json::Value {
+        let rows = self.connections().await;
+        serde_json::json!({
+            "opened": self.opened(),
+            "live": rows.len(),
+            "connections": rows.iter().map(|row| serde_json::json!({
+                "host_id": row.key.host_id,
+                "target": row.key.target,
+                "jump": row.key.jump,
+                "leases": row.leases,
+            })).collect::<Vec<_>>(),
+        })
+    }
+
     /// A lease on the connection for `key`, connecting with `connect` when
     /// there is none (or it died). `connect` runs at most once for callers
     /// that ask at the same time.

@@ -3,7 +3,7 @@
 
 use crate::agent::validate_agent_socket;
 use crate::askpass::{Hub, Prompt};
-use crate::engine::interact::{parse_decision, Broadcast};
+use crate::engine::interact::Broadcast;
 use crate::engine::{self, plan, Engine, KnownHostsPaths};
 use crate::log::Logger;
 use crate::server::{BoxFuture, Outbox, Service};
@@ -14,6 +14,7 @@ use easyssh_core::security::{validate_alias, validate_connection};
 use easyssh_core::{
     ConfigStore, Connection, ConnectionTarget, Group, OpenSsh, SerialSettings, SshInvocation,
 };
+use easyssh_engine::prompts::parse_decision;
 use easyssh_proto as proto;
 use easyssh_sessionlog::{LogSettings, LogStore, KEY_INFO};
 use easyssh_ssh::Error as SshError;
@@ -1145,9 +1146,7 @@ impl Daemon {
             }
             "transfer.cancel" => {
                 let p: proto::TransferCancelParams = parse(payload)?;
-                self.engine
-                    .files
-                    .cancel_transfer(&p.transfer_id, &self.broadcaster());
+                self.engine.files.cancel_transfer(&p.transfer_id);
                 ok(Value::Null)
             }
             "tunnel.start" => {

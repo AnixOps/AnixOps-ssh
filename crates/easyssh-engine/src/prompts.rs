@@ -1,16 +1,21 @@
 //! The engine's questions to the person holding the phone: login passwords,
 //! key passphrases, keyboard-interactive rounds and host keys.
 //!
-//! A question is sent as an event (`askpass`, `hostkey`, the same payloads the
-//! desktop daemon sends, so the React dialogs are shared) and answered by a
-//! command (`askpass_reply`, `hostkey_reply`). Nothing is stored or logged. An
-//! unanswered question is a cancellation after [`ANSWER_TIMEOUT`]; an unanswered
-//! host key is a rejection.
+//! A question is sent as an event (`askpass.prompt`, `hostkey.prompt`, the same
+//! payloads the desktop daemon sends, so the React dialogs are shared) and
+//! answered by a command (`askpass_reply`, `hostkey_reply`). Nothing is stored
+//! or logged. An unanswered question is a cancellation after [`ANSWER_TIMEOUT`];
+//! an unanswered host key is a rejection, and so is a host key nobody was
+//! attached to see.
+//!
+//! [`HostKeyPrompts`] is shared with the desktop daemon; the secret questions
+//! of the daemon go through its own askpass hub (which also serves OpenSSH).
 
+use crate::events::Events;
 use async_trait::async_trait;
 use easyssh_ssh::known_hosts::KnownHostStatus;
 use easyssh_ssh::{Decision, HostKeyDetails, Interaction, KbdPrompt};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,22 +25,19 @@ use tokio::sync::oneshot;
 
 pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Sends an event to the UI (`emit(name, payload)`).
-pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
-
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-pub struct Prompts {
-    emit: Emit,
-    next: AtomicU64,
-    secrets: Mutex<HashMap<u64, oneshot::Sender<Option<String>>>>,
-    hostkeys: Mutex<HashMap<u64, oneshot::Sender<Decision>>>,
+/// Open host key questions.
+pub struct HostKeyPrompts {
+    events: Events,
+    pending: Mutex<HashMap<u64, oneshot::Sender<Decision>>>,
     timeout: Duration,
 }
 
-/// Parses the `decision` of `hostkey_reply`. Anything unknown is a rejection.
+/// Parses the `decision` of `hostkey.reply` / `hostkey_reply`. Anything unknown
+/// is a rejection.
 pub fn parse_decision(name: &str) -> Decision {
     match name {
         "accept_once" => Decision::AcceptOnce,
@@ -45,17 +47,80 @@ pub fn parse_decision(name: &str) -> Decision {
     }
 }
 
-impl Prompts {
-    pub fn new(emit: Emit) -> Arc<Self> {
-        Self::with_timeout(emit, ANSWER_TIMEOUT)
+impl HostKeyPrompts {
+    pub fn new(events: Events) -> Arc<Self> {
+        Self::with_timeout(events, ANSWER_TIMEOUT)
     }
 
-    pub fn with_timeout(emit: Emit, timeout: Duration) -> Arc<Self> {
+    pub fn with_timeout(events: Events, timeout: Duration) -> Arc<Self> {
+        Arc::new(HostKeyPrompts {
+            events,
+            pending: Mutex::new(HashMap::new()),
+            timeout,
+        })
+    }
+
+    /// Asks the clients (the first answer wins). With nobody attached the
+    /// key is rejected at once.
+    pub async fn ask(&self, id: u64, details: &HostKeyDetails) -> Decision {
+        let (sender, receiver) = oneshot::channel();
+        lock(&self.pending).insert(id, sender);
+        let (status, expected) = match &details.status {
+            KnownHostStatus::Changed { expected, .. } => ("changed", Some(expected.clone())),
+            _ => ("unknown", None),
+        };
+        let mut payload = json!({
+            "id": id,
+            "host": details.host,
+            "port": details.port,
+            "algorithm": details.algorithm,
+            "fingerprint": details.fingerprint,
+            "status": status,
+        });
+        if let Some(expected) = expected {
+            payload["expected"] = json!(expected);
+        }
+        if self.events.emit("hostkey.prompt", payload) == 0 {
+            lock(&self.pending).remove(&id);
+            return Decision::Reject;
+        }
+        let decision = tokio::time::timeout(self.timeout, receiver)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or(Decision::Reject);
+        lock(&self.pending).remove(&id);
+        self.events.emit("hostkey.resolved", json!({"id": id}));
+        decision
+    }
+
+    /// `hostkey.reply`. Unknown or already answered ids are ignored.
+    pub fn reply(&self, id: u64, decision: Decision) {
+        if let Some(sender) = lock(&self.pending).remove(&id) {
+            let _ = sender.send(decision);
+        }
+    }
+}
+
+pub struct Prompts {
+    events: Events,
+    next: AtomicU64,
+    secrets: Mutex<HashMap<u64, oneshot::Sender<Option<String>>>>,
+    hostkeys: Arc<HostKeyPrompts>,
+    timeout: Duration,
+}
+
+impl Prompts {
+    pub fn new(events: Events) -> Arc<Self> {
+        Self::with_timeout(events, ANSWER_TIMEOUT)
+    }
+
+    pub fn with_timeout(events: Events, timeout: Duration) -> Arc<Self> {
         Arc::new(Prompts {
-            emit,
+            hostkeys: HostKeyPrompts::with_timeout(events.clone(), timeout),
+            events,
             next: AtomicU64::new(1),
             secrets: Mutex::new(HashMap::new()),
-            hostkeys: Mutex::new(HashMap::new()),
             timeout,
         })
     }
@@ -76,8 +141,8 @@ impl Prompts {
         let id = self.next_id();
         let (sender, receiver) = oneshot::channel();
         lock(&self.secrets).insert(id, sender);
-        (self.emit)(
-            "askpass",
+        let attached = self.events.emit(
+            "askpass.prompt",
             json!({
                 "id": id,
                 "host": host,
@@ -88,13 +153,17 @@ impl Prompts {
                 "rememberable": false,
             }),
         );
-        let answer = tokio::time::timeout(self.timeout, receiver)
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .flatten();
+        let answer = if attached == 0 {
+            None
+        } else {
+            tokio::time::timeout(self.timeout, receiver)
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+        };
         lock(&self.secrets).remove(&id);
-        (self.emit)("askpass-resolved", json!({ "id": id }));
+        self.events.emit("askpass.resolved", json!({ "id": id }));
         answer
     }
 
@@ -106,40 +175,12 @@ impl Prompts {
     }
 
     pub async fn ask_hostkey(&self, details: &HostKeyDetails) -> Decision {
-        let id = self.next_id();
-        let (sender, receiver) = oneshot::channel();
-        lock(&self.hostkeys).insert(id, sender);
-        let (status, expected) = match &details.status {
-            KnownHostStatus::Changed { expected, .. } => ("changed", expected.clone()),
-            _ => ("unknown", Vec::new()),
-        };
-        (self.emit)(
-            "hostkey",
-            json!({
-                "id": id,
-                "host": details.host,
-                "port": details.port,
-                "algorithm": details.algorithm,
-                "fingerprint": details.fingerprint,
-                "status": status,
-                "expected": expected,
-            }),
-        );
-        let decision = tokio::time::timeout(self.timeout, receiver)
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .unwrap_or(Decision::Reject);
-        lock(&self.hostkeys).remove(&id);
-        (self.emit)("hostkey-resolved", json!({ "id": id }));
-        decision
+        self.hostkeys.ask(self.next_id(), details).await
     }
 
     /// `hostkey_reply`.
     pub fn reply_hostkey(&self, id: u64, decision: &str) {
-        if let Some(sender) = lock(&self.hostkeys).remove(&id) {
-            let _ = sender.send(parse_decision(decision));
-        }
+        self.hostkeys.reply(id, parse_decision(decision));
     }
 }
 
@@ -217,14 +258,16 @@ impl Interaction for PromptInteraction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     type Seen = Arc<Mutex<Vec<(String, Value)>>>;
 
-    fn recording() -> (Emit, Seen) {
+    fn recording() -> (Events, Seen) {
         let seen: Seen = Arc::default();
         let sink = seen.clone();
-        let emit: Emit = Arc::new(move |name, payload| {
+        let emit: Events = Arc::new(move |name: &str, payload: Value| {
             lock(&sink).push((name.to_owned(), payload));
+            1usize
         });
         (emit, seen)
     }
@@ -249,13 +292,13 @@ mod tests {
                 .await
         });
         let (name, payload) = first_event(&seen).await;
-        assert_eq!(name, "askpass");
+        assert_eq!(name, "askpass.prompt");
         assert_eq!(payload["host"], "web");
         assert_eq!(payload["kind"], "password");
         assert_eq!(payload["confirm"], false);
         prompts.reply_secret(payload["id"].as_u64().unwrap(), Some("pw".into()));
         assert_eq!(task.await.unwrap().as_deref(), Some("pw"));
-        assert_eq!(lock(&seen)[1].0, "askpass-resolved");
+        assert_eq!(lock(&seen)[1].0, "askpass.resolved");
     }
 
     #[tokio::test]
@@ -293,7 +336,7 @@ mod tests {
                 .await
         });
         let (name, payload) = first_event(&seen).await;
-        assert_eq!(name, "hostkey");
+        assert_eq!(name, "hostkey.prompt");
         assert_eq!(payload["status"], "changed");
         assert_eq!(payload["expected"][0], "SHA256:old");
         let id = payload["id"].as_u64().unwrap();
@@ -307,5 +350,63 @@ mod tests {
         assert_eq!(parse_decision("accept_once"), Decision::AcceptOnce);
         assert_eq!(parse_decision("accept_and_save"), Decision::AcceptAndSave);
         assert_eq!(parse_decision("whatever"), Decision::Reject);
+    }
+
+    fn details(status: KnownHostStatus) -> HostKeyDetails {
+        HostKeyDetails {
+            host: "h".into(),
+            port: 22,
+            algorithm: "ssh-ed25519".into(),
+            fingerprint: "SHA256:abc".into(),
+            status,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_prompt_with_nobody_attached_is_rejected() {
+        let prompts = HostKeyPrompts::new(Arc::new(|_: &str, _: Value| 0usize));
+        assert_eq!(
+            prompts.ask(1, &details(KnownHostStatus::Unknown)).await,
+            Decision::Reject
+        );
+        // The same for a password: nobody can answer it.
+        let secrets = Prompts::new(Arc::new(|_: &str, _: Value| 0usize));
+        assert_eq!(secrets.ask_secret("h", "p", "password", false).await, None);
+    }
+
+    #[tokio::test]
+    async fn the_first_reply_wins_and_every_client_hears_the_end() {
+        let events: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+        let seen = events.clone();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = count.clone();
+        let prompts = HostKeyPrompts::new(Arc::new(move |kind: &str, payload: Value| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            lock(&seen).push((kind.to_owned(), payload));
+            1usize
+        }));
+        let asking = prompts.clone();
+        let task = tokio::spawn(async move {
+            asking
+                .ask(
+                    7,
+                    &details(KnownHostStatus::Changed {
+                        expected: vec!["SHA256:old".into()],
+                        line: 1,
+                    }),
+                )
+                .await
+        });
+        while count.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        prompts.reply(7, parse_decision("replace_and_save"));
+        prompts.reply(7, Decision::Reject); // too late, ignored
+        assert_eq!(task.await.unwrap(), Decision::ReplaceAndSave);
+        let events = lock(&events);
+        assert_eq!(events[0].0, "hostkey.prompt");
+        assert_eq!(events[0].1["status"], "changed");
+        assert_eq!(events[0].1["expected"][0], "SHA256:old");
+        assert_eq!(events[1], ("hostkey.resolved".to_owned(), json!({"id": 7})));
     }
 }

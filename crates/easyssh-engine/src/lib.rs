@@ -10,16 +10,37 @@
 //! OpenSSH process, no OS keychain. That keeps the crate buildable for
 //! `aarch64-linux-android` and `aarch64-apple-ios`.
 //!
-//! - [`hosts`]: the host list and new hosts, for the mobile UI.
+//! - [`hosts`]: the host list and host editing, for the mobile UI.
 //! - [`known_hosts`]: host keys in the store (shared with the daemon).
-//! - [`prompts`]: passwords and host-key questions asked through events.
-//! - [`Engine`]: opens shells and keeps them by id.
+//! - [`events`]: the sink the engine reports to; the daemon and the app
+//!   each implement it.
+//! - [`prompts`]: passwords and host-key questions asked through events
+//!   (the host-key part is shared with the daemon).
+//! - [`registry`]: one connection per host, shared by terminal, files and
+//!   tunnels (shared with the daemon).
+//! - [`files`]: SFTP sessions and the transfer queue (shared with the daemon).
+//! - [`tunnels`]: forwards on the shared connection (shared with the daemon).
+//! - [`Engine`]: puts them together for the app: opens shells, file sessions
+//!   and tunnels on leases of the shared connection.
 
+pub mod events;
+pub mod files;
 pub mod hosts;
 pub mod known_hosts;
 pub mod prompts;
+pub mod registry;
 mod shell;
+pub mod tunnels;
 mod utf8;
 
+use easyssh_ssh::{Error as SshError, Session};
+use std::sync::Arc;
+
+pub use events::{EventSink, Events};
 pub use shell::{error_code, Engine, OpenError, ShellSink, Target};
 pub use utf8::Utf8Stream;
+
+/// A connect failure that several waiting callers can share.
+pub type SharedError = Arc<SshError>;
+/// A counted reference to a host's shared connection.
+pub type Lease = registry::Lease<Session, SharedError>;

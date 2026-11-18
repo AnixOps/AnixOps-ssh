@@ -2,8 +2,8 @@
 //! `transfer.*`. An SFTP session is a channel of the host's shared
 //! connection; every transfer runs as its own task so it can be cancelled.
 
-use super::interact::Broadcast;
-use super::Lease;
+use crate::events::Events;
+use crate::Lease;
 use easyssh_ssh::{DirEntry, EntryKind, Error as SshError, Sftp};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -29,6 +29,8 @@ pub struct SftpEntry {
 
 struct Transfer {
     abort: AbortHandle,
+    /// Where this transfer reports to.
+    events: Events,
     /// What a cancelled or failed transfer leaves behind and should remove
     /// (downloads only).
     partial: Option<PathBuf>,
@@ -132,9 +134,10 @@ impl Files {
         local: PathBuf,
         remote: String,
         recursive: bool,
-        broadcast: Broadcast,
+        broadcast: Events,
     ) -> String {
         let id = self.id("transfer");
+        let events = broadcast.clone();
         let transfers = self.transfers.clone();
         let task_id = id.clone();
         let (go, gate) = tokio::sync::oneshot::channel::<()>();
@@ -162,7 +165,7 @@ impl Files {
                     ("failed", Some(e.to_string()))
                 }
             };
-            broadcast(
+            broadcast.emit(
                 "transfer.done",
                 json!({"transfer_id": task_id, "status": status, "error": error}),
             );
@@ -171,6 +174,7 @@ impl Files {
             id.clone(),
             Transfer {
                 abort: task.abort_handle(),
+                events,
                 partial: (!upload).then_some(local),
             },
         );
@@ -178,8 +182,9 @@ impl Files {
         id
     }
 
-    /// `transfer.cancel`. Unknown or finished transfers are ignored.
-    pub fn cancel_transfer(&self, id: &str, broadcast: &Broadcast) {
+    /// `transfer.cancel`. Unknown or finished transfers are ignored. The
+    /// end is reported to the sink the transfer was started with.
+    pub fn cancel_transfer(&self, id: &str) {
         let Some(transfer) = lock(&self.transfers).remove(id) else {
             return;
         };
@@ -187,7 +192,7 @@ impl Files {
         if let Some(partial) = &transfer.partial {
             remove_partial(partial);
         }
-        broadcast(
+        transfer.events.emit(
             "transfer.done",
             json!({"transfer_id": id, "status": "cancelled", "error": null}),
         );
@@ -205,14 +210,14 @@ fn remove_partial(path: &Path) {
 /// Reports bytes moved, at most every [`PROGRESS_EVERY`].
 struct Progress {
     id: String,
-    broadcast: Broadcast,
+    broadcast: Events,
     bytes: u64,
     reported: u64,
     last: Instant,
 }
 
 impl Progress {
-    fn new(id: String, broadcast: Broadcast) -> Self {
+    fn new(id: String, broadcast: Events) -> Self {
         Progress {
             id,
             broadcast,
@@ -232,7 +237,7 @@ impl Progress {
     fn flush(&mut self) {
         if self.bytes != self.reported {
             self.reported = self.bytes;
-            (self.broadcast)(
+            self.broadcast.emit(
                 "transfer.progress",
                 json!({"transfer_id": self.id, "bytes": self.bytes}),
             );
@@ -462,7 +467,7 @@ mod tests {
         let seen = events.clone();
         let mut progress = Progress::new(
             "t".into(),
-            Arc::new(move |kind, payload| {
+            Arc::new(move |kind: &str, payload: Value| {
                 lock(&seen).push((kind.to_owned(), payload));
                 1
             }),

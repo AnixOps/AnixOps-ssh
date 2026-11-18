@@ -8,31 +8,29 @@
 //! three.
 
 pub mod choice;
-pub mod files;
 pub mod interact;
-/// Host keys in the store; shared with the in-process engine of the mobile app.
-pub use easyssh_engine::known_hosts;
+/// Host keys in the store, the connection registry, the file sessions and the
+/// tunnels live in `easyssh-engine`: the in-process engine of the mobile app
+/// runs the same code.
+pub use easyssh_engine::{files, known_hosts, registry, tunnels};
 pub mod plan;
-pub mod registry;
-pub mod tunnels;
 
 use crate::askpass::Hub;
+use easyssh_engine::prompts::HostKeyPrompts;
 use easyssh_ssh::{
     AgentSource, ConnectParams, Error as SshError, MemoryIdentity, Session, ShellHandle,
     ShellOptions,
 };
 use easyssh_store::Store;
-use interact::{Broadcast, DaemonInteraction, HostKeyPrompts, SavedPassword};
+use interact::{Broadcast, DaemonInteraction, SavedPassword};
 use known_hosts::{migrate_app_file, LayeredKnownHosts, StoreKnownHosts};
 use plan::{HostSpec, RusshPlan};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-/// A connect failure that several waiting callers can share.
-pub type SharedError = Arc<SshError>;
-pub type Lease = registry::Lease<Session, SharedError>;
+pub use easyssh_engine::{Lease, SharedError};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
@@ -106,7 +104,7 @@ impl Engine {
     ) -> Arc<Engine> {
         Arc::new(Engine {
             registry: registry::Registry::new(linger),
-            hostkeys: HostKeyPrompts::new(broadcast),
+            hostkeys: HostKeyPrompts::with_timeout(broadcast, crate::askpass::ANSWER_TIMEOUT),
             hub,
             paths: Mutex::new(paths),
             store: Mutex::new(None),
@@ -255,17 +253,7 @@ impl Engine {
 
     /// `engine.connections`.
     pub async fn connections(&self) -> Value {
-        let rows = self.registry.connections().await;
-        json!({
-            "opened": self.registry.opened(),
-            "live": rows.len(),
-            "connections": rows.iter().map(|row| json!({
-                "host_id": row.key.host_id,
-                "target": row.key.target,
-                "jump": row.key.jump,
-                "leases": row.leases,
-            })).collect::<Vec<_>>(),
-        })
+        self.registry.report().await
     }
 
     /// Stops tunnels and transfers and closes every connection.

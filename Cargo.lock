@@ -1813,7 +1813,9 @@ version = "2.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "chrono",
  "easyssh-core",
+ "easyssh-proto",
  "easyssh-ssh",
  "easyssh-store",
  "russh",
@@ -1821,6 +1823,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
