@@ -493,13 +493,16 @@ async fn a_jump_host_uses_its_own_saved_password_and_nobody_is_asked() {
         host: "target".into(),
         port: 22,
         user: "keyuser".into(),
-        identity: Some(MemoryIdentity::new("inner key", key, None)),
+        identity: None,
         jump: vec![bastion],
         saved_password: None,
     };
     let mut behind = easyssh_engine::with_saved_login(&vault, behind).expect("saved login");
     assert!(behind.jump[0].saved_password.is_some());
-    // Keep the inner host's own (vault) password out of it: it logs in by key.
+    // The inner host logs in by key (with_saved_login replaced its identity
+    // with the vault's, which has none), and its own vault password is left
+    // out so that only the jump hop has one.
+    behind.identity = Some(MemoryIdentity::new("inner key", key, None));
     behind.saved_password = None;
     let asked = Arc::new(Mutex::new(Vec::new()));
     // Were a question asked, it would be answered wrongly and the login fail.
