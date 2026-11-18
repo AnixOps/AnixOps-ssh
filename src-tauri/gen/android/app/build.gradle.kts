@@ -14,6 +14,22 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Release signing (RELEASING.md, "Mobile"). The release workflow decodes the
+// upload keystore to a file and passes these four variables. When any is
+// missing (forks, pull requests, local builds) no signing config is created
+// and the release build comes out unsigned, exactly as before. Nothing secret
+// lives in this repository.
+val releaseKeystorePath: String? = System.getenv("ANDROID_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
+val releaseKeystorePassword: String? = System.getenv("ANDROID_KEYSTORE_PASSWORD")?.takeIf { it.isNotEmpty() }
+val releaseKeyAlias: String? = System.getenv("ANDROID_KEY_ALIAS")?.takeIf { it.isNotBlank() }
+val releaseKeyPassword: String? = System.getenv("ANDROID_KEY_PASSWORD")?.takeIf { it.isNotEmpty() }
+val releaseSigningAvailable: Boolean =
+    releaseKeystorePath != null &&
+        file(releaseKeystorePath).isFile &&
+        releaseKeystorePassword != null &&
+        releaseKeyAlias != null &&
+        releaseKeyPassword != null
+
 android {
     compileSdk = 37
     namespace = "com.anixops.ssh"
@@ -24,6 +40,16 @@ android {
         targetSdk = 37
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        if (releaseSigningAvailable) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -39,6 +65,9 @@ android {
             }
         }
         getByName("release") {
+            if (releaseSigningAvailable) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                enable = true
             }

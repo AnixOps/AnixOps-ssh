@@ -109,6 +109,227 @@ jobs:
           ls -la upload
           gh release upload "$TAG" upload/* --clobber
 
+  # Mobile jobs (RELEASING.md, "Mobile"). They run next to the desktop build,
+  # are not in publish's needs, and are continue-on-error: whatever happens
+  # here never blocks or fails the desktop release. A missing secret skips the
+  # signed output with a note in the job summary. Assets uploaded after the
+  # release was published are still attached (gh release upload works on both).
+  android:
+    name: Android (signed AAB and APK)
+    needs: prepare
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Is signing configured
+        id: signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Android signing secrets found: building a signed release."
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Android: built unsigned"
+              echo
+              echo "One or more of ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD is not set. The APK is built to prove the release build works and is kept as a workflow artifact only; nothing is attached to the release (an unsigned APK cannot be installed and Play rejects an unsigned AAB). See RELEASING.md, Mobile."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - name: Android SDK and NDK
+        run: |
+          echo "NDK_HOME=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+      - run: npm ci
+      - name: Decode the upload keystore
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+          # Read by app/build.gradle.kts, with the three passwords and alias below.
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+      - name: Build
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ steps.signing.outputs.signed == 'true' && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
+          ANDROID_KEY_ALIAS: ${{ steps.signing.outputs.signed == 'true' && secrets.ANDROID_KEY_ALIAS || '' }}
+          ANDROID_KEY_PASSWORD: ${{ steps.signing.outputs.signed == 'true' && secrets.ANDROID_KEY_PASSWORD || '' }}
+          EASYSSH_SENTRY_DSN: ${{ secrets.EASYSSH_SENTRY_DSN }}
+          EASYSSH_USAGE_URL: ${{ secrets.EASYSSH_USAGE_URL }}
+        run: |
+          # Only arm64 is built: it is the one Android target CI proves. The
+          # AAB therefore serves 64-bit ARM devices (nearly every phone sold
+          # since 2017) and not x86 emulators or Chromebooks.
+          npx tauri android build --apk --aab --target aarch64
+      - name: Collect and check the output
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+        run: |
+          version="${TAG#v}"
+          mkdir upload
+          apk=$(find src-tauri/gen/android/app/build/outputs/apk -name '*release*.apk' | head -1)
+          aab=$(find src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' | head -1)
+          [ -n "$apk" ] || { echo "::error::no release APK was built"; exit 1; }
+          # Tauri derives versionCode from the app version: major*1000000 + minor*1000 + patch.
+          IFS=. read -r major minor patch <<< "$version"
+          want=$(( major * 1000000 + minor * 1000 + patch ))
+          got=$(sed -n 's/^tauri.android.versionCode=//p' src-tauri/gen/android/app/tauri.properties)
+          echo "versionCode: expected $want, Tauri wrote ${got:-nothing}"
+          [ "$got" = "$want" ] || { echo "::error::Android versionCode ${got:-unset} does not follow the app version (expected $want)"; exit 1; }
+          if [ "$SIGNED" = "true" ]; then
+            [ -n "$aab" ] || { echo "::error::no AAB was built"; exit 1; }
+            cp "$apk" "upload/AnixOps-SSH-$version-android-arm64.apk"
+            cp "$aab" "upload/AnixOps-SSH-$version-android.aab"
+            "$ANDROID_HOME"/build-tools/*/apksigner verify --verbose "upload/AnixOps-SSH-$version-android-arm64.apk" | head -5
+          else
+            cp "$apk" "upload/AnixOps-SSH-$version-android-arm64-unsigned.apk"
+          fi
+          ls -la upload
+      - name: Attach to the release
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          gh release upload "$TAG" upload/* --clobber
+          {
+            echo "### Android: signed release attached"
+            echo
+            echo "- versionName ${TAG#v}, versionCode derived from it"
+            echo "- AAB for Google Play (upload it in the Play Console; the first one by hand, see RELEASING.md)"
+            echo "- arm64 APK for direct download"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the unsigned APK as an artifact
+        if: steps.signing.outputs.signed != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnixOps-SSH-Android-unsigned
+          path: upload/*.apk
+      - name: Failure note
+        if: failure()
+        run: |
+          echo "### Android job failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "The desktop release is not affected. Re-run this job after fixing the cause; see the log above." >> "$GITHUB_STEP_SUMMARY"
+
+  ios:
+    name: iOS (TestFlight)
+    needs: prepare
+    runs-on: macos-latest
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Is signing configured
+        id: signing
+        env:
+          HAVE_ALL: ${{ secrets.APP_STORE_CONNECT_KEY_ID != '' && secrets.APP_STORE_CONNECT_ISSUER_ID != '' && secrets.APP_STORE_CONNECT_KEY_BASE64 != '' && secrets.APPLE_TEAM_ID != '' && secrets.IOS_CERTIFICATE_BASE64 != '' && secrets.IOS_CERTIFICATE_PASSWORD != '' && secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
+        run: |
+          if [ "$HAVE_ALL" = "true" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### iOS: skipped"
+              echo
+              echo "One or more of APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_KEY_BASE64, APPLE_TEAM_ID, IOS_CERTIFICATE_BASE64, IOS_CERTIFICATE_PASSWORD and IOS_PROVISIONING_PROFILE_BASE64 is not set, so no IPA was built or uploaded. See RELEASING.md, Mobile."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/setup-node@v5
+        if: steps.signing.outputs.signed == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.signing.outputs.signed == 'true'
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        if: steps.signing.outputs.signed == 'true'
+      - name: Set the bundle version from the tag
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          version="${TAG#v}"
+          # CFBundleShortVersionString is the app version. CFBundleVersion is
+          # the same number Android uses as versionCode (major*1000000 +
+          # minor*1000 + patch): one integer that rises with every version, as
+          # App Store Connect requires for builds of an app.
+          IFS=. read -r major minor patch <<< "$version"
+          build=$(( major * 1000000 + minor * 1000 + patch ))
+          cd src-tauri/gen/apple
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" anixops-ssh_iOS/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build" anixops-ssh_iOS/Info.plist
+          sed -i '' -E "s/^( *CFBundleShortVersionString: ).*/\1$version/; s/^( *CFBundleVersion: ).*/\1\"$build\"/" project.yml
+          grep -n "CFBundle.*Version" project.yml
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" -c "Print :CFBundleVersion" anixops-ssh_iOS/Info.plist
+      - run: npm ci
+        if: steps.signing.outputs.signed == 'true'
+      - name: Install the App Store Connect key
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_KEY_BASE64 }}
+        run: |
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          printf '%s' "$KEY_BASE64" | base64 --decode > "$HOME/.appstoreconnect/private_keys/AuthKey_$KEY_ID.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_$KEY_ID.p8"
+      - name: Build the IPA
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          # tauri-cli imports the certificate into a temporary keychain and
+          # installs the provisioning profile from these.
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          EASYSSH_SENTRY_DSN: ${{ secrets.EASYSSH_SENTRY_DSN }}
+          EASYSSH_USAGE_URL: ${{ secrets.EASYSSH_USAGE_URL }}
+        run: |
+          export APPLE_API_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_$APPLE_API_KEY.p8"
+          npx tauri ios build --export-method app-store-connect --ci
+      - name: Upload to TestFlight
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          ipa=$(find src-tauri/gen/apple/build -name '*.ipa' | head -1)
+          [ -n "$ipa" ] || { echo "::error::no IPA was built"; exit 1; }
+          xcrun altool --upload-app --type ios --file "$ipa" --apiKey "$KEY_ID" --apiIssuer "$ISSUER_ID"
+          {
+            echo "### iOS: uploaded to TestFlight"
+            echo
+            echo "- ${TAG#v}, build number derived from it. Processing takes a few minutes; the build then appears in App Store Connect, TestFlight."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Failure note
+        if: failure()
+        run: |
+          echo "### iOS job failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "The desktop release is not affected. Re-run this job after fixing the cause; see the log above." >> "$GITHUB_STEP_SUMMARY"
+
   publish:
     name: Publish release
     needs: build
