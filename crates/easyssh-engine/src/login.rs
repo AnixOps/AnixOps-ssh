@@ -106,6 +106,28 @@ pub fn saved_login(
     Ok(login)
 }
 
+/// `target` with the vault's saved login filled in: the key of the host and of
+/// each jump hop that is a saved host, and the host's saved password. Every
+/// way of opening a host (terminal, files, forward) goes through this, so they
+/// all make the same connection and share it. Nothing saved leaves the target
+/// as it is; a saved key with a locked vault is the error `vault_locked`.
+pub fn with_saved_login(
+    secrets: &Arc<dyn SecretSource>,
+    mut target: Target,
+) -> Result<Target, OpenError> {
+    for hop in &mut target.jump {
+        // A hop that is only an address (`jump:` ids) has nothing saved.
+        if !hop.host_id.starts_with("jump:") {
+            let login = saved_login(secrets, &hop.host_id, hop)?;
+            hop.identity = login.identity;
+        }
+    }
+    let login = saved_login(secrets, &target.host_id, &target)?;
+    target.identity = login.identity;
+    target.saved_password = login.password;
+    Ok(target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,11 +164,14 @@ mod tests {
 
     fn target() -> Target {
         Target {
+            host_id: "h1".into(),
             label: "web".into(),
             host: "example.com".into(),
             port: 22,
             user: "me".into(),
             identity: None,
+            jump: Vec::new(),
+            saved_password: None,
         }
     }
 
@@ -246,5 +271,42 @@ mod tests {
             "h".into(),
         );
         assert_eq!(saved.take("me@example.com's password: "), None);
+    }
+
+    #[test]
+    fn every_way_of_opening_a_host_gets_the_same_login() {
+        let hop = |id: &str| Target {
+            host_id: id.into(),
+            ..target()
+        };
+        let opened = with_saved_login(
+            &source(Saved {
+                password: Some("pw"),
+                key: Some("PEM"),
+                passphrase: None,
+                locked: false,
+            }),
+            Target {
+                jump: vec![hop("bastion"), hop("jump:me@elsewhere:22")],
+                ..target()
+            },
+        )
+        .unwrap();
+        assert!(opened.identity.is_some() && opened.saved_password.is_some());
+        // A hop that is a saved host brings its key; a bare address has none.
+        assert!(opened.jump[0].identity.is_some());
+        assert!(opened.jump[1].identity.is_none());
+        // A locked vault with a saved key stops the connection before it starts.
+        let error = with_saved_login(
+            &source(Saved {
+                password: None,
+                key: Some("PEM"),
+                passphrase: None,
+                locked: true,
+            }),
+            target(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "vault_locked");
     }
 }

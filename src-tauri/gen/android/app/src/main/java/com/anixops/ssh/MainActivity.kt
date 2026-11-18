@@ -31,5 +31,8 @@ class MainActivity : TauriActivity() {
     // The page asks for the session notification through this object
     // (src/lib/androidBridge.ts); the page is local, never remote content.
     webView.addJavascriptInterface(AndroidBridge(this), "AnixOpsAndroid")
+    // Share sheet and Downloads for what the file browser downloaded
+    // (src/lib/mobileShare.ts).
+    webView.addJavascriptInterface(AnixNative(this), "AnixNative")
   }
 }

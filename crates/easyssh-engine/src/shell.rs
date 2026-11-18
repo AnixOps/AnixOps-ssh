@@ -1,12 +1,25 @@
-//! Terminal sessions on russh, owned by the app process.
+//! The in-process engine: one russh connection per host, shared by the
+//! terminal, the file browser and tunnels, owned by the app process.
+//!
+//! This is the same [`Registry`] the desktop daemon uses (see
+//! [`crate::registry`]): a terminal, an SFTP session and a forward on the same
+//! host lease one connection, so a password or key question is asked once. The
+//! connection lingers for 30 s after its last user went away, so leaving the
+//! terminal for the file browser does not log in again.
 
+use crate::events::Events;
+use crate::files::Files;
 use crate::login::SavedPassword;
 use crate::prompts::{PromptInteraction, Prompts};
+use crate::registry::{self, Key, Registry};
+use crate::tunnels::Tunnels;
 use crate::utf8::Utf8Stream;
+use crate::{Lease, SharedError};
 use easyssh_ssh::{
     AgentSource, ConnectParams, Error as SshError, ExitStatus, KnownHosts, MemoryIdentity, Session,
     ShellHandle, ShellOptions,
 };
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -20,6 +33,9 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Where to connect and how the dialogs name it.
 #[derive(Debug, Clone)]
 pub struct Target {
+    /// The saved host's id; with the address and the jump chain it names the
+    /// shared connection.
+    pub host_id: String,
     /// The host's display name.
     pub label: String,
     pub host: String,
@@ -27,6 +43,26 @@ pub struct Target {
     pub user: String,
     /// A private key held in memory, tried before the password prompt.
     pub identity: Option<MemoryIdentity>,
+    /// Jump hosts, in order; each hop is reached through the one before it.
+    pub jump: Vec<Target>,
+    /// The saved password, offered once at the password prompt.
+    pub saved_password: Option<Arc<SavedPassword>>,
+}
+
+impl Target {
+    /// `user@host:port`, as the registry key and `engine.connections` show it.
+    pub fn account(&self) -> String {
+        format!("{}@{}:{}", self.user, self.host, self.port)
+    }
+
+    /// What identifies the shared connection to this target.
+    pub fn key(&self) -> Key {
+        Key {
+            host_id: self.host_id.clone(),
+            target: self.account(),
+            jump: self.jump.iter().map(Target::account).collect(),
+        }
+    }
 }
 
 /// Receives what a shell produces. Called from the engine's tasks, never
@@ -78,17 +114,38 @@ enum Command {
 pub struct Engine {
     prompts: Arc<Prompts>,
     known_hosts: Arc<dyn KnownHosts>,
+    registry: Registry<Session, SharedError>,
+    files: Files,
+    tunnels: Tunnels,
+    events: Events,
     shells: Mutex<HashMap<String, mpsc::UnboundedSender<Command>>>,
     next: AtomicU64,
     /// SSH keepalive interval for new connections (`None` turns them off).
     keepalive: Mutex<Option<Duration>>,
 }
 
+fn fail(error: &SshError) -> OpenError {
+    OpenError {
+        code: error_code(error),
+        message: error.to_string(),
+    }
+}
+
 impl Engine {
-    pub fn new(prompts: Arc<Prompts>, known_hosts: Arc<dyn KnownHosts>) -> Arc<Engine> {
+    /// `events` carries transfer and tunnel events; the questions go through
+    /// `prompts`, which has its own sink.
+    pub fn new(
+        prompts: Arc<Prompts>,
+        known_hosts: Arc<dyn KnownHosts>,
+        events: Events,
+    ) -> Arc<Engine> {
         Arc::new(Engine {
             prompts,
             known_hosts,
+            registry: Registry::new(registry::DEFAULT_LINGER),
+            files: Files::default(),
+            tunnels: Tunnels::default(),
+            events,
             shells: Mutex::new(HashMap::new()),
             next: AtomicU64::new(1),
             keepalive: Mutex::new(Some(Duration::from_secs(60))),
@@ -106,32 +163,34 @@ impl Engine {
         &self.prompts
     }
 
-    /// Connects (asking whatever it takes), opens a shell on a terminal of
-    /// `cols` x `rows` and returns its id. Output and the end of the shell go
-    /// to `sink`. There is no agent on a phone, so authentication is a saved
-    /// key, keyboard-interactive or a password.
-    pub async fn open_shell(
-        &self,
-        target: Target,
-        cols: u16,
-        rows: u16,
-        sink: Arc<dyn ShellSink>,
-    ) -> Result<String, OpenError> {
-        self.open_shell_with_login(target, None, cols, rows, sink)
-            .await
+    pub fn files(&self) -> &Files {
+        &self.files
     }
 
-    /// Like [`Engine::open_shell`], with the host's saved password to offer
-    /// at the password prompt (a saved key travels in `target.identity`; see
-    /// [`crate::saved_login`]).
-    pub async fn open_shell_with_login(
-        &self,
-        target: Target,
-        saved_password: Option<Arc<SavedPassword>>,
-        cols: u16,
-        rows: u16,
-        sink: Arc<dyn ShellSink>,
-    ) -> Result<String, OpenError> {
+    pub fn tunnels(&self) -> &Tunnels {
+        &self.tunnels
+    }
+
+    pub fn events(&self) -> &Events {
+        &self.events
+    }
+
+    /// Closes the host's shared connection now (a terminal found its socket
+    /// untrustworthy: the app came back from the background). The next lease
+    /// connects anew, and the files and forwards that open after it share that
+    /// one; the ones on the old connection fail and are opened again.
+    pub async fn forget_connection(&self, target: &Target) {
+        self.registry.evict(&target.key()).await;
+    }
+
+    /// How long a connection stays up after its last user went away.
+    pub fn set_linger(&self, linger: Duration) {
+        self.registry.set_linger(linger);
+    }
+
+    fn params(&self, target: &Target) -> ConnectParams {
+        // There is no agent on a phone, so authentication is a saved key,
+        // keyboard-interactive or a password.
         let mut params = ConnectParams::new(target.host.clone(), target.port, target.user.clone())
             .known_hosts(self.known_hosts.clone())
             .keepalive(*lock(&self.keepalive))
@@ -139,30 +198,122 @@ impl Engine {
         if let Some(identity) = target.identity.clone() {
             params = params.memory_identity(identity);
         }
+        params
+    }
+
+    async fn connect(&self, target: &Target) -> Result<Session, SharedError> {
+        let hops: Vec<ConnectParams> = target.jump.iter().map(|hop| self.params(hop)).collect();
         let interaction = PromptInteraction {
             prompts: self.prompts.clone(),
             label: target.label.clone(),
-            saved_password,
+            saved_password: target.saved_password.clone(),
         };
-        let fail = |error: SshError| OpenError {
-            code: error_code(&error),
-            message: error.to_string(),
-        };
-        let session = Session::connect(params, &interaction).await.map_err(fail)?;
-        let shell = session
+        Session::connect_via(&hops, self.params(target), &interaction)
+            .await
+            .map_err(Arc::new)
+    }
+
+    /// A lease on the host's shared connection, connecting (and asking the
+    /// user whatever it takes) when there is none.
+    pub async fn lease(&self, target: &Target) -> Result<Lease, OpenError> {
+        self.registry
+            .acquire(target.key(), || self.connect(target))
+            .await
+            .map_err(|error| fail(&error))
+    }
+
+    /// Like [`Engine::open_shell`], with the host's saved password to offer at
+    /// the password prompt (a saved key travels in `target.identity`; see
+    /// [`crate::saved_login`]). The login only matters for the connection that
+    /// is made: a host already connected is reused as it is.
+    pub async fn open_shell_with_login(
+        &self,
+        mut target: Target,
+        saved_password: Option<Arc<SavedPassword>>,
+        cols: u16,
+        rows: u16,
+        sink: Arc<dyn ShellSink>,
+    ) -> Result<String, OpenError> {
+        if saved_password.is_some() {
+            target.saved_password = saved_password;
+        }
+        self.open_shell(target, cols, rows, sink).await
+    }
+
+    /// Connects (asking whatever it takes), opens a shell on a terminal of
+    /// `cols` x `rows` and returns its id. Output and the end of the shell go
+    /// to `sink`. The shell holds a lease on the host's connection for as
+    /// long as it lives.
+    pub async fn open_shell(
+        &self,
+        target: Target,
+        cols: u16,
+        rows: u16,
+        sink: Arc<dyn ShellSink>,
+    ) -> Result<String, OpenError> {
+        let lease = self.lease(&target).await?;
+        let shell = lease
             .shell(ShellOptions {
                 term: "xterm-256color".into(),
                 cols: u32::from(cols.max(1)),
                 rows: u32::from(rows.max(1)),
             })
             .await
-            .map_err(fail)?;
+            .map_err(|error| fail(&error))?;
 
         let id = format!("m{}", self.next.fetch_add(1, Ordering::Relaxed));
         let (commands, receiver) = mpsc::unbounded_channel();
         lock(&self.shells).insert(id.clone(), commands);
-        tokio::spawn(pump(session, shell, receiver, sink));
+        tokio::spawn(pump(lease, shell, receiver, sink));
         Ok(id)
+    }
+
+    /// Opens a file session on the host's shared connection and returns its
+    /// id and the home directory.
+    pub async fn open_files(&self, target: &Target) -> Result<(String, String), OpenError> {
+        let lease = self.lease(target).await?;
+        self.files.open(lease).await.map_err(|error| fail(&error))
+    }
+
+    /// Starts the forward of `tunnel` on the host's shared connection and
+    /// returns the port that listens. Progress is reported as `tunnel.status`
+    /// events.
+    pub async fn start_tunnel(
+        &self,
+        tunnel: &easyssh_core::Tunnel,
+        target: &Target,
+    ) -> Result<u16, OpenError> {
+        if !self.tunnels.begin(tunnel, &self.events).await {
+            return Err(OpenError {
+                code: "already_running",
+                message: "the tunnel is already running".into(),
+            });
+        }
+        let lease = match self.lease(target).await {
+            Ok(lease) => lease,
+            Err(error) => {
+                self.tunnels
+                    .failed_with(tunnel, &error.message, &self.events);
+                return Err(error);
+            }
+        };
+        match self.tunnels.start(tunnel, lease, self.events.clone()).await {
+            Ok(port) => Ok(port),
+            Err(error) => {
+                self.tunnels.failed(tunnel, &error, &self.events);
+                Err(fail(&error))
+            }
+        }
+    }
+
+    pub async fn stop_tunnel(&self, id: &str) {
+        self.tunnels.stop(id, &self.events).await;
+    }
+
+    /// `engine.connections`: how many connections were opened and which are
+    /// up now. A terminal, the files and a tunnel of one host share one.
+    pub async fn connections(&self) -> Value {
+        self.registry.report().await
     }
 
     fn send(&self, id: &str, command: Command) -> Result<(), String> {
@@ -206,11 +357,20 @@ impl Engine {
             let _ = sender.send(Command::Close);
         }
     }
+
+    /// Stops tunnels and transfers, ends the shells and closes every
+    /// connection.
+    pub async fn shutdown(&self) {
+        self.tunnels.stop_all().await;
+        self.files.stop_all();
+        self.close_all();
+        self.registry.close_all().await;
+    }
 }
 
 /// Moves bytes between the channel and the UI until either side ends.
 async fn pump(
-    session: Session,
+    lease: Lease,
     mut shell: ShellHandle,
     mut commands: mpsc::UnboundedReceiver<Command>,
     sink: Arc<dyn ShellSink>,
@@ -241,7 +401,9 @@ async fn pump(
                 }
                 Some(Command::Close) | None => {
                     let _ = shell.close().await;
-                    let _ = session.disconnect().await;
+                    // The connection lingers for a moment (the file browser
+                    // may still want it) and closes when nobody leased it.
+                    drop(lease);
                     sink.exit(None);
                     return;
                 }
@@ -249,7 +411,7 @@ async fn pump(
         }
     }
     let status = shell.wait_exit().await;
-    let _ = session.disconnect().await;
+    drop(lease);
     sink.exit(match status {
         ExitStatus::Code(code) => Some(code),
         _ => None,
@@ -263,9 +425,43 @@ mod tests {
 
     fn engine() -> Arc<Engine> {
         Engine::new(
-            Prompts::new(Arc::new(|_, _| {})),
+            Prompts::new(crate::events::no_events()),
             Arc::new(MemoryKnownHosts::new()),
+            crate::events::no_events(),
         )
+    }
+
+    fn target(host_id: &str, jump: Vec<Target>) -> Target {
+        Target {
+            host_id: host_id.into(),
+            label: "none".into(),
+            host: "127.0.0.1".into(),
+            port: 1,
+            user: "me".into(),
+            identity: None,
+            jump,
+            saved_password: None,
+        }
+    }
+
+    #[test]
+    fn a_connection_is_named_by_host_address_and_jump_chain() {
+        let hop = Target {
+            host: "bastion".into(),
+            port: 2222,
+            user: "jump".into(),
+            ..target("b", vec![])
+        };
+        let plain = target("h", vec![]).key();
+        let jumped = target("h", vec![hop]).key();
+        assert_eq!(plain.target, "me@127.0.0.1:1");
+        assert!(plain.jump.is_empty());
+        assert_eq!(jumped.jump, vec!["jump@bastion:2222"]);
+        assert_ne!(
+            plain, jumped,
+            "the same host through a jump host is another connection"
+        );
+        assert_eq!(plain, target("h", vec![]).key());
     }
 
     #[test]
@@ -291,17 +487,38 @@ mod tests {
             fn exit(&self, _: Option<u32>) {}
         }
         // Port 1 on the loopback address is closed.
-        let target = Target {
-            label: "none".into(),
-            host: "127.0.0.1".into(),
-            port: 1,
-            user: "me".into(),
-            identity: None,
-        };
         let error = engine()
-            .open_shell(target, 80, 24, Arc::new(Quiet))
+            .open_shell(target("h", vec![]), 80, 24, Arc::new(Quiet))
             .await
             .unwrap_err();
         assert_eq!(error.code, "network", "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_connect_leaves_no_connection_and_the_files_and_tunnels_see_the_same_error() {
+        let engine = engine();
+        let target = target("h", vec![]);
+        let files = engine.open_files(&target).await.unwrap_err();
+        assert_eq!(files.code, "network", "{files}");
+        let tunnel = easyssh_core::Tunnel {
+            id: "t".into(),
+            name: "t".into(),
+            host_id: "h".into(),
+            kind: easyssh_core::TunnelKind::Local,
+            bind_address: None,
+            bind_port: 18080,
+            target_host: Some("localhost".into()),
+            target_port: Some(80),
+        };
+        let started = engine.start_tunnel(&tunnel, &target).await.unwrap_err();
+        assert_eq!(started.code, "network", "{started}");
+        // The forward shows as failed rather than starting forever.
+        assert_eq!(engine.tunnels().list()["tunnels"][0]["state"], "failed");
+        let report = engine.connections().await;
+        assert_eq!(report["opened"], 0);
+        assert_eq!(report["live"], 0);
+        // A second start is allowed after a failure.
+        assert!(engine.start_tunnel(&tunnel, &target).await.is_err());
+        engine.shutdown().await;
     }
 }

@@ -45,30 +45,38 @@ impl SupervisedSink for Channelled {
 fn engine() -> Arc<Engine> {
     let cell: Arc<OnceLock<Weak<Prompts>>> = Arc::default();
     let reply = cell.clone();
-    let prompts = Prompts::new(Arc::new(move |name, payload| {
+    let prompts = Prompts::new(Arc::new(move |name: &str, payload: serde_json::Value| {
         let Some(prompts) = reply.get().and_then(Weak::upgrade) else {
-            return;
+            return 0usize;
         };
         let Some(id) = payload["id"].as_u64() else {
-            return;
+            return 1;
         };
         match name {
-            "hostkey" => prompts.reply_hostkey(id, "accept_once"),
-            "askpass" => prompts.reply_secret(id, Some(PW_PASSWORD.to_owned())),
+            "hostkey.prompt" => prompts.reply_hostkey(id, "accept_once"),
+            "askpass.prompt" => prompts.reply_secret(id, Some(PW_PASSWORD.to_owned())),
             _ => {}
         }
+        1
     }));
     cell.set(Arc::downgrade(&prompts)).unwrap();
-    Engine::new(prompts, Arc::new(MemoryKnownHosts::new()))
+    Engine::new(
+        prompts,
+        Arc::new(MemoryKnownHosts::new()),
+        Arc::new(|_: &str, _: serde_json::Value| 1usize),
+    )
 }
 
 fn target() -> Target {
     Target {
+        host_id: "e2e".into(),
         label: "e2e".into(),
         host: "127.0.0.1".into(),
         port: TARGET_PORT,
         user: PW_USER.into(),
         identity: None,
+        jump: Vec::new(),
+        saved_password: None,
     }
 }
 

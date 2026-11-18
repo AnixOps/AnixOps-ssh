@@ -1,7 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ChevronLeft, ChevronsDown, ChevronsUp, Keyboard, KeyboardOff, RotateCw, SlidersHorizontal, Unplug } from "lucide-react";
+import { ChevronLeft, ChevronsDown, FolderOpen, ChevronsUp, Keyboard, KeyboardOff, RotateCw, SlidersHorizontal, Unplug } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { MobileKeyBar, type KeyBarActions, type ModifierName } from "@/components/mobile/MobileKeyBar";
 import { SelectionOverlay } from "@/components/mobile/SelectionOverlay";
@@ -55,12 +55,15 @@ const TOOL_NAMES = { tmux: "tmux", screen: "screen" } as const;
 export function MobileTerminal({
   host,
   onBack,
+  onFiles,
   onOpenSettings,
   controllerRef,
   keyboardOpen,
 }: {
   host: Host;
   onBack: () => void;
+  /** Opens the file browser on this host over the terminal. */
+  onFiles?: () => void;
   onOpenSettings: () => void;
   controllerRef: MutableRefObject<TerminalController | null>;
   keyboardOpen: boolean;
@@ -443,6 +446,11 @@ export function MobileTerminal({
               {statusText} · {host.target}
             </p>
           </div>
+          {onFiles && (
+            <Button variant="quiet" size="icon-lg" aria-label={t.files} onClick={onFiles}>
+              <FolderOpen />
+            </Button>
+          )}
           <Button
             variant="quiet"
             size="icon-lg"

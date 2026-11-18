@@ -9,16 +9,24 @@ description = "The in-process SSH engine: host keys in the store, prompts, and t
 [dependencies]
 async-trait = "0.1"
 base64.workspace = true
+chrono.workspace = true
 easyssh-core = { path = "../easyssh-core" }
+easyssh-crypto = { path = "../easyssh-crypto" }
 easyssh-ssh = { path = "../easyssh-ssh" }
 easyssh-store = { path = "../easyssh-store" }
+easyssh-sync = { path = "../easyssh-sync" }
 easyssh-vault = { path = "../easyssh-vault" }
+ed25519-dalek = "3"
+rand.workspace = true
 russh = { version = "0.65.2", default-features = false, features = ["ring", "rsa", "flate2"] }
+serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "fs", "io-util"] }
 tracing = "0.1"
+uuid.workspace = true
+zeroize = "1"
 
 [dev-dependencies]
-easyssh-crypto = { path = "../easyssh-crypto" }
+easyssh-proto = { path = "../easyssh-proto" }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

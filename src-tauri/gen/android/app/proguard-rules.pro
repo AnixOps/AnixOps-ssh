@@ -19,3 +19,11 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# rustls-platform-verifier is called from Rust through JNI by class name.
+-keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }
+
+# The page calls the app's own file helpers by name.
+-keepclassmembers class com.anixops.ssh.AnixNative {
+    @android.webkit.JavascriptInterface <methods>;
+}

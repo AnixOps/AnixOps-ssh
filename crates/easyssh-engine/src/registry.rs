@@ -153,6 +153,22 @@ impl<S: Pooled, E: Clone + Send + 'static> Registry<S, E> {
         out
     }
 
+    /// The `engine.connections` report: how many connections were opened and
+    /// which ones are up now.
+    pub async fn report(&self) -> serde_json::Value {
+        let rows = self.connections().await;
+        serde_json::json!({
+            "opened": self.opened(),
+            "live": rows.len(),
+            "connections": rows.iter().map(|row| serde_json::json!({
+                "host_id": row.key.host_id,
+                "target": row.key.target,
+                "jump": row.key.jump,
+                "leases": row.leases,
+            })).collect::<Vec<_>>(),
+        })
+    }
+
     /// A lease on the connection for `key`, connecting with `connect` when
     /// there is none (or it died). `connect` runs at most once for callers
     /// that ask at the same time.
@@ -221,6 +237,17 @@ impl<S: Pooled, E: Clone + Send + 'static> Registry<S, E> {
             entry,
             inner: self.inner.clone(),
             runtime: tokio::runtime::Handle::current(),
+        }
+    }
+
+    /// Closes the connection for `key` now, whoever still uses it, so the next
+    /// [`Registry::acquire`] connects anew. Leases already out keep counting.
+    pub async fn evict(&self, key: &Key) {
+        let entry = lock(&self.inner.entries).get(key).cloned();
+        let Some(entry) = entry else { return };
+        let mut slot = entry.slot.lock().await;
+        if let Some(session) = slot.take() {
+            session.close().await;
         }
     }
 
@@ -450,6 +477,28 @@ mod tests {
         assert_eq!(made.load(Ordering::SeqCst), 2);
         assert_eq!(reg.opened(), 2);
         drop(fourth);
+    }
+
+    #[tokio::test]
+    async fn an_evicted_connection_is_closed_and_the_next_caller_connects_anew() {
+        let reg: Reg = Registry::new(Duration::from_secs(30));
+        let made = Arc::new(AtomicU64::new(0));
+        let closed = Arc::new(AtomicU64::new(0));
+        let connect = || async { Ok(maker(made.clone(), closed.clone(), 0)) };
+        let old = reg.acquire(key("a"), connect).await.map_err(drop).unwrap();
+        reg.evict(&key("a")).await;
+        assert_eq!(closed.load(Ordering::SeqCst), 1);
+        // Evicting what is not there is fine.
+        reg.evict(&key("nobody")).await;
+        let new = reg.acquire(key("a"), connect).await.map_err(drop).unwrap();
+        assert_ne!(old.n, new.n);
+        assert_eq!(
+            reg.connections().await[0].leases,
+            2,
+            "old lease still counts"
+        );
+        drop(old);
+        drop(new);
     }
 
     #[tokio::test]

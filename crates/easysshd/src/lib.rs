@@ -22,7 +22,8 @@ mod server;
 pub mod service;
 pub mod session;
 pub mod supervisor;
-pub mod syncsvc;
+/// Account, devices and the sync loop; shared with the mobile app's in-process engine.
+pub use easyssh_engine::sync as syncsvc;
 pub mod terminal;
 pub mod transport;
 

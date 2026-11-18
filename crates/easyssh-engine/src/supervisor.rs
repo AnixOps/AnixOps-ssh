@@ -149,6 +149,9 @@ pub trait ShellBackend: Send + Sync + 'static {
     fn write(&self, id: &str, data: &[u8]) -> Result<(), String>;
     fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String>;
     fn close(&self, id: &str);
+    /// Drops the host's shared connection so the next open connects anew; for
+    /// a reconnect asked for because the old socket cannot be trusted.
+    async fn forget_connection(&self, _target: &Target) {}
 }
 
 #[async_trait]
@@ -172,6 +175,9 @@ impl ShellBackend for Engine {
     }
     fn close(&self, id: &str) {
         Engine::close(self, id)
+    }
+    async fn forget_connection(&self, target: &Target) {
+        Engine::forget_connection(self, target).await
     }
 }
 
@@ -307,6 +313,11 @@ impl<B: ShellBackend> Session<B> {
                 policy.delay(attempt)
             };
             self.sink.status(Status::Reconnecting { attempt, delay });
+            if immediate && attempt == 1 {
+                // The connection the old shell used is not to be trusted, and
+                // the files and forwards of this host share it: connect anew.
+                self.backend.forget_connection(&self.target).await;
+            }
             tokio::time::sleep(delay).await;
             if lock(&self.state).closing {
                 return;
@@ -586,11 +597,14 @@ mod tests {
 
     fn target() -> Target {
         Target {
+            host_id: "t".into(),
             label: "t".into(),
             host: "h".into(),
             port: 22,
             user: "u".into(),
             identity: None,
+            jump: Vec::new(),
+            saved_password: None,
         }
     }
 

@@ -415,14 +415,11 @@ impl Supervisor {
                 return Ok((link, id));
             }
             match link.shutdown_when_idle().await {
-                // Nothing left to protect: it exits now. Start the matching one.
-                Ok(0) => {
-                    drop(link);
-                    if Instant::now() >= deadline {
-                        return Err("the previous daemon build did not exit".into());
-                    }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
+                // Nothing left to protect: it exits now. Start the matching
+                // one. An idle daemon can exit before its reply reaches us, so
+                // a lost connection here means the same thing.
+                Ok(0) => {}
+                Err(e) if e.code == "disconnected" => {}
                 // It keeps its sessions until they end; stay attached to them.
                 Ok(_) => return Ok((link, id)),
                 // A daemon too old to drain: keep using it.
@@ -431,6 +428,11 @@ impl Supervisor {
                 }
                 Err(e) => return Err(e.message),
             }
+            drop(link);
+            if Instant::now() >= deadline {
+                return Err("the previous daemon build did not exit".into());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 

@@ -45,6 +45,12 @@ tauri-plugin-opener = "2"
 uuid.workspace = true
 zeroize = "1"
 
+# Android: the TLS verifier asks the system trust store through JNI.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+ndk-context = "0.1"
+rustls-platform-verifier = "0.7"
+
 # Android and iOS only: the device key in the Keystore or Keychain, biometric
 # unlock, and the plugin whose Kotlin and Swift classes keep them
 # (src-tauri/plugins/device-key). The plugin is outside the workspace; see its

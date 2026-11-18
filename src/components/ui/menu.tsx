@@ -34,17 +34,20 @@ export function Menu({
   items,
   disabled,
   buttonProps,
+  touch = false,
 }: {
   /** The accessible name and tooltip of the button, in the words of the labelled action. */
   label?: string;
   icon?: ReactNode;
   variant?: ButtonVariant;
-  size?: "icon" | "icon-sm";
+  size?: "icon" | "icon-sm" | "icon-lg";
   align?: "start" | "end";
   items: MenuEntry[];
   disabled?: boolean;
   /** Extra attributes for the trigger, such as `tabIndex: -1` inside a roving list (K7). */
   buttonProps?: Record<string, unknown>;
+  /** Rows of 44 px for a finger (layout.md), on the phone. */
+  touch?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [place, setPlace] = useState<{ top: number; left: number } | null>(null);
@@ -102,31 +105,33 @@ export function Menu({
     } else if (event.key === "Tab") close(false);
   };
 
+  const trigger = (
+    <Button
+      ref={buttonRef}
+      type="button"
+      variant={variant}
+      size={touch ? "icon-lg" : size}
+      aria-label={label}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      aria-controls={open ? id : undefined}
+      disabled={disabled}
+      {...buttonProps}
+      onClick={() => setOpen((current) => !current)}
+      onKeyDown={(event: KeyboardEvent) => {
+        if (event.key === "ArrowDown" && !open) {
+          event.preventDefault();
+          setOpen(true);
+        }
+      }}
+    >
+      {icon}
+    </Button>
+  );
+
   return (
     <>
-      <Tooltip label={label}>
-        <Button
-          ref={buttonRef}
-          type="button"
-          variant={variant}
-          size={size}
-          aria-label={label}
-          aria-haspopup="menu"
-          aria-expanded={open}
-          aria-controls={open ? id : undefined}
-          disabled={disabled}
-          {...buttonProps}
-          onClick={() => setOpen((current) => !current)}
-          onKeyDown={(event: KeyboardEvent) => {
-            if (event.key === "ArrowDown" && !open) {
-              event.preventDefault();
-              setOpen(true);
-            }
-          }}
-        >
-          {icon}
-        </Button>
-      </Tooltip>
+      {touch ? trigger : <Tooltip label={label}>{trigger}</Tooltip>}
       {createPortal(
         <AnimatePresence>
           {open && place && (
@@ -138,7 +143,8 @@ export function Menu({
               onKeyDown={keys}
               style={{ top: place.top, left: place.left }}
               className={cn(
-                "fixed z-dropdown w-52 rounded-sm bg-bg-elevated p-1 shadow-2 ring-1 ring-separator",
+                "fixed z-dropdown rounded-sm bg-bg-elevated p-1 shadow-2 ring-1 ring-separator",
+                touch ? "w-64" : "w-52",
                 align === "end" ? "origin-top-right -translate-x-full" : "origin-top-left",
               )}
               initial={{ opacity: 0 }}
@@ -159,7 +165,8 @@ export function Menu({
                       entry.onSelect();
                     }}
                     className={cn(
-                      "flex h-8 w-full items-center gap-2 rounded-xs px-2 text-left text-callout hover:bg-fill-1 focus-visible:bg-fill-1 focus-visible:outline-none disabled:opacity-40 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:stroke-[1.5]",
+                      "flex w-full items-center rounded-xs text-left text-callout hover:bg-fill-1 focus-visible:bg-fill-1 focus-visible:outline-none disabled:opacity-40 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:stroke-[1.5]",
+                      touch ? "h-11 gap-3 px-3" : "h-8 gap-2 px-2",
                       entry.danger ? "text-danger" : "text-label-1 [&_svg]:text-label-2",
                     )}
                   >

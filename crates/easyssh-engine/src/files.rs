@@ -2,8 +2,8 @@
 //! `transfer.*`. An SFTP session is a channel of the host's shared
 //! connection; every transfer runs as its own task so it can be cancelled.
 
-use super::interact::Broadcast;
-use super::Lease;
+use crate::events::Events;
+use crate::Lease;
 use easyssh_ssh::{DirEntry, EntryKind, Error as SshError, Sftp};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -29,6 +29,8 @@ pub struct SftpEntry {
 
 struct Transfer {
     abort: AbortHandle,
+    /// Where this transfer reports to.
+    events: Events,
     /// What a cancelled or failed transfer leaves behind and should remove
     /// (downloads only).
     partial: Option<PathBuf>,
@@ -59,6 +61,59 @@ pub fn entry_json(entry: &DirEntry) -> Value {
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs()),
         "permissions": entry.stat.permissions,
+    })
+}
+
+/// `ls -l` style permissions: `drwxr-xr-x`.
+pub fn mode_string(kind: EntryKind, permissions: Option<u32>) -> String {
+    let mut text = String::from(match kind {
+        EntryKind::Dir => 'd',
+        EntryKind::File => '-',
+        EntryKind::Symlink => 'l',
+        EntryKind::Other => '?',
+    });
+    let bits = permissions.unwrap_or(0);
+    for (index, symbol) in "rwxrwxrwx".chars().enumerate() {
+        text.push(if bits & (1 << (8 - index)) != 0 {
+            symbol
+        } else {
+            '-'
+        });
+    }
+    text
+}
+
+/// A listing row as the file browsers show it (the UI's `RemoteFile`):
+/// `kind` is `directory`, `file`, `symlink` or `other`, `modified` reads like
+/// `ls -l` (`Oct 14 09:12`, or `Oct 14  2025` when it is older than half a
+/// year), in the local time zone.
+pub fn remote_file_json(entry: &DirEntry) -> Value {
+    let kind = match entry.stat.kind {
+        EntryKind::File => "file",
+        EntryKind::Dir => "directory",
+        EntryKind::Symlink => "symlink",
+        EntryKind::Other => "other",
+    };
+    let modified = entry
+        .stat
+        .modified
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .and_then(|age| chrono::DateTime::from_timestamp(age.as_secs() as i64, 0))
+        .map(|time| {
+            let local = time.with_timezone(&chrono::Local);
+            if (chrono::Utc::now() - time).num_days().abs() < 180 {
+                local.format("%b %e %H:%M").to_string()
+            } else {
+                local.format("%b %e  %Y").to_string()
+            }
+        })
+        .unwrap_or_default();
+    json!({
+        "name": entry.name,
+        "kind": kind,
+        "size": entry.stat.size,
+        "modified": modified,
+        "permissions": mode_string(entry.stat.kind, entry.stat.permissions),
     })
 }
 
@@ -132,9 +187,10 @@ impl Files {
         local: PathBuf,
         remote: String,
         recursive: bool,
-        broadcast: Broadcast,
+        broadcast: Events,
     ) -> String {
         let id = self.id("transfer");
+        let events = broadcast.clone();
         let transfers = self.transfers.clone();
         let task_id = id.clone();
         let (go, gate) = tokio::sync::oneshot::channel::<()>();
@@ -162,7 +218,7 @@ impl Files {
                     ("failed", Some(e.to_string()))
                 }
             };
-            broadcast(
+            broadcast.emit(
                 "transfer.done",
                 json!({"transfer_id": task_id, "status": status, "error": error}),
             );
@@ -171,6 +227,7 @@ impl Files {
             id.clone(),
             Transfer {
                 abort: task.abort_handle(),
+                events,
                 partial: (!upload).then_some(local),
             },
         );
@@ -178,8 +235,9 @@ impl Files {
         id
     }
 
-    /// `transfer.cancel`. Unknown or finished transfers are ignored.
-    pub fn cancel_transfer(&self, id: &str, broadcast: &Broadcast) {
+    /// `transfer.cancel`. Unknown or finished transfers are ignored. The
+    /// end is reported to the sink the transfer was started with.
+    pub fn cancel_transfer(&self, id: &str) {
         let Some(transfer) = lock(&self.transfers).remove(id) else {
             return;
         };
@@ -187,7 +245,7 @@ impl Files {
         if let Some(partial) = &transfer.partial {
             remove_partial(partial);
         }
-        broadcast(
+        transfer.events.emit(
             "transfer.done",
             json!({"transfer_id": id, "status": "cancelled", "error": null}),
         );
@@ -205,14 +263,14 @@ fn remove_partial(path: &Path) {
 /// Reports bytes moved, at most every [`PROGRESS_EVERY`].
 struct Progress {
     id: String,
-    broadcast: Broadcast,
+    broadcast: Events,
     bytes: u64,
     reported: u64,
     last: Instant,
 }
 
 impl Progress {
-    fn new(id: String, broadcast: Broadcast) -> Self {
+    fn new(id: String, broadcast: Events) -> Self {
         Progress {
             id,
             broadcast,
@@ -232,7 +290,7 @@ impl Progress {
     fn flush(&mut self) {
         if self.bytes != self.reported {
             self.reported = self.bytes;
-            (self.broadcast)(
+            self.broadcast.emit(
                 "transfer.progress",
                 json!({"transfer_id": self.id, "bytes": self.bytes}),
             );
@@ -390,6 +448,20 @@ async fn download_path(
 }
 
 impl SftpEntry {
+    /// The listing as the mobile file browser shows it: directories first,
+    /// then by name, without the names that cannot be safely joined.
+    pub async fn list_view(&self, path: &str) -> Result<Vec<Value>, SshError> {
+        let mut entries = self.sftp.list(path).await?;
+        entries.retain(|entry| safe_name(&entry.name));
+        entries.sort_by(|a, b| {
+            let dir = |e: &DirEntry| e.stat.kind == EntryKind::Dir;
+            dir(b)
+                .cmp(&dir(a))
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        Ok(entries.iter().map(remote_file_json).collect())
+    }
+
     pub async fn list(&self, path: &str) -> Result<Value, SshError> {
         let entries = self.sftp.list(path).await?;
         Ok(json!({"entries": entries.iter().map(entry_json).collect::<Vec<_>>()}))
@@ -457,12 +529,50 @@ mod tests {
     }
 
     #[test]
+    fn listing_rows_look_like_ls_output() {
+        assert_eq!(mode_string(EntryKind::Dir, Some(0o755)), "drwxr-xr-x");
+        assert_eq!(mode_string(EntryKind::File, Some(0o640)), "-rw-r-----");
+        assert_eq!(mode_string(EntryKind::File, None), "----------");
+        assert_eq!(mode_string(EntryKind::Symlink, Some(0o777)), "lrwxrwxrwx");
+        let row = remote_file_json(&DirEntry {
+            name: "a.txt".into(),
+            stat: easyssh_ssh::FileStat {
+                kind: EntryKind::File,
+                size: 12,
+                modified: Some(UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
+                permissions: Some(0o644),
+                uid: None,
+                gid: None,
+            },
+        });
+        assert_eq!(row["name"], "a.txt");
+        assert_eq!(row["kind"], "file");
+        assert_eq!(row["size"], 12);
+        assert_eq!(row["permissions"], "-rw-r--r--");
+        // Older than half a year: month, day and year.
+        assert!(row["modified"].as_str().unwrap().ends_with(" 2023"));
+        let dir = remote_file_json(&DirEntry {
+            name: "d".into(),
+            stat: easyssh_ssh::FileStat {
+                kind: EntryKind::Dir,
+                size: 0,
+                modified: None,
+                permissions: None,
+                uid: None,
+                gid: None,
+            },
+        });
+        assert_eq!(dir["kind"], "directory");
+        assert_eq!(dir["modified"], "");
+    }
+
+    #[test]
     fn progress_is_throttled_but_flushed() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let seen = events.clone();
         let mut progress = Progress::new(
             "t".into(),
-            Arc::new(move |kind, payload| {
+            Arc::new(move |kind: &str, payload: Value| {
                 lock(&seen).push((kind.to_owned(), payload));
                 1
             }),

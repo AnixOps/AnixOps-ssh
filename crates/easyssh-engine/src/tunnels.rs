@@ -2,8 +2,8 @@
 //! `tunnel.status` event. A tunnel is a forward on the host's shared
 //! connection, so it costs no extra login.
 
-use super::interact::Broadcast;
-use super::Lease;
+use crate::events::Events;
+use crate::Lease;
 use easyssh_core::{Tunnel, TunnelKind};
 use easyssh_ssh::{Error as SshError, Forward};
 use serde_json::{json, Value};
@@ -38,11 +38,11 @@ pub struct Tunnels {
 
 fn announce(
     statuses: &Mutex<HashMap<String, Status>>,
-    broadcast: &Broadcast,
+    broadcast: &Events,
     id: &str,
     status: Status,
 ) {
-    broadcast(
+    broadcast.emit(
         "tunnel.status",
         json!({
             "id": id,
@@ -63,7 +63,39 @@ fn bind_host(tunnel: &Tunnel) -> &str {
     }
 }
 
+/// A tunnel's state as the UI's `TunnelStatus`: `{"state": "running"}`, or
+/// `{"state": "failed", "message": "..."}`.
+pub fn ui_status(state: &str, error: Option<&str>) -> Value {
+    match state {
+        "starting" | "running" | "stopped" => json!({ "state": state }),
+        _ => json!({
+            "state": "failed",
+            "message": error.unwrap_or("the tunnel stopped"),
+        }),
+    }
+}
+
+/// The `tunnel.status` event as the UI's `tunnel-status` payload.
+pub fn ui_status_event(payload: &Value) -> Value {
+    json!({
+        "id": payload["id"],
+        "status": ui_status(
+            payload["state"].as_str().unwrap_or("failed"),
+            payload["error"].as_str(),
+        ),
+    })
+}
+
 impl Tunnels {
+    /// The last status of one tunnel, as the UI shows it; `stopped` when it
+    /// never ran.
+    pub fn ui_status_of(&self, id: &str) -> Value {
+        match lock(&self.statuses).get(id) {
+            Some(status) => ui_status(status.state, status.error.as_deref()),
+            None => ui_status("stopped", None),
+        }
+    }
+
     pub fn list(&self) -> Value {
         let statuses = lock(&self.statuses);
         let mut tunnels: Vec<Value> = statuses
@@ -84,7 +116,7 @@ impl Tunnels {
 
     /// Marks a tunnel as starting (before the connection is made, which may
     /// involve prompts). `false` when it already runs.
-    pub async fn begin(&self, tunnel: &Tunnel, broadcast: &Broadcast) -> bool {
+    pub async fn begin(&self, tunnel: &Tunnel, broadcast: &Events) -> bool {
         let mut running = self.running.lock().await;
         if running.contains_key(&tunnel.id) {
             let failed = lock(&self.statuses)
@@ -113,7 +145,12 @@ impl Tunnels {
     }
 
     /// Records a failure before the forward was up (no connection, port busy).
-    pub fn failed(&self, tunnel: &Tunnel, error: &SshError, broadcast: &Broadcast) {
+    pub fn failed(&self, tunnel: &Tunnel, error: &SshError, broadcast: &Events) {
+        self.failed_with(tunnel, &error.to_string(), broadcast);
+    }
+
+    /// [`Tunnels::failed`] with the message already made.
+    pub fn failed_with(&self, tunnel: &Tunnel, message: &str, broadcast: &Events) {
         announce(
             &self.statuses,
             broadcast,
@@ -122,7 +159,7 @@ impl Tunnels {
                 host_id: tunnel.host_id.clone(),
                 state: "failed",
                 bind_port: None,
-                error: Some(error.to_string()),
+                error: Some(message.to_owned()),
             },
         );
     }
@@ -134,7 +171,7 @@ impl Tunnels {
         &self,
         tunnel: &Tunnel,
         lease: Lease,
-        broadcast: Broadcast,
+        broadcast: Events,
     ) -> Result<u16, SshError> {
         let target = || -> Result<(&str, u16), SshError> {
             let host = tunnel
@@ -219,7 +256,7 @@ impl Tunnels {
     }
 
     /// `tunnel.stop`. Unknown tunnels are ignored.
-    pub async fn stop(&self, id: &str, broadcast: &Broadcast) {
+    pub async fn stop(&self, id: &str, broadcast: &Events) {
         let running = self.running.lock().await.remove(id);
         let Some(mut running) = running else {
             // Never started, or it failed: just clear the failure.
@@ -297,12 +334,30 @@ mod tests {
         assert_eq!(bind_host(&tunnel(Some("10.0.0.2"))), "10.0.0.2");
     }
 
+    #[test]
+    fn states_become_the_uis_tunnel_status() {
+        assert_eq!(ui_status("running", None), json!({"state": "running"}));
+        assert_eq!(ui_status("stopped", None), json!({"state": "stopped"}));
+        assert_eq!(
+            ui_status("failed", Some("port busy")),
+            json!({"state": "failed", "message": "port busy"})
+        );
+        assert_eq!(
+            ui_status_event(&json!({"id": "t", "state": "failed", "error": "lost"})),
+            json!({"id": "t", "status": {"state": "failed", "message": "lost"}})
+        );
+        assert_eq!(
+            Tunnels::default().ui_status_of("never-ran"),
+            json!({"state": "stopped"})
+        );
+    }
+
     #[tokio::test]
     async fn a_tunnel_starts_once_and_reports_failures() {
         let tunnels = Tunnels::default();
         let events = Arc::new(Mutex::new(Vec::new()));
         let seen = events.clone();
-        let broadcast: Broadcast = Arc::new(move |kind, payload| {
+        let broadcast: Events = Arc::new(move |kind: &str, payload: Value| {
             lock(&seen).push((kind.to_owned(), payload));
             1
         });
