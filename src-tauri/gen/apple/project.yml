@@ -45,6 +45,7 @@ targets:
       path: anixops-ssh_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
+        NSFaceIDUsageDescription: Unlock the vault of saved passwords and keys with Face ID.
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:

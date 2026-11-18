@@ -7,23 +7,51 @@
 //! exactly as long as its terminal screen: when the operating system suspends
 //! the app the TCP connection dies and the UI offers to reconnect.
 
+use crate::mobile_vault;
 use easyssh_engine::hosts::{add_host, snapshot, target_for, NewHost};
 use easyssh_engine::known_hosts::StoreKnownHosts;
 use easyssh_engine::prompts::Prompts;
-use easyssh_engine::{Engine, ShellSink};
-use easyssh_store::{open_app_store, Store};
+use easyssh_engine::{saved_login, Engine, ShellSink};
+use easyssh_mobile_keys::mobile_vault as build_vault;
+use easyssh_store::{open_app_store_with, Store};
+use easyssh_vault::{SecretSource, Vault, VaultSecrets};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::{Emitter, Manager, State};
 
-struct Mobile {
+pub(crate) struct Mobile {
     store: Arc<Mutex<Store>>,
     engine: Arc<Engine>,
+    pub(crate) vault: Arc<Vault>,
+    secrets: Arc<VaultSecrets>,
+}
+
+/// The parts of [`Mobile`] a blocking task needs, which must be `'static`.
+#[derive(Clone)]
+pub(crate) struct Shared {
+    pub(crate) vault: Arc<Vault>,
+    store: Arc<Mutex<Store>>,
+}
+
+impl Shared {
+    /// Runs `work` with the database. Never call anything that can raise a
+    /// system prompt inside it: the lock is held for as long as it runs.
+    pub(crate) fn with_store<T>(&self, work: impl FnOnce(&Store) -> T) -> T {
+        let store = self.store.lock().unwrap_or_else(|p| p.into_inner());
+        work(&store)
+    }
 }
 
 impl Mobile {
+    pub(crate) fn share(&self) -> Shared {
+        Shared {
+            vault: self.vault.clone(),
+            store: self.store.clone(),
+        }
+    }
+
     fn with_store<T>(&self, work: impl FnOnce(&Store) -> Result<T, String>) -> Result<T, String> {
         let store = self.store.lock().unwrap_or_else(|p| p.into_inner());
         work(&store)
@@ -118,9 +146,26 @@ async fn session_open(
         let config = store.load_app_config().map_err(|error| error.to_string())?;
         target_for(&config, &host_id)
     })?;
+    // The saved key and password of the host, from the vault. Reading them can
+    // raise the biometric prompt, so it runs off the async threads. A saved
+    // key with the vault locked is the error "the vault is locked".
+    let secrets: Arc<dyn SecretSource> = state.secrets.clone();
+    let (mut target, login) = tauri::async_runtime::spawn_blocking(move || {
+        saved_login(&secrets, &host_id, &target).map(|login| (target, login))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.message)?;
+    target.identity = login.identity;
     let id = state
         .engine
-        .open_shell(target, cols, rows, Arc::new(ChannelSink(events)))
+        .open_shell_with_login(
+            target,
+            login.password,
+            cols,
+            rows,
+            Arc::new(ChannelSink(events)),
+        )
         .await
         .map_err(|error| error.to_string())?;
     Ok(OpenedSession {
@@ -179,6 +224,7 @@ fn telemetry_report_frontend() {}
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_device_key::init())
         .invoke_handler(tauri::generate_handler![
             load_hosts,
             host_save,
@@ -192,20 +238,47 @@ pub fn run() {
             askpass_reply,
             hostkey_reply,
             telemetry_report_frontend,
+            mobile_vault::vault_status,
+            mobile_vault::vault_unlock,
+            mobile_vault::vault_unlock_with,
+            mobile_vault::vault_enable_unlock,
+            mobile_vault::vault_disable_unlock,
+            mobile_vault::vault_lock,
+            mobile_vault::vault_set_passphrase,
+            mobile_vault::vault_remove_passphrase,
+            mobile_vault::vault_setup_skip,
+            mobile_vault::vault_set_auto_lock,
+            mobile_vault::vault_set_background_lock,
+            mobile_vault::vault_background,
+            mobile_vault::vault_foreground,
+            mobile_vault::vault_forget_all,
+            mobile_vault::secrets_status,
+            mobile_vault::secrets_set,
         ])
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
+            // The device key sits in the Android Keystore or the iOS Keychain;
+            // the vault's cipher seals saved passwords and keys in the store.
+            let vault = build_vault(tauri_plugin_device_key::bridge(app.handle()));
             // The v1 JSON file never exists on a phone; its path only names
             // the folder the database lives in.
-            let opened = open_app_store(&dir.join("config.json"))?;
+            let opened = open_app_store_with(&dir.join("config.json"), vault.cipher())?;
+            vault.load_settings(&opened.store);
             let store = Arc::new(Mutex::new(opened.store));
+            let secrets = Arc::new(VaultSecrets::new(vault.clone(), store.clone()));
+            mobile_vault::start_idle_timer(app.handle().clone(), vault.clone());
             let handle = app.handle().clone();
             let prompts = Prompts::new(Arc::new(move |name, payload| {
                 let _ = handle.emit(name, payload);
             }));
             let engine = Engine::new(prompts, Arc::new(StoreKnownHosts::new(store.clone())));
-            app.manage(Mobile { store, engine });
+            app.manage(Mobile {
+                store,
+                engine,
+                vault,
+                secrets,
+            });
             Ok(())
         })
         .build(tauri::generate_context!())

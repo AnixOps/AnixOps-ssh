@@ -1,0 +1,20 @@
+# A Tauri mobile plugin, kept out of the cargo workspace on purpose (see the
+# root Cargo.toml): it depends on `tauri`, which cannot be built on a machine
+# without the desktop web view libraries, and the workspace's `cargo test`
+# must work there. Only the Android and iOS builds of the app use it.
+[package]
+name = "tauri-plugin-device-key"
+version = "2.0.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.85"
+description = "Device key storage for AnixOps SSH on Android (Keystore) and iOS (Keychain), with biometric-bound items"
+links = "tauri-plugin-device-key"
+
+[dependencies]
+easyssh-mobile-keys = { path = "../../../crates/easyssh-mobile-keys" }
+serde_json = "1"
+tauri = { version = "2.12", default-features = false }
+
+[build-dependencies]
+tauri-plugin = { version = "2.7.1", features = ["build"] }

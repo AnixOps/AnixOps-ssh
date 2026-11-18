@@ -1,5 +1,6 @@
 //! Terminal sessions on russh, owned by the app process.
 
+use crate::login::SavedPassword;
 use crate::prompts::{PromptInteraction, Prompts};
 use crate::utf8::Utf8Stream;
 use easyssh_ssh::{
@@ -105,6 +106,21 @@ impl Engine {
         rows: u16,
         sink: Arc<dyn ShellSink>,
     ) -> Result<String, OpenError> {
+        self.open_shell_with_login(target, None, cols, rows, sink)
+            .await
+    }
+
+    /// Like [`Engine::open_shell`], with the host's saved password to offer
+    /// at the password prompt (a saved key travels in `target.identity`; see
+    /// [`crate::saved_login`]).
+    pub async fn open_shell_with_login(
+        &self,
+        target: Target,
+        saved_password: Option<Arc<SavedPassword>>,
+        cols: u16,
+        rows: u16,
+        sink: Arc<dyn ShellSink>,
+    ) -> Result<String, OpenError> {
         let mut params = ConnectParams::new(target.host.clone(), target.port, target.user.clone())
             .known_hosts(self.known_hosts.clone())
             .agent(AgentSource::Disabled);
@@ -114,6 +130,7 @@ impl Engine {
         let interaction = PromptInteraction {
             prompts: self.prompts.clone(),
             label: target.label.clone(),
+            saved_password,
         };
         let fail = |error: SshError| OpenError {
             code: error_code(&error),

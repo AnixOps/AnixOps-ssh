@@ -40,6 +40,8 @@ mod vault;
 
 #[cfg(mobile)]
 mod mobile;
+#[cfg(mobile)]
+mod mobile_vault;
 
 /// The app's entry point: `main` on the desktop, the generated activity or
 /// application delegate on Android and iOS.

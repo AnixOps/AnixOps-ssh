@@ -13,6 +13,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bound;
 pub mod gated;
 pub mod input;
 pub mod keyfile;
@@ -20,6 +21,7 @@ pub mod prompt;
 pub mod source;
 mod vault;
 
+pub use bound::{BoundError, BoundKeyProvider, BoundStore};
 pub use gated::{GatedKeyProvider, PresenceGate};
 pub use input::{secrets_update, InputError, MAX_SECRET_BYTES};
 pub use keyfile::{key_dir, sweep, KeyFile};
@@ -27,7 +29,8 @@ pub use prompt::{match_prompt, Binding, SecretKind};
 pub use source::{Answer, PromptAnswers, SecretSource, StoreAccess, VaultSecrets};
 pub use vault::{
     UnlockMethod, UnlockProvider, Vault, VaultError, VaultStatus, AUTO_LOCK_SETTING,
-    DEFAULT_AUTO_LOCK_MINUTES, MAX_AUTO_LOCK_MINUTES, PROVIDER_COOLDOWN,
+    BACKGROUND_LOCK_SETTING, DEFAULT_AUTO_LOCK_MINUTES, MAX_AUTO_LOCK_MINUTES,
+    MAX_BACKGROUND_LOCK_SECONDS, PROVIDER_COOLDOWN,
 };
 
 #[cfg(test)]

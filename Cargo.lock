@@ -108,6 +108,7 @@ dependencies = [
  "easyssh-core",
  "easyssh-crypto",
  "easyssh-engine",
+ "easyssh-mobile-keys",
  "easyssh-sessionlog",
  "easyssh-store",
  "easyssh-telemetry",
@@ -120,6 +121,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
+ "tauri-plugin-device-key",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tempfile",
@@ -1814,8 +1816,10 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "easyssh-core",
+ "easyssh-crypto",
  "easyssh-ssh",
  "easyssh-store",
+ "easyssh-vault",
  "russh",
  "serde_json",
  "tempfile",
@@ -1835,6 +1839,19 @@ dependencies = [
  "tempfile",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "easyssh-mobile-keys"
+version = "2.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "easyssh-core",
+ "easyssh-crypto",
+ "easyssh-store",
+ "easyssh-vault",
+ "serde_json",
+ "zeroize",
 ]
 
 [[package]]
@@ -6885,6 +6902,16 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "tauri-plugin-device-key"
+version = "2.0.0"
+dependencies = [
+ "easyssh-mobile-keys",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

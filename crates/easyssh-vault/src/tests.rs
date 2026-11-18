@@ -3,7 +3,7 @@ use easyssh_core::{Connection, ConnectionTarget};
 use easyssh_crypto::{protect, DeviceKey, KdfParams, KeyStore, MemoryKeyStore, SecretText};
 use easyssh_store::{SecretChange, SecretsUpdate, Store};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 const FAST: KdfParams = KdfParams::insecure_for_tests();
 
@@ -179,6 +179,104 @@ fn activity_restarts_the_idle_timer() {
     std::thread::sleep(Duration::from_millis(30));
     vault.ensure_unlocked().unwrap();
     assert!(!vault.lock_if_idle(start + Duration::from_secs(59)));
+}
+
+#[test]
+fn the_vault_locks_the_moment_the_app_leaves_the_screen_by_default() {
+    let vault = vault();
+    vault.ensure_unlocked().unwrap();
+    assert_eq!(vault.background_lock_seconds(), 0);
+    let now = SystemTime::now();
+    assert!(vault.entered_background(now));
+    assert!(!vault.is_unlocked());
+    // Coming back finds it locked already; nothing more to do.
+    assert!(!vault.returned_to_foreground(now + Duration::from_secs(1)));
+}
+
+#[test]
+fn a_background_lock_time_gives_a_grace_period() {
+    let vault = vault();
+    vault.set_background_lock_seconds(300).unwrap();
+    vault.ensure_unlocked().unwrap();
+    let left = SystemTime::now();
+    assert!(!vault.entered_background(left));
+    assert!(vault.is_unlocked());
+    // Back after four minutes: still open.
+    assert!(!vault.returned_to_foreground(left + Duration::from_secs(240)));
+    assert!(vault.is_unlocked());
+    // Away for exactly the limit: locked.
+    assert!(!vault.entered_background(left));
+    assert!(vault.returned_to_foreground(left + Duration::from_secs(300)));
+    assert!(!vault.is_unlocked());
+}
+
+#[test]
+fn a_clock_that_went_backwards_locks_instead_of_extending_the_grace_period() {
+    let vault = vault();
+    vault.set_background_lock_seconds(300).unwrap();
+    vault.ensure_unlocked().unwrap();
+    let left = SystemTime::now();
+    vault.entered_background(left);
+    assert!(vault.returned_to_foreground(left - Duration::from_secs(3600)));
+    assert!(!vault.is_unlocked());
+}
+
+#[test]
+fn returning_without_having_left_changes_nothing() {
+    let vault = vault();
+    vault.ensure_unlocked().unwrap();
+    assert!(!vault.returned_to_foreground(SystemTime::now()));
+    assert!(vault.is_unlocked());
+}
+
+#[test]
+fn the_background_lock_is_limited_and_saved() {
+    let first = vault();
+    assert!(first
+        .set_background_lock_seconds(MAX_BACKGROUND_LOCK_SECONDS + 1)
+        .is_err());
+    let store = store_for(&first);
+    first.save_background_lock(&store, 60).unwrap();
+    let again = vault();
+    assert_eq!(again.background_lock_seconds(), 0);
+    again.load_settings(&store);
+    assert_eq!(again.background_lock_seconds(), 60);
+}
+
+type Release = Mutex<Option<std::sync::mpsc::Receiver<()>>>;
+
+#[test]
+fn leaving_the_screen_during_a_system_prompt_does_not_cancel_the_unlock() {
+    struct Slow(DeviceKey, std::sync::mpsc::Sender<()>, Release);
+    impl UnlockProvider for Slow {
+        fn name(&self) -> &'static str {
+            "slow"
+        }
+        fn try_unlock(&self) -> Result<Option<DeviceKey>, VaultError> {
+            // The prompt is up: tell the test, then wait for it to go away.
+            self.1.send(()).unwrap();
+            let release = self.2.lock().unwrap().take().unwrap();
+            let _ = release.recv();
+            Ok(Some(DeviceKey::from_slice(self.0.expose()).unwrap()))
+        }
+    }
+    let keystore = Arc::new(MemoryKeyStore::new());
+    let first = vault_over(keystore.clone());
+    first.ensure_unlocked().unwrap();
+    let key = protect::open_device_key(&*keystore, None).unwrap();
+    first.set_passphrase("pw").unwrap();
+    let vault = vault_over(keystore);
+    let (asked_tx, asked_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    vault.add_unlock_provider(Arc::new(Slow(key, asked_tx, Mutex::new(Some(release_rx)))));
+    let background = vault.clone();
+    let worker = std::thread::spawn(move || background.ensure_unlocked());
+    asked_rx.recv().unwrap();
+    // The OS reports the app inactive while the prompt shows.
+    assert!(!vault.entered_background(SystemTime::now()));
+    release_tx.send(()).unwrap();
+    worker.join().unwrap().unwrap();
+    assert!(vault.is_unlocked());
 }
 
 struct Provider(DeviceKey);

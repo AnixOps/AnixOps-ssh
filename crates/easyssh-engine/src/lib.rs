@@ -17,9 +17,11 @@
 
 pub mod hosts;
 pub mod known_hosts;
+pub mod login;
 pub mod prompts;
 mod shell;
 mod utf8;
 
+pub use login::{saved_login, SavedLogin, SavedPassword};
 pub use shell::{error_code, Engine, OpenError, ShellSink, Target};
 pub use utf8::Utf8Stream;
