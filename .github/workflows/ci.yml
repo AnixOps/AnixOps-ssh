@@ -211,6 +211,17 @@ jobs:
             2>&1 | tee logs/android-engine-check.log
       - name: Install frontend
         run: npm install > logs/npm-install.log 2>&1
+      - name: List the TLS verifier's Maven archive
+        # Diagnostic only: records which group and versions the archive
+        # publishes, so the Gradle coordinate can be checked against it.
+        continue-on-error: true
+        run: |
+          api=https://api.github.com/repos/rustls/rustls-platform-verifier/contents
+          for d in android-release-support/maven android-release-support/maven/rustls android-release-support/maven/org/rustls \
+                   android-release-support/maven/rustls/rustls-platform-verifier android-release-support/maven/org/rustls/rustls-platform-verifier; do
+            echo "## $d"
+            curl -sS -H "Authorization: Bearer ${{ github.token }}" "$api/$d?ref=maven-archive" | jq -r 'if type=="array" then .[].name else .message end'
+          done 2>&1 | tee logs/android-maven-archive.log
       - name: Build debug APK
         run: |
           start=$(date +%s)

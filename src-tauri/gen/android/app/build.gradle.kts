@@ -83,8 +83,9 @@ val rustlsVerifierVersion: Provider<String> =
 dependencies {
     // The Kotlin half of rustls-platform-verifier (repository in the root
     // build file). Its version must equal the Rust crate's, so it is read from
-    // Cargo.lock, as the crate's README prescribes.
-    implementation("rustls:rustls-platform-verifier:${rustlsVerifierVersion.get()}")
+    // Cargo.lock, as the crate's README prescribes. The archive publishes it
+    // under the org.rustls group, which the README's resolution rule matches.
+    implementation("org.rustls:rustls-platform-verifier:${rustlsVerifierVersion.get()}")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")
