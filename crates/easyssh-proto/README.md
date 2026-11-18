@@ -21,7 +21,7 @@ travels is somebody else's concern.
     `askpass.reply|endpoint`, `daemon.shutdown_when_idle`, and for the
     built-in SSH engine `hostkey.reply`, `engine.resolve|connections`,
     `sftp.open|list|mkdir|remove|rename|close`, `transfer.start|cancel`,
-    `tunnel.start|stop|list`, `vault.unlock_with|enable_unlock|disable_unlock`,
+    `tunnel.start|stop|list`, `vault.unlock_with|enable_unlock|disable_unlock|add_unlock_item|remove_unlock_item`,
     `serial.ports`; events
     `session.output` (optional per-session byte offset `seq`), `session.exit`,
     `askpass.prompt` (optional `kind` and `echo` for the built-in engine),

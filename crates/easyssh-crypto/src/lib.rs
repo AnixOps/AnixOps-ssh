@@ -18,6 +18,7 @@ pub mod record;
 pub mod secret;
 pub mod sign;
 pub mod version_vector;
+pub mod wrap;
 
 pub use error::{CryptoError, Result};
 pub use field::{DeviceFieldCipher, DeviceKeyCipher, FieldCipher, NotConfigured};
@@ -37,6 +38,7 @@ pub use sign::{
     EnvelopeFields, CERT_LIFETIME_SECS,
 };
 pub use version_vector::{Ordering, VersionVector};
+pub use wrap::{unwrap_with_secret, wrap_with_secret};
 
 /// Fill `buf` from the operating system CSPRNG.
 pub(crate) fn fill_random(buf: &mut [u8]) -> Result<()> {

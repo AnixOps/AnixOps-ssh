@@ -8,6 +8,14 @@ export interface UnlockMethod {
   available: boolean;
   /** The user turned it on. */
   enabled: boolean;
+  /** The removable entries behind it: the security keys added to the vault. */
+  items?: UnlockItem[];
+}
+
+/** One security key added to the vault; mirrors `UnlockItemView`. */
+export interface UnlockItem {
+  id: string;
+  label: string;
 }
 
 /** Mirrors `VaultStatusView` in src-tauri/src/vault.rs. */
@@ -33,13 +41,17 @@ export interface VaultStatus {
  *  never returns them either. `?vault=locked` starts with a passphrase set
  *  and the vault locked; `?vault=nokeychain` simulates a machine without one;
  *  `?vault=hello` has a passphrase and Windows Hello available but off;
- *  `?vault=hello-on` has it on and the vault locked. */
+ *  `?vault=hello-on` has it on and the vault locked. `?vault=key` has a
+ *  passphrase and security keys available with none added, `?vault=key-on`
+ *  has two added and the vault locked, `?vault=key-none` has a system that
+ *  cannot use security keys. */
 const mode = new URLSearchParams(window.location.search).get("vault");
 const hello = mode === "hello" || mode === "hello-on";
 const bio = mode === "bio" || mode === "bio-off";
+const key = mode === "key" || mode === "key-on" || mode === "key-none";
 let state: VaultStatus = {
-  passphraseSet: mode === "locked" || hello || bio,
-  unlocked: mode !== "locked" && mode !== "hello-on" && mode !== "bio",
+  passphraseSet: mode === "locked" || hello || bio || key,
+  unlocked: mode !== "locked" && mode !== "hello-on" && mode !== "bio" && mode !== "key-on",
   autoLockMinutes: 15,
   backgroundLockSeconds: 0,
   setupDone: mode !== "first-run",
@@ -47,13 +59,28 @@ let state: VaultStatus = {
   keychainError: mode === "nokeychain" ? "no secret service is running" : null,
   unlockMethods: hello
     ? [{ name: "windows_hello", available: true, enabled: mode === "hello-on" }]
-    : bio
+    : key
+      ? [
+          {
+            name: "security_key",
+            available: mode !== "key-none",
+            enabled: mode === "key-on",
+            items:
+              mode === "key-on"
+                ? [
+                    { id: "k1", label: "YubiKey 5C" },
+                    { id: "k2", label: "Backup key" },
+                  ]
+                : [],
+          },
+        ]
+      : bio
       ? [{ name: "biometric", available: true, enabled: mode === "bio" }]
       : mode === "first-run"
         ? [{ name: "biometric", available: true, enabled: false }]
         : [],
 };
-let passphrase = mode === "locked" || hello || bio ? "preview-passphrase" : "";
+let passphrase = mode === "locked" || hello || bio || key ? "preview-passphrase" : "";
 const saved = new Map<string, SecretsStatus>([["3", { password: true, privateKey: false, passphrase: false }]]);
 const listeners = new Set<(unlocked: boolean) => void>();
 
@@ -90,7 +117,7 @@ export const previewVault = {
       ...state,
       passphraseSet: false,
       unlocked: true,
-      unlockMethods: state.unlockMethods.map((m) => ({ ...m, enabled: false })),
+      unlockMethods: state.unlockMethods.map((m) => ({ ...m, enabled: false, items: m.items ? [] : m.items })),
     };
     return changed();
   },
@@ -109,7 +136,37 @@ export const previewVault = {
     return changed();
   },
   disableUnlock: async (method: string): Promise<VaultStatus> => {
-    state = { ...state, unlockMethods: state.unlockMethods.map((m) => (m.name === method ? { ...m, enabled: false } : m)) };
+    state = {
+      ...state,
+      unlockMethods: state.unlockMethods.map((m) =>
+        m.name === method ? { ...m, enabled: false, items: m.items ? [] : m.items } : m,
+      ),
+    };
+    return changed();
+  },
+  addUnlockItem: async (method: string, given: string, label: string): Promise<VaultStatus> => {
+    if (given !== passphrase) wrong();
+    state = {
+      ...state,
+      unlockMethods: state.unlockMethods.map((m) => {
+        if (m.name !== method) return m;
+        const items = [...(m.items ?? [])];
+        if (items.length >= 4) throw new Error("at most 4 security keys can be added; remove one first");
+        items.push({ id: `k${Date.now()}`, label: label.trim() || `Security key ${items.length + 1}` });
+        return { ...m, enabled: true, items };
+      }),
+    };
+    return changed();
+  },
+  removeUnlockItem: async (method: string, id: string): Promise<VaultStatus> => {
+    state = {
+      ...state,
+      unlockMethods: state.unlockMethods.map((m) => {
+        if (m.name !== method) return m;
+        const items = (m.items ?? []).filter((item) => item.id !== id);
+        return { ...m, enabled: items.length > 0, items };
+      }),
+    };
     return changed();
   },
   setAutoLock: async (minutes: number): Promise<VaultStatus> => {

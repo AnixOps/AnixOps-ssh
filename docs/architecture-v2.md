@@ -219,13 +219,37 @@ encrypted, with keys only you hold, in code anyone can audit".
   With a vault passphrase set, the device key is stored in the keychain only
   as a blob wrapped with a key derived by Argon2id (`device-key-wrapped/v1`);
   the raw item is removed. Locking drops the key from memory. Secrets are
-  local only and are not synced yet. FIDO2 unlock is a TODO.
+  local only and are not synced yet.
   Windows Hello (`UserConsentVerifier`) and Touch ID (`LAContext`) plug in
   through `easyssh_vault::UnlockProvider` as presence gates in front of the
   keychain read (`easyssh-unlock`). They are opt-in, enabling one needs the
   passphrase once, and the passphrase stays a fallback. The gate is software
   presence checking, not a hardware boundary; user-presence keychain access
   control remains a possible hardening.
+- FIDO2 security keys unlock the vault the same way, as an
+  `UnlockProvider` named `security_key` (`easyssh_vault::fido`), but with a
+  real cryptographic gate instead of a presence check. Enrolling creates a
+  non-resident credential with the `hmac-secret` extension (RP id
+  `vault.anixops-ssh`), asks the key once for the HMAC of a random 32-byte salt,
+  and stores `credential id, salt, wrap(device key)` in one keychain item
+  (`device-key-security-keys/v1`), where the wrap key is `HKDF-SHA256` of the
+  HMAC output and the blob is XChaCha20-Poly1305 bound to the entry id and
+  credential id (`easyssh_crypto::wrap`). Unlocking asks the key for the HMAC
+  again (a touch, and the PIN when the key has one) and unwraps; code running
+  as the user can read the item but cannot open it without the key. Up to four
+  keys can be added and each can be removed alone (`vault.add_unlock_item`,
+  `vault.remove_unlock_item`; the keys come back as `items` of the method in
+  `VaultStatus`). It was built as a provider of its own, not as a
+  `PresenceGate`, because the gate model stores the key in the clear behind a
+  check, while hmac-secret lets the key itself be the second factor. The
+  hmac-secret output depends on whether the key verified the user, so a key
+  whose PIN is set or cleared after enrolling opens nothing; the vault says so
+  and the key is added again. Touch and PIN prompts reuse the dialogs of FIDO2
+  SSH keys (`security_key_touch`, `security_key_pin` through the askpass hub).
+  Backends: ctap-hid-fido2 over USB HID on Linux and macOS, `webauthn.dll`
+  hmac-secret on Windows 11 (WebAuthn API version 4; Windows shows its own
+  dialog and always requires user verification). Where the platform has no
+  backend the option is shown disabled with the reason.
 - The daemon answers `SSH_ASKPASS` password and passphrase prompts from the
   vault for the bound process (exact host and user) and reports
   `vault_locked` when it cannot. On the OpenSSH engine a saved key becomes a
@@ -390,7 +414,7 @@ end-to-end suite first.
 | 1. Daemon | 3 | `easyssh-proto`, `easysshd`, authenticated IPC; today's PTY sessions moved behind the daemon (still system OpenSSH); UI reattaches after reload. |
 | 2. Engine | 6 | russh engine behind a setting, OpenSSH fallback rules, one connection for terminal, files and tunnels. Done when russh passes the whole e2e suite; OpenSSH then becomes an advanced option. Done: the suite runs the daemon scenarios on both engines, saved keys and passphrases and the known hosts table work on russh, russh is the default and OpenSSH is an advanced option. |
 | 3. Store | 3 | Release 2.0. SQLite with v1 migration, known hosts store, importers (ssh_config, PuTTY, SecureCRT, MobaXterm, Xshell, FinalShell, Termius exports, CSV). |
-| 4. Vault | 6 | Device key and keychain, passwords and private keys in the vault, Windows Hello, Touch ID and serial ports (done), FIDO2 `sk-*` SSH keys on the built-in engine (done: Linux and macOS over USB HID, Windows through the WebAuthn API), FIDO2 vault unlock (open). |
+| 4. Vault | 6 | Device key and keychain, passwords and private keys in the vault, Windows Hello, Touch ID and serial ports (done), FIDO2 `sk-*` SSH keys on the built-in engine (done: Linux and macOS over USB HID, Windows through the WebAuthn API), FIDO2 vault unlock (done: hmac-secret wrapped device key, Linux and macOS over USB HID, Windows 11 through the WebAuthn API). |
 | 5. Sync | 8 | `easyssh-server`, sign-in without sending the passphrase, signed envelopes, field-level merge, history, team vaults and roles. |
 | 6. Terminal | 6 | Splits and broadcast, shell integration, completion specs, AI with the user's key, encrypted session logs and sharing. |
 | 7. Mobile | 10+ | Tauri mobile app with the embedded engine. A one-week viability prototype is done ([mobile-prototype.md](mobile-prototype.md)): the engine crates build for Android and iOS, `easyssh-engine` is the in-process engine, CI builds an Android debug APK and an iOS simulator app, and the recommendation is to commit to Tauri mobile, Android first, after one device test. The connection registry, SFTP, tunnels and the sync service have since moved into `easyssh-engine` (the daemon wraps them in its protocol, the phone calls them in-process), and the phone has files, local port forwards, jump hosts, groups, tags and sync sign-in. The Keystore and Keychain vault with biometric unlock, saved logins, background lock and the first-run flow is done. The rest of the phase (session policy under background limits, team vaults on the phone, release engineering) is not started; everything is compiled in CI, untested on a device. |

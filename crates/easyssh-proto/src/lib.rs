@@ -117,6 +117,16 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "VaultStatus",
     ),
     (
+        "vault.add_unlock_item",
+        "VaultAddUnlockItemParams",
+        "VaultStatus",
+    ),
+    (
+        "vault.remove_unlock_item",
+        "VaultRemoveUnlockItemParams",
+        "VaultStatus",
+    ),
+    (
         "vault.set_passphrase",
         "VaultSetPassphraseParams",
         "VaultStatus",

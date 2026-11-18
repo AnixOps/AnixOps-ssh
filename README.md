@@ -156,7 +156,13 @@ prompt jumps above. What the scripts do and the sequence format are in
   from Settings, Vault, and shown only where the device supports them. The
   passphrase always remains a fallback. The device key stays in the OS keychain
   and the biometric prompt gates the read; this is a convenience gate, not a
-  hardware boundary. Linux has no biometric provider. Unlocking the vault with a FIDO2 key is not built yet.
+  hardware boundary. Linux has no biometric provider.
+- FIDO2 security keys with the `hmac-secret` extension can unlock the vault too, on
+  Linux, macOS (USB) and Windows 11. In Settings, Vault, "Add security key" asks for the
+  vault passphrase once and then for two touches (and the key's PIN if it has one); up to
+  four keys can be added and each removed on its own. Unlike Touch ID and Windows Hello,
+  the stored copy of the key cannot be opened without the security key. The passphrase
+  always remains a fallback. The option is shown disabled where the system cannot do it.
 - FIDO2 security keys (`sk-ssh-ed25519@openssh.com`, `sk-ecdsa-sha2-nistp256@openssh.com`)
   log in on the built-in engine on Linux and macOS: add the key file (the one
   `ssh-keygen -t ed25519-sk` wrote; it holds a handle, not a secret) as an identity file or

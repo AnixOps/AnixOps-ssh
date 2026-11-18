@@ -157,6 +157,48 @@ pub trait UnlockProvider: Send + Sync {
     /// `Ok(None)` when the user declined or this provider could not unlock
     /// (the caller falls back to the next provider and then the passphrase).
     fn try_unlock(&self) -> Result<Option<DeviceKey>, VaultError>;
+
+    /// The separately removable entries behind this method (the security
+    /// keys of the FIDO2 method). Empty for methods that hold a single copy.
+    fn items(&self) -> Vec<UnlockItem> {
+        Vec::new()
+    }
+    /// Adds one more entry (another security key) holding the device key.
+    /// Methods with a single copy do not support it.
+    fn add_item(&self, _key: &DeviceKey, _label: &str) -> Result<UnlockItem, VaultError> {
+        Err(VaultError::Input(
+            "this unlock method holds a single entry".into(),
+        ))
+    }
+    /// Removes one entry. An id that is not there is not an error.
+    fn remove_item(&self, _id: &str) -> Result<(), VaultError> {
+        Err(VaultError::Input(
+            "this unlock method holds a single entry".into(),
+        ))
+    }
+    /// Where the provider shows touch and PIN prompts that the system does
+    /// not show itself. Called by [`Vault::set_unlock_prompt`].
+    fn set_prompt(&self, _prompt: Arc<dyn UnlockPrompt>) {}
+}
+
+/// One removable entry of an [`UnlockProvider`], for example one security key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnlockItem {
+    /// Stable identifier, never secret.
+    pub id: String,
+    /// The name the user gave it.
+    pub label: String,
+}
+
+/// How a provider talks to the person while it waits for hardware: the
+/// daemon shows the same touch and PIN dialogs as for FIDO2 SSH keys.
+pub trait UnlockPrompt: Send + Sync {
+    /// "Touch your security key." The notice stays up until the returned
+    /// guard is dropped.
+    fn touch(&self, label: &str) -> Box<dyn Send>;
+    /// The PIN of the key `label`; `retries` is what the device says is left.
+    /// `None` when the user cancelled.
+    fn pin(&self, label: &str, retries: Option<u32>) -> Option<String>;
 }
 
 /// One entry of [`VaultStatus::unlock_methods`].
@@ -167,6 +209,8 @@ pub struct UnlockMethod {
     pub available: bool,
     /// The user turned it on.
     pub enabled: bool,
+    /// The removable entries behind it (security keys); empty for the rest.
+    pub items: Vec<UnlockItem>,
 }
 
 /// After a provider declined (or failed) on its own, it is not asked again
@@ -200,6 +244,7 @@ struct Inner {
     /// stops while a phone sleeps, which is exactly when this matters.
     backgrounded_at: Option<SystemTime>,
     providers: Vec<Arc<dyn UnlockProvider>>,
+    prompt: Option<Arc<dyn UnlockPrompt>>,
     /// When a provider last declined an automatic attempt.
     declined: Option<Instant>,
 }
@@ -250,6 +295,7 @@ impl Vault {
                 background_lock: Duration::ZERO,
                 backgrounded_at: None,
                 providers: Vec::new(),
+                prompt: None,
                 declined: None,
             }),
             asking: Mutex::new(()),
@@ -267,7 +313,24 @@ impl Vault {
     }
 
     pub fn add_unlock_provider(&self, provider: Arc<dyn UnlockProvider>) {
+        let prompt = self.inner().prompt.clone();
+        if let Some(prompt) = prompt {
+            provider.set_prompt(prompt);
+        }
         self.inner().providers.push(provider);
+    }
+
+    /// Where providers show their touch and PIN prompts (also for providers
+    /// added later).
+    pub fn set_unlock_prompt(&self, prompt: Arc<dyn UnlockPrompt>) {
+        let providers = {
+            let mut inner = self.inner();
+            inner.prompt = Some(prompt.clone());
+            inner.providers.clone()
+        };
+        for provider in providers {
+            provider.set_prompt(prompt.clone());
+        }
     }
 
     pub fn is_unlocked(&self) -> bool {
@@ -397,6 +460,7 @@ impl Vault {
                     name: p.name(),
                     available,
                     enabled: available && p.enrolled(),
+                    items: if available { p.items() } else { Vec::new() },
                 }
             })
             .collect()
@@ -538,6 +602,40 @@ impl Vault {
         inner.declined = None;
         inner.last_used = Instant::now();
         Ok(())
+    }
+
+    /// Adds one entry to an unlock method that holds several (another
+    /// security key). Needs the vault passphrase once, like
+    /// [`Vault::enable_unlock`].
+    pub fn add_unlock_item(
+        &self,
+        method: &str,
+        passphrase: &str,
+        label: &str,
+    ) -> Result<UnlockItem, VaultError> {
+        let provider = self.provider(method)?;
+        if !provider.available() {
+            return Err(VaultError::Input(
+                "this unlock method is not available on this device".into(),
+            ));
+        }
+        if protect::protection(&*self.keystore)? != Protection::Passphrase {
+            return Err(VaultError::Passphrase(
+                "set a vault passphrase before turning on another unlock method",
+            ));
+        }
+        let key = protect::open_device_key(&*self.keystore, Some(passphrase.as_bytes()))?;
+        let item = provider.add_item(&key, label)?;
+        self.cipher.unlock(&key)?;
+        let mut inner = self.inner();
+        inner.declined = None;
+        inner.last_used = Instant::now();
+        Ok(item)
+    }
+
+    /// Removes one entry (one security key) of an unlock method.
+    pub fn remove_unlock_item(&self, method: &str, id: &str) -> Result<(), VaultError> {
+        self.provider(method)?.remove_item(id)
     }
 
     /// Turns an unlock method off and deletes its stored copy of the key.

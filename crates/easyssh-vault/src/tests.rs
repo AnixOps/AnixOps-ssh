@@ -546,7 +546,8 @@ mod unlock_methods {
             vec![UnlockMethod {
                 name: "first",
                 available: true,
-                enabled: false
+                enabled: false,
+                items: Vec::new(),
             }]
         );
         // Not enabled yet: the passphrase is the only way.

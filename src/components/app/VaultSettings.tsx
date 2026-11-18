@@ -1,21 +1,25 @@
-import { Fingerprint, Lock, LockOpen, ShieldCheck, Trash2 } from "lucide-react";
+import { Fingerprint, Lock, LockOpen, Plus, ShieldCheck, Trash2, Usb } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
 import { Notice } from "@/components/ui/form";
 import { SettingsRow } from "@/components/ui/settings";
 import { Select } from "@/components/ui/select";
+import { Tooltip } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import {
   onVaultChanged,
+  vaultAddUnlockItem,
   vaultDisableUnlock,
   vaultEnableUnlock,
   vaultForgetAll,
   vaultLock,
   vaultRemovePassphrase,
+  vaultRemoveUnlockItem,
   vaultSetAutoLock,
   vaultSetPassphrase,
   vaultStatus,
+  type UnlockMethod,
   type VaultStatus,
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
@@ -23,6 +27,8 @@ import { requestVaultUnlock, unlockMethodLabel, vaultErrorText } from "@/lib/vau
 
 const AUTO_LOCK = [5, 15, 30, 60, 240, 0];
 const MIN_PASSPHRASE = 8;
+/** Mirrors `MAX_KEYS` of the vault's security key provider. */
+const MAX_SECURITY_KEYS = 4;
 
 type Editing = "set" | "change" | "remove" | null;
 
@@ -133,8 +139,11 @@ export function VaultSettings() {
           the keychain already opens the vault by itself. */}
       {status.passphraseSet &&
         status.unlockMethods
-          .filter((method) => method.available)
-          .map((method) => (
+          .filter((method) => method.available || method.name === "security_key")
+          .map((method) =>
+            method.name === "security_key" ? (
+              <SecurityKeyRows key={method.name} method={method} run={run} />
+            ) : (
             <div key={method.name}>
               <SettingsRow label={unlockMethodLabel(method.name)} hint={method.enabled ? t.unlockEnabled : t.unlockQuickHint}>
                 {method.enabled ? (
@@ -167,7 +176,8 @@ export function VaultSettings() {
                 />
               )}
             </div>
-          ))}
+            ),
+          )}
 
       <SettingsRow label={t.vaultAutoLock} hint={t.vaultAutoLockHint}>
         <Select
@@ -205,6 +215,136 @@ export function VaultSettings() {
       {error && <Notice className="m-3">{error}</Notice>}
       {notice && <p role="status" className="px-4 py-2 text-callout text-label-2">{notice}</p>}
     </>
+  );
+}
+
+/** The FIDO2 security keys that unlock the vault: one row per key with its own
+ *  remove button, and "Add security key". Shown disabled, with the reason,
+ *  where this system cannot do hmac-secret. */
+function SecurityKeyRows({
+  method,
+  run,
+}: {
+  method: UnlockMethod;
+  run: (action: () => Promise<VaultStatus>) => Promise<boolean>;
+}) {
+  const confirm = useConfirm();
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const items = method.items ?? [];
+  const full = items.length >= MAX_SECURITY_KEYS;
+  return (
+    <div>
+      <SettingsRow
+        label={unlockMethodLabel(method.name)}
+        hint={!method.available ? t.securityKeyVaultUnavailable : items.length === 0 ? t.securityKeyVaultHint : t.unlockEnabled}
+      >
+        <Tooltip label={full ? t.securityKeyVaultLimit : t.securityKeyVaultAddTip}>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!method.available || full || busy}
+            aria-label={t.securityKeyVaultAdd}
+            onClick={() => setAdding(!adding)}
+          >
+            <Plus />
+            {t.securityKeyVaultAdd}
+          </Button>
+        </Tooltip>
+      </SettingsRow>
+      {method.available && items.length === 0 && !adding && (
+        <p className="px-4 pb-2 text-callout text-label-3">{t.securityKeyVaultNone}</p>
+      )}
+      {items.map((item) => (
+        <SettingsRow key={item.id} label={item.label}>
+          <Usb className="size-4 shrink-0 text-label-3" strokeWidth={1.5} aria-hidden />
+          <Tooltip label={t.securityKeyVaultRemoveTip}>
+            <Button
+              variant="quiet"
+              size="icon-sm"
+              aria-label={`${t.securityKeyVaultRemove}: ${item.label}`}
+              disabled={busy}
+              onClick={async () => {
+                const ok = await confirm({
+                  title: `${t.securityKeyVaultRemoveTitle} ${item.label}`,
+                  body: t.securityKeyVaultRemoveBody,
+                  verb: t.securityKeyVaultRemove,
+                });
+                if (ok) void run(() => vaultRemoveUnlockItem(method.name, item.id));
+              }}
+            >
+              <Trash2 />
+            </Button>
+          </Tooltip>
+        </SettingsRow>
+      ))}
+      {adding && method.available && !full && (
+        <SecurityKeyAddForm
+          busy={busy}
+          onCancel={() => setAdding(false)}
+          onSubmit={async (passphrase, label) => {
+            setBusy(true);
+            try {
+              if (await run(() => vaultAddUnlockItem(method.name, passphrase, label))) setAdding(false);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** The vault passphrase (once) and an optional name, before the key is asked to enrol. */
+function SecurityKeyAddForm({
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (passphrase: string, label: string) => Promise<void>;
+}) {
+  const [passphrase, setPassphrase] = useState("");
+  const [label, setLabel] = useState("");
+  return (
+    <form
+      className="space-y-2 px-3 py-2.5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (passphrase !== "" && !busy) void onSubmit(passphrase, label).then(() => setPassphrase(""));
+      }}
+    >
+      <Input
+        type="password"
+        autoComplete="off"
+        autoFocus
+        value={passphrase}
+        onChange={(event) => setPassphrase(event.target.value)}
+        aria-label={t.vaultCurrentPassphrase}
+        placeholder={t.vaultCurrentPassphrase}
+      />
+      <Input
+        type="text"
+        autoComplete="off"
+        maxLength={32}
+        value={label}
+        onChange={(event) => setLabel(event.target.value)}
+        aria-label={t.securityKeyVaultName}
+        placeholder={t.securityKeyVaultName}
+      />
+      <p className="text-callout text-label-3">{t.securityKeyVaultAddHint}</p>
+      <p className="text-callout text-label-3">{t.securityKeyVaultCaveat}</p>
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="secondary" size="sm" onClick={onCancel} disabled={busy}>
+          {t.cancel}
+        </Button>
+        <Button type="submit" variant="primary" size="sm" disabled={passphrase === "" || busy}>
+          {t.securityKeyVaultAdd}
+        </Button>
+      </div>
+    </form>
   );
 }
 

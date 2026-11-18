@@ -251,6 +251,10 @@ impl Daemon {
         let opened = open_app_store_with(cfg.config_store.path(), vault.cipher())
             .map_err(|e| std::io::Error::other(format!("cannot open the database: {e}")))?;
         vault.load_settings(&opened.store);
+        vault.set_unlock_prompt(Arc::new(crate::unlock_prompt::DaemonUnlockPrompt::new(
+            askpass.clone(),
+            tokio::runtime::Handle::current(),
+        )));
         match (&opened.migration, &opened.migration_error) {
             (Some(report), _) => log.info(&format!(
                 "migrated the v1 configuration: {} hosts, {} groups, {} snippets, {} tunnels",
@@ -369,7 +373,16 @@ impl Daemon {
             "unlock_methods": status
                 .unlock_methods
                 .iter()
-                .map(|m| json!({"name": m.name, "available": m.available, "enabled": m.enabled}))
+                .map(|m| json!({
+                    "name": m.name,
+                    "available": m.available,
+                    "enabled": m.enabled,
+                    "items": m
+                        .items
+                        .iter()
+                        .map(|i| json!({"id": i.id, "label": i.label}))
+                        .collect::<Vec<_>>(),
+                }))
                 .collect::<Vec<_>>(),
         })
     }
@@ -810,6 +823,29 @@ impl Daemon {
                     .map_err(|e| fail("internal", e.to_string()))?
                     .map_err(vault_failure)?;
                 self.broadcast("vault.changed", json!({"unlocked": true}));
+                ok(self.vault_status())
+            }
+            "vault.add_unlock_item" => {
+                let p: proto::VaultAddUnlockItemParams = parse(payload)?;
+                let vault = self.vault.clone();
+                let passphrase = zeroize::Zeroizing::new(p.passphrase);
+                let label = p.label.unwrap_or_default();
+                tokio::task::spawn_blocking(move || {
+                    vault.add_unlock_item(&p.method, &passphrase, &label)
+                })
+                .await
+                .map_err(|e| fail("internal", e.to_string()))?
+                .map_err(vault_failure)?;
+                self.broadcast("vault.changed", json!({"unlocked": true}));
+                ok(self.vault_status())
+            }
+            "vault.remove_unlock_item" => {
+                let p: proto::VaultRemoveUnlockItemParams = parse(payload)?;
+                let vault = self.vault.clone();
+                tokio::task::spawn_blocking(move || vault.remove_unlock_item(&p.method, &p.id))
+                    .await
+                    .map_err(|e| fail("internal", e.to_string()))?
+                    .map_err(vault_failure)?;
                 ok(self.vault_status())
             }
             "vault.disable_unlock" => {
