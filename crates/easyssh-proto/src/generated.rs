@@ -2472,16 +2472,38 @@ pub struct TunnelStatusEvent {
 pub struct TunnelStopParams {
     pub id: ::std::string::String,
 }
+///One removable entry of an unlock method, for example one FIDO2 security key.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct UnlockItem {
+    ///Stable identifier, never secret.
+    pub id: ::std::string::String,
+    ///The name the user gave the security key.
+    pub label: ::std::string::String,
+}
 ///A biometric or OS unlock method of the vault.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct UnlockMethod {
-    ///The OS offers it on this device right now; the UI shows only available methods.
+    ///The OS offers it on this device right now. The UI shows the biometric methods only when available; `security_key` is shown disabled with an explanation when it is not.
     pub available: bool,
     ///The user turned it on.
     pub enabled: bool,
-    ///`windows_hello` or `touch_id`.
+    ///The separately removable entries behind the method: the security keys added to the vault. Empty for the other methods. Absent from older daemons.
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub items: ::std::vec::Vec<UnlockItem>,
+    ///`windows_hello`, `touch_id`, `biometric` (phones) or `security_key` (FIDO2).
     pub name: ::std::string::String,
+}
+///Command `vault.add_unlock_item` payload: add one entry to an unlock method that holds several (another security key). The passphrase is needed once; the key asks for a touch (and its PIN). Reply: VaultStatus.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultAddUnlockItemParams {
+    ///A name for the key; empty gets a numbered default.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub label: ::std::option::Option<::std::string::String>,
+    pub method: ::std::string::String,
+    pub passphrase: ::std::string::String,
 }
 ///Event `vault.changed` payload. Sent to every client when the vault locks or unlocks (also by auto-lock).
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -2896,6 +2918,13 @@ impl ::std::convert::TryFrom<::std::string::String> for VaultMembersRoleParamsRo
 #[serde(deny_unknown_fields)]
 pub struct VaultRemovePassphraseParams {
     pub passphrase: ::std::string::String,
+}
+///Command `vault.remove_unlock_item` payload: remove one entry (one security key) of an unlock method. Reply: VaultStatus.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct VaultRemoveUnlockItemParams {
+    pub id: ::std::string::String,
+    pub method: ::std::string::String,
 }
 ///Command `vault.set_auto_lock` payload. Reply: VaultStatus.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]

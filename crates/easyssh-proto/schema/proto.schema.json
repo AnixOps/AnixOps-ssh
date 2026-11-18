@@ -2049,15 +2049,22 @@
       "properties": {
         "name": {
           "type": "string",
-          "description": "`windows_hello` or `touch_id`."
+          "description": "`windows_hello`, `touch_id`, `biometric` (phones) or `security_key` (FIDO2)."
         },
         "available": {
           "type": "boolean",
-          "description": "The OS offers it on this device right now; the UI shows only available methods."
+          "description": "The OS offers it on this device right now. The UI shows the biometric methods only when available; `security_key` is shown disabled with an explanation when it is not."
         },
         "enabled": {
           "type": "boolean",
           "description": "The user turned it on."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UnlockItem"
+          },
+          "description": "The separately removable entries behind the method: the security keys added to the vault. Empty for the other methods. Absent from older daemons."
         }
       },
       "required": [
@@ -2067,6 +2074,25 @@
       ],
       "additionalProperties": false,
       "description": "A biometric or OS unlock method of the vault."
+    },
+    "UnlockItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable identifier, never secret."
+        },
+        "label": {
+          "type": "string",
+          "description": "The name the user gave the security key."
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "additionalProperties": false,
+      "description": "One removable entry of an unlock method, for example one FIDO2 security key."
     },
     "VaultStatusParams": {
       "type": "object",
@@ -2130,6 +2156,44 @@
       ],
       "additionalProperties": false,
       "description": "Command `vault.disable_unlock` payload: turn an unlock method off and delete its stored key copy. Reply: VaultStatus."
+    },
+    "VaultAddUnlockItemParams": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "passphrase": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string",
+          "description": "A name for the key; empty gets a numbered default."
+        }
+      },
+      "required": [
+        "method",
+        "passphrase"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.add_unlock_item` payload: add one entry to an unlock method that holds several (another security key). The passphrase is needed once; the key asks for a touch (and its PIN). Reply: VaultStatus."
+    },
+    "VaultRemoveUnlockItemParams": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `vault.remove_unlock_item` payload: remove one entry (one security key) of an unlock method. Reply: VaultStatus."
     },
     "VaultLockParams": {
       "type": "object",

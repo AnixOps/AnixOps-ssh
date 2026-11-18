@@ -1036,17 +1036,37 @@ export interface VaultStatus {
  */
 export interface UnlockMethod {
   /**
-   * `windows_hello` or `touch_id`.
+   * `windows_hello`, `touch_id`, `biometric` (phones) or `security_key` (FIDO2).
    */
   name: string;
   /**
-   * The OS offers it on this device right now; the UI shows only available methods.
+   * The OS offers it on this device right now. The UI shows the biometric methods only when available; `security_key` is shown disabled with an explanation when it is not.
    */
   available: boolean;
   /**
    * The user turned it on.
    */
   enabled: boolean;
+  /**
+   * The separately removable entries behind the method: the security keys added to the vault. Empty for the other methods. Absent from older daemons.
+   */
+  items?: UnlockItem[];
+}
+/**
+ * One removable entry of an unlock method, for example one FIDO2 security key.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "UnlockItem".
+ */
+export interface UnlockItem {
+  /**
+   * Stable identifier, never secret.
+   */
+  id: string;
+  /**
+   * The name the user gave the security key.
+   */
+  label: string;
 }
 /**
  * Command `vault.status` payload. Reply: VaultStatus.
@@ -1091,6 +1111,30 @@ export interface VaultEnableUnlockParams {
  */
 export interface VaultDisableUnlockParams {
   method: string;
+}
+/**
+ * Command `vault.add_unlock_item` payload: add one entry to an unlock method that holds several (another security key). The passphrase is needed once; the key asks for a touch (and its PIN). Reply: VaultStatus.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultAddUnlockItemParams".
+ */
+export interface VaultAddUnlockItemParams {
+  method: string;
+  passphrase: string;
+  /**
+   * A name for the key; empty gets a numbered default.
+   */
+  label?: string;
+}
+/**
+ * Command `vault.remove_unlock_item` payload: remove one entry (one security key) of an unlock method. Reply: VaultStatus.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "VaultRemoveUnlockItemParams".
+ */
+export interface VaultRemoveUnlockItemParams {
+  method: string;
+  id: string;
 }
 /**
  * Command `vault.lock` payload ("lock now"). Reply: VaultStatus.

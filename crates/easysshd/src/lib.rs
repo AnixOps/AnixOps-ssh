@@ -26,6 +26,7 @@ pub mod supervisor;
 pub use easyssh_engine::sync as syncsvc;
 pub mod terminal;
 pub mod transport;
+pub mod unlock_prompt;
 
 pub use client::Client;
 pub use error::{Error, Result};

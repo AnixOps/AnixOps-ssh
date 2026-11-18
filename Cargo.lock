@@ -2002,12 +2002,14 @@ name = "easyssh-unlock"
 version = "2.0.0"
 dependencies = [
  "block2",
+ "ctap-hid-fido2",
  "easyssh-crypto",
  "easyssh-vault",
  "objc2",
  "objc2-foundation",
  "objc2-local-authentication",
  "windows",
+ "zeroize",
 ]
 
 [[package]]
