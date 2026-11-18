@@ -117,7 +117,6 @@ fn sign_blocking(job: &Job) -> Result<SkAssertion, SkError> {
                     signature: assertion.signature,
                     flags,
                     counter,
-                    webauthn: None,
                 });
             }
             Err(e) => match classify(&e.to_string()) {

@@ -160,14 +160,32 @@ replaces the hand-written Tauri commands and `src/lib/backend.ts` mirror.
   software authenticator has a webauthn mode used by an e2e test against real
   sshd, and CI builds the Windows code; the Windows dialog itself needs a person
   and a key, so it is not exercised in CI.
+  Windows backend (`WebAuthnSecurityKey`, `security_key_winhello.rs`): only
+  elevated processes may open FIDO HID devices on Windows, so the backend calls
+  `WebAuthNAuthenticatorGetAssertion` in `webauthn.dll` (loaded at run time from
+  System32; `WebAuthNGetApiVersionNumber` must be 1 or higher), with the key's
+  application as relying party id and the key handle as the allowed credential.
+  Windows shows its own touch and PIN dialog, so the engine asks for no PIN
+  (`handles_user_verification`) and the touch event is a notice only. The API
+  hashes the client data buffer it is given with SHA-256 and signs it after the
+  authenticator data, without reading it; passing the SSH message itself as the
+  buffer therefore yields `SHA256(application) || flags || counter ||
+  SHA256(message)`, the blob of a plain sk signature (the technique libfido2's
+  Windows backend uses for OpenSSH). That makes the signatures ordinary
+  `sk-ssh-ed25519@openssh.com` and `sk-ecdsa-sha2-nistp256@openssh.com` ones
+  for both key types. The webauthn form (`webauthn-sk-ecdsa-sha2-nistp256`)
+  was considered and not used: it covers ECDSA only and sshd does not list it in
+  its default `PubkeyAcceptedAlgorithms`. The pure parts (authenticator data,
+  DER to mpint, signature assembly) are tested on every platform with
+  signatures verified by `ssh-key`, and CI builds the Windows code; the Windows
+  dialog needs a person and a key, so it is not exercised in CI.
   Engine choice: a host with an `sk-*` identity file stays on russh where
-  `hardware_backend_supports(key type)` is true (Linux and macOS: both types;
-  Windows with a recent `webauthn.dll`: `sk-ecdsa` only) and falls back to
-  OpenSSH otherwise (Windows with an `sk-ed25519` key, or without the API).
-  Keys held by an SSH agent are still skipped by the built-in engine. Not
-  supported: CTAP1-only (U2F) keys, built-in biometric user verification without
-  a PIN on Linux and macOS, and keys on NFC or BLE (Windows may offer them
-  through its own dialog).
+  `hardware_backend_available()` is true (Linux, macOS, and Windows with a
+  recent `webauthn.dll`) and falls back to OpenSSH where it is false (Windows
+  without the API). Keys held by an SSH agent are still skipped by the
+  built-in engine. Not supported: CTAP1-only (U2F) keys, built-in biometric
+  user verification without a PIN on Linux and macOS, and keys on NFC or BLE
+  (Windows may offer them through its own dialog).
 - Serial ports join SSH and local shells as a session type. Mosh and Telnet
   are not planned. As built: the `serialport` crate (no libudev), hosts of
   kind `serial` (migration 0006), the same output path as SSH sessions.
@@ -372,7 +390,7 @@ end-to-end suite first.
 | 1. Daemon | 3 | `easyssh-proto`, `easysshd`, authenticated IPC; today's PTY sessions moved behind the daemon (still system OpenSSH); UI reattaches after reload. |
 | 2. Engine | 6 | russh engine behind a setting, OpenSSH fallback rules, one connection for terminal, files and tunnels. Done when russh passes the whole e2e suite; OpenSSH then becomes an advanced option. Done: the suite runs the daemon scenarios on both engines, saved keys and passphrases and the known hosts table work on russh, russh is the default and OpenSSH is an advanced option. |
 | 3. Store | 3 | Release 2.0. SQLite with v1 migration, known hosts store, importers (ssh_config, PuTTY, SecureCRT, MobaXterm, Xshell, FinalShell, Termius exports, CSV). |
-| 4. Vault | 6 | Device key and keychain, passwords and private keys in the vault, Windows Hello, Touch ID and serial ports (done), FIDO2 `sk-*` SSH keys on the built-in engine (done: Linux and macOS over USB HID, Windows through the WebAuthn API for ECDSA keys), FIDO2 vault unlock (open). |
+| 4. Vault | 6 | Device key and keychain, passwords and private keys in the vault, Windows Hello, Touch ID and serial ports (done), FIDO2 `sk-*` SSH keys on the built-in engine (done: Linux and macOS over USB HID, Windows through the WebAuthn API), FIDO2 vault unlock (open). |
 | 5. Sync | 8 | `easyssh-server`, sign-in without sending the passphrase, signed envelopes, field-level merge, history, team vaults and roles. |
 | 6. Terminal | 6 | Splits and broadcast, shell integration, completion specs, AI with the user's key, encrypted session logs and sharing. |
 | 7. Mobile | 10+ | Tauri mobile app with the embedded engine. A one-week viability prototype is done ([mobile-prototype.md](mobile-prototype.md)): the engine crates build for Android and iOS, `easyssh-engine` is the in-process engine, CI builds an Android debug APK and an iOS simulator app, and the recommendation is to commit to Tauri mobile, Android first, after one device test. The rest of the phase (registry, files and tunnels in the engine, session policy under background limits, sync, release engineering) is not started; the Keystore and Keychain vault with biometric unlock, saved logins, background lock and the first-run flow is done and compiled in CI, untested on a device. |

@@ -17,13 +17,10 @@
 //! The device is behind the [`SecurityKey`] trait so tests (and the e2e
 //! suite) use a software authenticator. The real ones are
 //! [`HidSecurityKey`], which talks CTAP2 over USB HID (Linux, macOS), and
-//! [`WebAuthnSecurityKey`], which goes through the Windows WebAuthn API and
-//! can only produce the `webauthn-sk-ecdsa-sha2-nistp256@openssh.com`
-//! signature form (see `security_key_webauthn.rs`).
+//! [`WebAuthnSecurityKey`], which goes through the Windows WebAuthn API.
 
 use crate::error::{Error, Result};
 use crate::interaction::Interaction;
-use crate::security_key_webauthn::{rewrite_userauth_algorithm, WEBAUTHN_ECDSA_ALGORITHM};
 use async_trait::async_trait;
 use russh::keys::ssh_key::private::KeypairData;
 use russh::keys::ssh_key::{Algorithm, PrivateKey, Signature};
@@ -118,30 +115,6 @@ pub struct SkAssertion {
     pub flags: u8,
     /// The signature counter of the authenticator data.
     pub counter: u32,
-    /// Set when the signature is a webauthn one (the device signed a client
-    /// data JSON, not `SHA256(message)`).
-    pub webauthn: Option<WebauthnData>,
-}
-
-/// What a webauthn signature carries besides the plain sk fields.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WebauthnData {
-    /// The origin in the client data; the key's application.
-    pub origin: String,
-    /// The client data JSON that was signed.
-    pub client_data: Vec<u8>,
-    /// Extension data of the authenticator data (usually empty).
-    pub extensions: Vec<u8>,
-}
-
-/// The signature form a backend produces for a key type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SkSignatureKind {
-    /// `sk-*` signatures over `SHA256(message)`.
-    Plain,
-    /// `webauthn-sk-ecdsa-sha2-nistp256@openssh.com`: the device signs a
-    /// client data JSON that contains the message.
-    Webauthn,
 }
 
 /// Why an authenticator did not sign.
@@ -198,13 +171,6 @@ pub trait SecurityKey: Send + Sync {
         pin: Option<&str>,
     ) -> std::result::Result<SkAssertion, SkError>;
 
-    /// The signature form this backend makes for `algorithm`. Webauthn
-    /// signatures need the userauth request to name another public key
-    /// algorithm, so the caller has to know before it signs.
-    fn signature_kind(&self, _algorithm: SkAlgorithm) -> SkSignatureKind {
-        SkSignatureKind::Plain
-    }
-
     /// The backend asks for the PIN and user verification itself (a system
     /// dialog), so the engine must not ask for one and passes no PIN.
     fn handles_user_verification(&self) -> bool {
@@ -259,17 +225,6 @@ pub fn hardware_backend_available() -> bool {
     {
         false
     }
-}
-
-/// Whether the backend of this build can sign for `key_type` (an `sk-*`
-/// algorithm name, see [`crate::security_key_type`]). Linux and macOS sign
-/// for both key types; Windows only for `sk-ecdsa-sha2-nistp256@openssh.com`,
-/// because OpenSSH has no webauthn form of Ed25519 signatures.
-pub fn hardware_backend_supports(key_type: &str) -> bool {
-    if !hardware_backend_available() {
-        return false;
-    }
-    cfg!(not(windows)) || key_type == SkAlgorithm::EcdsaP256.name()
 }
 
 #[cfg(all(
@@ -379,13 +334,8 @@ fn ecdsa_der_to_ssh(der: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// The SSH signature of an `sk-*` key (algorithm, signature, flags, counter),
-/// in the form that follows the length in a userauth request. A webauthn
-/// assertion becomes a `webauthn-sk-ecdsa-sha2-nistp256@openssh.com`
-/// signature, which adds the origin, the client data and the extensions.
+/// in the form that follows the length in a userauth request.
 pub fn encode_signature(info: &SkKeyInfo, assertion: &SkAssertion) -> Result<Vec<u8>> {
-    if let Some(webauthn) = &assertion.webauthn {
-        return encode_webauthn_signature(info, assertion, webauthn);
-    }
     let (algorithm, mut data) = match info.algorithm {
         SkAlgorithm::Ed25519 => {
             if assertion.signature.len() != 64 {
@@ -411,36 +361,6 @@ pub fn encode_signature(info: &SkKeyInfo, assertion: &SkAssertion) -> Result<Vec
         .map_err(|e| Error::Protocol(format!("cannot encode the security key signature: {e}")))
 }
 
-fn encode_webauthn_signature(
-    info: &SkKeyInfo,
-    assertion: &SkAssertion,
-    webauthn: &WebauthnData,
-) -> Result<Vec<u8>> {
-    fn put(out: &mut Vec<u8>, bytes: &[u8]) {
-        out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
-        out.extend_from_slice(bytes);
-    }
-    if info.algorithm != SkAlgorithm::EcdsaP256 {
-        return Err(Error::Protocol(
-            "webauthn signatures exist only for sk-ecdsa-sha2-nistp256 keys".into(),
-        ));
-    }
-    let mpints = ecdsa_der_to_ssh(&assertion.signature).ok_or_else(|| {
-        Error::Protocol("the security key returned a malformed ECDSA signature".into())
-    })?;
-    // string name, string ecdsa_signature, byte flags, uint32 counter,
-    // string origin, string clientData, string extensions (PROTOCOL.u2f).
-    let mut out = Vec::new();
-    put(&mut out, WEBAUTHN_ECDSA_ALGORITHM.as_bytes());
-    put(&mut out, &mpints);
-    out.push(assertion.flags);
-    out.extend_from_slice(&assertion.counter.to_be_bytes());
-    put(&mut out, webauthn.origin.as_bytes());
-    put(&mut out, &webauthn.client_data);
-    put(&mut out, &webauthn.extensions);
-    Ok(out)
-}
-
 /// Signs `message` with the key `key` (an `sk-*` key) on `backend`,
 /// prompting through `interaction` for the touch and the PIN. Returns the
 /// encoded SSH signature.
@@ -451,17 +371,6 @@ pub async fn sign_with_security_key(
     info: &SkKeyInfo,
     message: &[u8],
 ) -> Result<Vec<u8>> {
-    let assertion = sign_assertion(backend, interaction, label, info, message).await?;
-    encode_signature(info, &assertion)
-}
-
-async fn sign_assertion(
-    backend: &dyn SecurityKey,
-    interaction: &dyn Interaction,
-    label: &str,
-    info: &SkKeyInfo,
-    message: &[u8],
-) -> Result<SkAssertion> {
     let request = SkSignRequest { info, message };
     // A backend with its own PIN dialog is never given a PIN, and the PIN is
     // not asked for here.
@@ -483,7 +392,7 @@ async fn sign_assertion(
         }
         let last = attempt == PIN_ATTEMPTS || own_dialog;
         match result {
-            Ok(assertion) => return Ok(assertion),
+            Ok(assertion) => return encode_signature(info, &assertion),
             Err(SkError::PinRequired) if !last => {
                 pin = Some(ask_pin(interaction, label, None).await?);
             }
@@ -543,23 +452,7 @@ impl Signer for SkSigner<'_> {
         mut to_sign: Vec<u8>,
     ) -> impl std::future::Future<Output = std::result::Result<Vec<u8>, Self::Error>> + Send {
         async move {
-            // Webauthn signatures go with another public key algorithm name,
-            // which the server signs over as well, so rename it first.
-            let webauthn =
-                self.backend.signature_kind(self.info.algorithm) == SkSignatureKind::Webauthn;
-            if webauthn {
-                to_sign = rewrite_userauth_algorithm(
-                    &to_sign,
-                    self.info.algorithm.name(),
-                    WEBAUTHN_ECDSA_ALGORITHM,
-                )
-                .ok_or_else(|| {
-                    SkSignError::Failed(Error::Protocol(
-                        "cannot name the webauthn algorithm in the userauth request".into(),
-                    ))
-                })?;
-            }
-            let assertion = sign_assertion(
+            let signature = sign_with_security_key(
                 self.backend.as_ref(),
                 self.interaction,
                 self.label,
@@ -568,13 +461,6 @@ impl Signer for SkSigner<'_> {
             )
             .await
             .map_err(SkSignError::Failed)?;
-            if assertion.webauthn.is_some() != webauthn {
-                return Err(SkSignError::Failed(Error::Protocol(
-                    "the security key backend made another signature form than it announced".into(),
-                )));
-            }
-            let signature =
-                encode_signature(&self.info, &assertion).map_err(SkSignError::Failed)?;
             to_sign.extend_from_slice(&(signature.len() as u32).to_be_bytes());
             to_sign.extend_from_slice(&signature);
             Ok(to_sign)

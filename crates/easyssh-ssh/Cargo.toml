@@ -8,9 +8,8 @@ description = "SSH engine on russh: auth chain, channels, SFTP, forwards, jump c
 
 [features]
 default = ["hardware-key"]
-# Real FIDO2 authenticators: USB HID (CTAP2) on Linux and macOS, the Windows WebAuthn API on Windows
-# (ECDSA keys only). Not on Android or iOS; where there is no backend, or none for the key type,
-# hosts with sk-* keys run on the system OpenSSH (see security_key.rs).
+# Real FIDO2 authenticators: USB HID (CTAP2) on Linux and macOS, the Windows WebAuthn API on Windows.
+# Not on Android or iOS; where there is no backend, hosts with sk-* keys run on the system OpenSSH (see security_key.rs).
 hardware-key = ["dep:ctap-hid-fido2", "dep:windows"]
 # A software authenticator that makes real sk signatures, for tests.
 software-key = ["dep:ed25519-dalek", "dep:p256", "dep:sha2"]

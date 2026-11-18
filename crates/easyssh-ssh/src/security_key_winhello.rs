@@ -5,10 +5,10 @@
 //!
 //! Windows shows its own dialog for the touch and the PIN, so this backend
 //! asks for neither ([`SecurityKey::handles_user_verification`]); the engine's
-//! touch event is a notice only. The API signs a client data JSON, not
-//! `SHA256(message)`, so the signature is the
-//! `webauthn-sk-ecdsa-sha2-nistp256@openssh.com` form (see
-//! `security_key_webauthn.rs`): ECDSA keys work, Ed25519 keys do not.
+//! touch event is a notice only. The API hashes a client data buffer with
+//! SHA-256 and signs it after the authenticator data; the SSH message is
+//! passed as that buffer, which gives an ordinary sk signature for Ed25519 and
+//! ECDSA keys alike (see `security_key_windows.rs`).
 //!
 //! `webauthn.dll` is loaded at run time from System32 instead of linked, so
 //! the app still starts on a Windows without it; then [`available`] is false
@@ -18,13 +18,12 @@
 //!
 //! A real prompt needs a person at a Windows desktop with a key, so CI only
 //! builds this file; the encoding it feeds is tested in
-//! `security_key_webauthn.rs`.
+//! `security_key_windows.rs`.
 
 use crate::security_key::{
-    SecurityKey, SkAlgorithm, SkAssertion, SkError, SkKeyInfo, SkSignRequest, SkSignatureKind,
-    FLAG_USER_VERIFICATION,
+    SecurityKey, SkAssertion, SkError, SkKeyInfo, SkSignRequest, FLAG_USER_VERIFICATION,
 };
-use crate::security_key_webauthn::{assertion_from_webauthn, classify_hresult, client_data};
+use crate::security_key_windows::{assertion_from_windows, classify_hresult};
 use async_trait::async_trait;
 use std::sync::OnceLock;
 use windows::core::{s, w, HRESULT, PCWSTR};
@@ -118,29 +117,17 @@ impl SecurityKey for WebAuthnSecurityKey {
             .map_err(|e| SkError::Device(format!("the security key task failed: {e}")))?
     }
 
-    fn signature_kind(&self, _algorithm: SkAlgorithm) -> SkSignatureKind {
-        SkSignatureKind::Webauthn
-    }
-
     fn handles_user_verification(&self) -> bool {
         true
     }
 }
 
 fn sign_blocking(info: &SkKeyInfo, message: &[u8]) -> Result<SkAssertion, SkError> {
-    if info.algorithm != SkAlgorithm::EcdsaP256 {
-        return Err(SkError::Device(
-            "Windows WebAuthn can only sign for sk-ecdsa-sha2-nistp256 keys; \
-             use the system OpenSSH for this key"
-                .into(),
-        ));
-    }
     let api = api()
         .filter(|api| api.version >= MIN_API_VERSION)
         .ok_or(SkError::NoDevice)?;
-    let client_json = client_data(message, &info.application)?;
     let (Ok(client_len), Ok(handle_len)) = (
-        u32::try_from(client_json.len()),
+        u32::try_from(message.len()),
         u32::try_from(info.key_handle.len()),
     ) else {
         return Err(SkError::Device(
@@ -160,7 +147,9 @@ fn sign_blocking(info: &SkKeyInfo, message: &[u8]) -> Result<SkAssertion, SkErro
     let client = WEBAUTHN_CLIENT_DATA {
         dwVersion: WEBAUTHN_CLIENT_DATA_CURRENT_VERSION,
         cbClientDataJSON: client_len,
-        pbClientDataJSON: client_json.as_ptr().cast_mut(),
+        // The SSH message goes in as the client data; Windows hashes it
+        // without reading it.
+        pbClientDataJSON: message.as_ptr().cast_mut(),
         pwszHashAlgId: WEBAUTHN_HASH_ALGORITHM_SHA_256,
     };
     // Version 1 of the options is a prefix of every later one, so it runs on
@@ -211,9 +200,7 @@ fn sign_blocking(info: &SkKeyInfo, message: &[u8]) -> Result<SkAssertion, SkErro
                 "Windows WebAuthn returned an incomplete assertion".into(),
             ))
         } else {
-            assertion_from_webauthn(
-                &info.application,
-                client_json,
+            assertion_from_windows(
                 std::slice::from_raw_parts(
                     answer.pbAuthenticatorData,
                     answer.cbAuthenticatorData as usize,

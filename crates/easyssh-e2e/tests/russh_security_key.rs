@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 use easyssh_e2e::russh_support::{within, Scripted};
-use easyssh_e2e::sk::{e2e_security_keys, e2e_webauthn_ecdsa_key};
+use easyssh_e2e::sk::e2e_security_keys;
 use easyssh_e2e::E2e;
 use easyssh_ssh::{
     AuthMethod, Decision, Error, Interaction, KbdPrompt, KnownHostStatus, MemoryIdentity, Session,
@@ -59,16 +59,8 @@ impl Interaction for Touches {
 }
 
 async fn login_with(label: &str, text: &str) -> (Session, Vec<String>) {
-    let (device, _, _) = e2e_security_keys();
-    login_on(device, label, text).await
-}
-
-async fn login_on(
-    device: easyssh_ssh::security_key_software::SoftwareSecurityKey,
-    label: &str,
-    text: &str,
-) -> (Session, Vec<String>) {
     let e2e = E2e::new();
+    let (device, _, _) = e2e_security_keys();
     let mut params = e2e.russh_target().security_key(Arc::new(device));
     // Only the sk key: the regular test key must not be what gets in.
     params.identity_files.clear();
@@ -101,16 +93,6 @@ async fn ecdsa_sk_key_from_the_software_authenticator_logs_in() {
     let (_, _, ecdsa) = e2e_security_keys();
     let (_session, events) = login_with("e2e sk ecdsa", &ecdsa.private_text).await;
     assert_eq!(events, ["touch e2e sk ecdsa", "done e2e sk ecdsa"]);
-}
-
-/// What the Windows backend sends: the `webauthn-sk-ecdsa-sha2-nistp256`
-/// algorithm and signature, which sshd verifies against the same sk key.
-#[tokio::test]
-#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
-async fn ecdsa_sk_key_with_webauthn_signatures_logs_in() {
-    let (device, ecdsa) = e2e_webauthn_ecdsa_key();
-    let (_session, events) = login_on(device, "e2e sk webauthn", &ecdsa.private_text).await;
-    assert_eq!(events, ["touch e2e sk webauthn", "done e2e sk webauthn"]);
 }
 
 #[tokio::test]
