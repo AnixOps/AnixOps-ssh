@@ -263,11 +263,6 @@ jobs:
   # signing. The generated Xcode project is informational for now.
   ios:
     name: iOS (simulator)
-    # Runs after the Rust matrix so it never competes with Rust (macos-latest)
-    # for the account's macOS runner; while both queued, the Rust job was
-    # repeatedly cancelled before a runner picked it up.
-    needs: rust
-    if: ${{ !cancelled() }}
     runs-on: macos-latest
     defaults:
       run:
