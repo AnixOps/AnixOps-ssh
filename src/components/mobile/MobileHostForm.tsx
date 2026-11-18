@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { isVaultLocked, pasteText, saveHost, secretsSet, type Group, type Host, type SecretsInput } from "@/lib/backend";
 import { t } from "@/lib/i18n";
+import { hostAttach, setHostAttach, type Attach } from "@/lib/mobilePrefs";
 import { vaultErrorText } from "@/lib/vaultUi";
 import { groupName, jumpHostFor, jumpOptions, jumpText, parseTags, tagsText } from "@/lib/mobileHosts";
 
@@ -39,6 +40,7 @@ export function MobileHostForm({
   const [group, setGroup] = useState(host ? (groupName(host, groups) ?? "") : "");
   const [tags, setTags] = useState(tagsText(host?.tags ?? []));
   const [favorite, setFavorite] = useState(host?.favorite ?? false);
+  const [attach, setAttach] = useState<Attach>(host ? hostAttach(host.id) : "off");
   const [jump, setJump] = useState(host?.fields.proxyJump ?? "");
   const [password, setPassword] = useState("");
   const [privateKey, setPrivateKey] = useState("");
@@ -104,6 +106,8 @@ export function MobileHostForm({
     })
       .then(async (hostId) => {
         setSavedId(hostId);
+        // Where the session is kept is a phone-side choice, stored by host id.
+        setHostAttach(hostId, attach);
         const problem = await keepLogin(hostId);
         if (problem) {
           setError(problem);
@@ -213,6 +217,14 @@ export function MobileHostForm({
               </option>
             ))}
           </Select>
+        </Field>
+        <Field label={t.mobileAttach}>
+          <Select className="h-11" value={attach} onChange={(event) => setAttach(event.target.value as Attach)}>
+            <option value="off">{t.mobileAttachOff}</option>
+            <option value="tmux">tmux</option>
+            <option value="screen">screen</option>
+          </Select>
+          <span className="mt-1 block text-callout text-label-2">{t.mobileAttachHint}</span>
         </Field>
         <MobileSwitchRow label={t.favorite} on={favorite} onChange={setFavorite} />
         <section aria-labelledby="mobile-login-title" className="flex flex-col gap-5">

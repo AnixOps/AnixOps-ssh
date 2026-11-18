@@ -23,6 +23,7 @@
 //! - [`sync`]: the account, devices and the sync loop (shared with the daemon).
 //! - [`Engine`]: puts them together for the app: opens shells, file sessions
 //!   and tunnels on leases of the shared connection.
+//! - [`supervisor`]: tmux/screen attach and reconnect with backoff on top of it.
 
 pub mod events;
 pub mod files;
@@ -33,6 +34,7 @@ pub mod login;
 pub mod prompts;
 pub mod registry;
 mod shell;
+pub mod supervisor;
 pub mod sync;
 pub mod tunnels;
 mod utf8;

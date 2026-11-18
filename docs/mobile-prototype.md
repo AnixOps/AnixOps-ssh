@@ -170,18 +170,46 @@ signing.
 A phone does not keep a TCP connection alive for an app that is not in front.
 Android may kill the process and in any case suspends the network under Doze and
 App Standby; a foreground service with a notification keeps a process alive for
-a while but is a policy risk on Google Play for an SSH client and still does not
-survive Doze for long. iOS suspends the app seconds after it leaves the screen
-and offers a short background task, nothing like a session.
+a while but does not survive Doze for long. iOS suspends the app seconds after it
+leaves the screen and offers a short background task, nothing like a session.
+The SSH protocol has no resume, so scrollback and running programs of a plain
+shell are lost with the connection.
 
-Consequence: a session lives as long as its screen. The prototype closes the
-session when the terminal screen goes away, and when the connection dies it shows
-"Reconnect", which opens a new shell. The SSH protocol has no resume, so scrollback
-and running programs are lost. The honest product answer is not on the phone:
-reattach to `tmux` or `screen` on the host (an opt-in "attach or create" command
-when the shell opens), or the relay through the sync server that §2 describes for
-taking over sessions. The phone's side is fast reconnect, and it needs a timeout
-policy so a locked phone does not hold ten half-open sockets.
+What the app does about it (the rules are in `src/lib/backgroundPolicy.ts`, the
+engine side in `crates/easyssh-engine/src/supervisor.rs`):
+
+- **Grace period, then a clean close.** Settings, "Keep the connection in the
+  background": close at once, 30 s, 1 min (default), 5 min, 15 min, or as long as
+  the system allows. When the timer runs out the session is closed properly
+  (`exit` to the server), not left half open. The same lifecycle source as the
+  vault's auto-lock decides that the app left (`watchLifecycle`: visibilitychange,
+  pagehide, pageshow), so the two never disagree.
+- **Fast reconnect with clear status.** Back from a short trip, the screen
+  probes the connection (a write after 10 s away) before trusting it. A shell
+  attached to tmux or screen reconnects by itself with exponential backoff
+  (500 ms doubling to 30 s, 8 attempts, authentication failures end it at once)
+  and the status line says "Reconnecting, attempt N" and then "Reconnected"; a
+  divider line marks the join in the scrollback. A shell without attach shows a
+  card that says the connection was closed and that reconnecting opens a new shell
+  and loses what was running. It never opens a new shell silently.
+  The supervisor shares the engine's connection registry with files and
+  forwards: a forced reconnect (back from the background) first evicts the host's
+  shared connection, so the new session, the file browser and the forwards that
+  open next all use the one fresh connection; a dead connection is also replaced
+  when a lease asks for it.
+- **Per-host attach.** Host settings, "Keep session": off, tmux
+  (`exec tmux new -A -s anixops`) or screen (`exec screen -dRR anixops`), sent
+  right after the shell opens. The choice is stored on the phone by host id.
+  Closing the screen leaves the tmux session running on the host.
+- **Keepalive.** Off, 15, 30 or 60 s, applied to connections opened afterwards.
+- **Android foreground notification, opt in and off by default.** A foreground
+  service (`SessionService`, type `specialUse`) shows one ongoing notification
+  while a terminal is open, so Android is less likely to end the process. The
+  setting says plainly that it does not keep the connection alive through sleep
+  and that tmux is what keeps the work. It needs the notification permission.
+
+Not done: a relay through the sync server (§2), and keeping a connection
+for hours without tmux (not possible on either system).
 
 ### Device key: Keystore and Keychain
 
@@ -244,27 +272,50 @@ used at the next connection (`open_shell_with_login` in `easyssh-engine`).
 ### IME and the soft keyboard in xterm.js
 
 xterm.js receives input from a hidden `textarea`. On touch devices that is where
-the trouble is, and none of it could be tested here:
+the trouble is. What the app does (`src/lib/imeLayer.ts`, the state machine in
+`src/lib/imeMachine.ts`, both unit tested with recorded Gboard, iOS and pinyin
+event sequences, and driven with synthetic composition events in the Playwright
+suite):
 
-- Predictive text and autocorrect (Gboard, the iOS keyboard) send composed text
-  and replacement events instead of key events. The prototype turns off
-  `autocapitalize`, `autocorrect` and `spellcheck` on the textarea; whether Gboard
-  still composes words, and whether backspace behaves on an empty field, has to
-  be tried on a device.
-- The keyboard has no Esc, Tab, Ctrl or arrows. The key bar sends them; it keeps
-  focus in the terminal by swallowing the pointer-down, so the keyboard does not
-  close when a key is pressed. Sticky Ctrl applies to the next typed key. There
-  are no function keys, Home/End, Page keys or Alt/Meta yet, and no key repeat for
-  held arrows.
-- Layout under the keyboard: iOS covers the page without resizing it, Android
-  may or may not resize it. The app sizes itself to `visualViewport.height`, so
-  the key bar should sit directly above the keyboard in both; this is untested.
-- Touch selection, long-press copy, paste and scroll in xterm.js are weak: it has
-  no touch selection handles. Copy and paste need a small custom UI (the clipboard
-  plugin is already in the mobile build).
-- Hardware keyboards on tablets (the design repo's keyboard rules apply when one
-  is attached) work through the same textarea; the desktop shortcut layer is not
-  wired in the mobile UI.
+- The textarea has `autocapitalize`, `autocorrect`, `spellcheck` off and holds a
+  single sentinel space, so backspace on an "empty" field still produces a
+  `deleteContentBackward` that is turned into DEL.
+- Capture-phase listeners take composition and `beforeinput` events before
+  xterm.js, which would otherwise send the same text twice. A guard drops a
+  duplicate that arrives within the same turn.
+- Modes (Settings, "Keyboard composition"): automatic (Latin text goes out per
+  character; pinyin, kana and similar are shown in a chip above the key bar and sent
+  when confirmed), live, or hold until confirmed. Autocorrect replacements
+  (`insertReplacementText`) are ignored rather than guessed.
+- The key bar keeps focus in the terminal by swallowing the pointer-down.
+- Layout: the app is sized to `visualViewport` (`src/lib/keyboardViewport.ts`),
+  `data-keyboard` marks an open keyboard (a drop of 120 px or more against the
+  tallest height at the same width, so rotation is told from a keyboard), the
+  bottom safe area is dropped while the keyboard covers it, and `MainActivity.kt`
+  pads the WebView with the IME inset under edge-to-edge. The viewport meta has
+  `interactive-widget=resizes-content`.
+- Touch: tap focuses and shows the keyboard; long press selects a word, with two
+  draggable handles and a Copy, Select line and Paste toolbar (clipboard plugin);
+  one finger scrolls the scrollback (arrow keys in full-screen programs, wheel
+  events when the program asked for the mouse), two fingers scroll four times as
+  fast (Page Up and Down in full-screen programs); pinch changes the font size and
+  is remembered (also in Settings). xterm.js re-renders its rows during a touch,
+  so the listeners sit on each touch's own target, and its own touch scroll is
+  stopped so the two do not fight.
+- Hardware keyboards on tablets go through `src/lib/shortcutTable.ts` like the
+  desktop (settings, shortcut list, new host, close tab, copy, paste, host
+  search); plain Ctrl+C and friends stay with the shell.
+- The key bar: Esc, Tab, sticky Ctrl (tap arms for one key, double tap locks),
+  Alt as ESC prefix, arrows that repeat while held, then a second row that
+  swipes sideways: Home, End, Page keys, paste, symbols and F1 to F12. Haptics
+  on press where the device has them. The bar is customisable (Settings, "Customise
+  the key bar": reorder, move between rows, remove, add keys and command keys that type
+  a snippet, optionally with Enter).
+
+Still to judge on a real device: how Gboard and the iOS keyboard actually behave
+against the state machine (the sequences are recorded from their documented
+behaviour, not from a device), the IME inset in a real WebView, selection feel,
+haptic strength, and inertia scrolling, which is not implemented.
 
 If xterm.js proves too weak on touch, the fallback is a native terminal widget
 fed by the same engine; the engine and host list are not affected.
@@ -348,17 +399,20 @@ In rough order:
    auto-lock on background, saved passwords and keys, the first-run flow and the
    vault settings. Compiled in CI; the native code is not run on a device yet (see
    the list of what is not verified above).
-4. Sessions under background limits: reconnect policy, a "attach to tmux" option per
-   host, optional relay through the sync server, a foreground notification only if
-   the policy allows it.
-5. Sync on mobile: platform certificate verification and sign-in are done; keys
-   need the vault (item 3), team vaults and host history need phone screens.
-6. Terminal toolbar completeness: function keys, Home/End/Page, Alt, key repeat,
-   a customisable bar; selection and clipboard UI; font size gestures.
+4. ~~Sessions under background limits~~ Done: grace period and clean close,
+   reconnect with backoff, per-host tmux or screen attach, keepalive, the opt-in
+   Android notification (see "Background execution"). Left: the relay through the
+   sync server, and a device test of Doze behaviour.
+5. Sync on mobile: platform certificate verification, sign-in, hosts, groups and
+   tags, jump hosts and host editing are done (engine sync). Left: team vaults and
+   host history screens.
+6. ~~Terminal toolbar completeness~~ Done: function keys, Home/End/Page, Alt, key
+   repeat, a customisable bar, selection and clipboard UI, font size gestures.
 7. Release engineering: Android signing and the Play listing (including the
    foreground-service and "SSH client" policy questions), iOS signing, TestFlight,
    an app-store build in `release.yml`, x86_64 and armv7 split decisions,
    crash reporting with consent on mobile.
-8. Accessibility pass (screen readers, dynamic type), and the design repo's
-   phone patterns for settings and the empty states, which the prototype only
-   approximates.
+8. ~~Accessibility pass~~ Done in the app (names on every control, 44 px targets
+   checked in CI, a screen reader mode for the terminal, text size follows the
+   system setting, grouped settings rows); to be checked with TalkBack and
+   VoiceOver on devices.

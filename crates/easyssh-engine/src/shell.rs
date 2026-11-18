@@ -120,6 +120,8 @@ pub struct Engine {
     events: Events,
     shells: Mutex<HashMap<String, mpsc::UnboundedSender<Command>>>,
     next: AtomicU64,
+    /// SSH keepalive interval for new connections (`None` turns them off).
+    keepalive: Mutex<Option<Duration>>,
 }
 
 fn fail(error: &SshError) -> OpenError {
@@ -146,7 +148,15 @@ impl Engine {
             events,
             shells: Mutex::new(HashMap::new()),
             next: AtomicU64::new(1),
+            keepalive: Mutex::new(Some(Duration::from_secs(60))),
         })
+    }
+
+    /// Sets the keepalive interval used by connections opened from now on.
+    /// A phone on a mobile network wants a shorter one than the desktop's 60 s
+    /// so a dead path is noticed sooner; `None` turns keepalives off.
+    pub fn set_keepalive(&self, interval: Option<Duration>) {
+        *lock(&self.keepalive) = interval;
     }
 
     pub fn prompts(&self) -> &Arc<Prompts> {
@@ -165,6 +175,14 @@ impl Engine {
         &self.events
     }
 
+    /// Closes the host's shared connection now (a terminal found its socket
+    /// untrustworthy: the app came back from the background). The next lease
+    /// connects anew, and the files and forwards that open after it share that
+    /// one; the ones on the old connection fail and are opened again.
+    pub async fn forget_connection(&self, target: &Target) {
+        self.registry.evict(&target.key()).await;
+    }
+
     /// How long a connection stays up after its last user went away.
     pub fn set_linger(&self, linger: Duration) {
         self.registry.set_linger(linger);
@@ -175,6 +193,7 @@ impl Engine {
         // keyboard-interactive or a password.
         let mut params = ConnectParams::new(target.host.clone(), target.port, target.user.clone())
             .known_hosts(self.known_hosts.clone())
+            .keepalive(*lock(&self.keepalive))
             .agent(AgentSource::Disabled);
         if let Some(identity) = target.identity.clone() {
             params = params.memory_identity(identity);

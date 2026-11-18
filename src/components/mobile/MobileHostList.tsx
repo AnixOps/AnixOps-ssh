@@ -73,6 +73,7 @@ export function MobileHostList({
             />
             <Input
               type="search"
+              data-host-search
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={t.mobileSearchHosts}

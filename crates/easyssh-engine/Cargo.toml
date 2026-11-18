@@ -29,3 +29,4 @@ zeroize = "1"
 [dev-dependencies]
 easyssh-proto = { path = "../easyssh-proto" }
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
