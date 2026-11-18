@@ -38,7 +38,7 @@ current 1.x app.
 | **Hosts** | Saved hosts and every `Host` in `~/.ssh/config`, grouped, tagged, coloured and searchable. Create and edit hosts in the app. |
 | **Terminal** | xterm.js tabs on a real PTY: truecolor, 10,000-line scrollback (adjustable), find, copy and paste, reconnect, local shell tabs. |
 | **Files** | An SFTP pane beside the terminal: browse, upload by drag and drop, download, rename, delete, with a transfer queue. |
-| **SSH engine** | The built-in engine (russh) is the default: a host's terminal, file pane and tunnels share one connection, so a password or key passphrase is asked once. Hosts that need something it does not do (`ProxyCommand`, `Match`, `LocalCommand`, certificates, a remote command, forwards stored in the config; FIDO2 keys too on Windows) run on the system OpenSSH automatically. OpenSSH is also an advanced choice, globally or per host, in **Settings → Advanced**; it is kept for compatibility and only gets fixes. Installs that never chose an engine use the built-in one; an explicit OpenSSH choice is kept. |
+| **SSH engine** | The built-in engine (russh) is the default: a host's terminal, file pane and tunnels share one connection, so a password or key passphrase is asked once. Hosts that need something it does not do (`ProxyCommand`, `Match`, `LocalCommand`, certificates, a remote command, forwards stored in the config; FIDO2 `sk-ssh-ed25519` keys too on Windows) run on the system OpenSSH automatically. OpenSSH is also an advanced choice, globally or per host, in **Settings → Advanced**; it is kept for compatibility and only gets fixes. Installs that never chose an engine use the built-in one; an explicit OpenSSH choice is kept. |
 | **Passwords** | The built-in engine asks in a dialog, once per connection. On OpenSSH hosts terminals ask in the terminal, and the file pane and tunnels ask in a dialog through `SSH_ASKPASS`. Answers go straight to the engine and are saved only if you choose "Remember in vault". |
 | **Snippets** | Saved commands, run in the active terminal or broadcast to all. |
 | **Tunnels** | Local, remote and SOCKS forwards, one switch each, with live status. |
@@ -164,8 +164,17 @@ prompt jumps above. What the scripts do and the sequence format are in
   the key needs one; the PIN is never saved or logged. USB keys that speak CTAP2 are
   supported; the app talks to them directly and needs no libfido2. On Linux the user needs
   access to the key's hidraw device (the udev rules that come with most distributions'
-  `libfido2`/`u2f-host` packages grant it). On Windows, hosts with a security key still run on
-  the system OpenSSH, which uses the Windows WebAuthn service.
+  `libfido2`/`u2f-host` packages grant it). On Windows the app uses the Windows WebAuthn API
+  (`webauthn.dll`, Windows 10 1903 or later), the same route as OpenSSH for Windows, because
+  only elevated processes may open FIDO devices directly: Windows shows its own dialog for the
+  touch and the PIN, and the app only shows a notice. Which keys work on Windows:
+  `sk-ecdsa-sha2-nistp256@openssh.com` works (the app signs the
+  `webauthn-sk-ecdsa-sha2-nistp256@openssh.com` form, which OpenSSH 8.9 and later servers
+  accept unless `PubkeyAcceptedAlgorithms` excludes it); `sk-ssh-ed25519@openssh.com` does not,
+  because OpenSSH has no webauthn form of Ed25519 signatures, so a host with such a key runs on
+  the system OpenSSH. The Windows prompt itself cannot run in CI (it needs a person and a key),
+  so CI builds the Windows backend and tests the signature encoding; a real key was not part
+  of the automated checks.
 - Serial ports are a session type: add a serial connection from the plus menu
   (port, baud, data bits, parity, stop bits, flow control). Output goes through
   the same terminal path as SSH, so scrollback and recording work. On Linux,

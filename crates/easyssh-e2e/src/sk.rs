@@ -36,3 +36,16 @@ pub fn e2e_security_keys() -> (SoftwareSecurityKey, SoftwareKeyFile, SoftwareKey
     );
     (device, ed25519, ecdsa)
 }
+
+/// Like [`e2e_security_keys`] for the ECDSA credential only, on a device that
+/// signs the way the Windows WebAuthn API does (`webauthn-sk-ecdsa-...`).
+pub fn e2e_webauthn_ecdsa_key() -> (SoftwareSecurityKey, SoftwareKeyFile) {
+    let device = SoftwareSecurityKey::new().with_webauthn();
+    let ecdsa = device.create_from_seed(
+        SkAlgorithm::EcdsaP256,
+        "ssh:",
+        FLAG_USER_PRESENCE,
+        ECDSA_SEED,
+    );
+    (device, ecdsa)
+}

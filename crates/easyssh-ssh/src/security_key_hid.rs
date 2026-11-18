@@ -4,9 +4,7 @@
 //! the usual udev rules for FIDO keys grant), on macOS IOKit.
 //!
 //! Not built on Windows: Windows only lets elevated processes open FIDO HID
-//! devices and routes everything else through `webauthn.dll`, which this
-//! backend does not use yet. There the engine reports no backend and the host
-//! runs on the system OpenSSH, which does.
+//! devices; there `security_key_winhello.rs` goes through `webauthn.dll`.
 
 use crate::security_key::{
     SecurityKey, SkAssertion, SkError, SkKeyInfo, SkSignRequest, FLAG_USER_PRESENCE,
@@ -119,6 +117,7 @@ fn sign_blocking(job: &Job) -> Result<SkAssertion, SkError> {
                     signature: assertion.signature,
                     flags,
                     counter,
+                    webauthn: None,
                 });
             }
             Err(e) => match classify(&e.to_string()) {

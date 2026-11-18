@@ -8,9 +8,10 @@
 //! the application uses it.
 
 use crate::security_key::{
-    SecurityKey, SkAlgorithm, SkAssertion, SkError, SkKeyInfo, SkSignRequest, FLAG_USER_PRESENCE,
-    FLAG_USER_VERIFICATION,
+    SecurityKey, SkAlgorithm, SkAssertion, SkError, SkKeyInfo, SkSignRequest, SkSignatureKind,
+    FLAG_USER_PRESENCE, FLAG_USER_VERIFICATION,
 };
+use crate::security_key_webauthn::{assertion_from_webauthn, client_data};
 use async_trait::async_trait;
 use rand::RngCore;
 use russh::keys::ssh_key::private::{KeypairData, SkEcdsaSha2NistP256, SkEd25519};
@@ -46,6 +47,7 @@ pub struct SoftwareSecurityKey {
     counter: AtomicU32,
     pin: Option<String>,
     pin_retries: AtomicU32,
+    webauthn: bool,
 }
 
 impl Default for SoftwareSecurityKey {
@@ -66,7 +68,17 @@ impl SoftwareSecurityKey {
             counter: AtomicU32::new(0),
             pin: None,
             pin_retries: AtomicU32::new(8),
+            webauthn: false,
         }
+    }
+
+    /// The device signs like the Windows WebAuthn API does: a client data
+    /// JSON instead of `SHA256(message)`, giving
+    /// `webauthn-sk-ecdsa-sha2-nistp256@openssh.com` signatures. ECDSA keys
+    /// only.
+    pub fn with_webauthn(mut self) -> Self {
+        self.webauthn = true;
+        self
     }
 
     /// The device has this PIN set.
@@ -205,7 +217,19 @@ impl SecurityKey for SoftwareSecurityKey {
         signed.extend_from_slice(&Sha256::digest(info.application.as_bytes()));
         signed.push(flags);
         signed.extend_from_slice(&counter.to_be_bytes());
-        signed.extend_from_slice(&Sha256::digest(request.message));
+        let client = if self.webauthn {
+            if !matches!(credential.secret, Secret::P256(_)) {
+                return Err(SkError::Device(
+                    "webauthn signatures exist only for ECDSA keys".into(),
+                ));
+            }
+            let client = client_data(request.message, &info.application)?;
+            signed.extend_from_slice(&Sha256::digest(&client));
+            Some(client)
+        } else {
+            signed.extend_from_slice(&Sha256::digest(request.message));
+            None
+        };
 
         let signature = match &credential.secret {
             Secret::Ed25519(key) => {
@@ -218,10 +242,24 @@ impl SecurityKey for SoftwareSecurityKey {
                 signature.to_der().as_bytes().to_vec()
             }
         };
-        Ok(SkAssertion {
-            signature,
-            flags,
-            counter,
-        })
+        match client {
+            Some(client) => {
+                assertion_from_webauthn(&info.application, client, &signed[..37], &signature)
+            }
+            None => Ok(SkAssertion {
+                signature,
+                flags,
+                counter,
+                webauthn: None,
+            }),
+        }
+    }
+
+    fn signature_kind(&self, algorithm: SkAlgorithm) -> SkSignatureKind {
+        if self.webauthn && algorithm == SkAlgorithm::EcdsaP256 {
+            SkSignatureKind::Webauthn
+        } else {
+            SkSignatureKind::Plain
+        }
     }
 }

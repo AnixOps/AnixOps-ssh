@@ -131,10 +131,10 @@ impl HostFacts {
     /// files (to spot FIDO2 keys), so it touches the disk. FIDO2 `sk-*` keys
     /// count only on platforms where the engine has no authenticator backend.
     pub fn unsupported(&self) -> Vec<Unsupported> {
-        self.unsupported_with(easyssh_ssh::hardware_backend_available())
+        self.unsupported_with(easyssh_ssh::hardware_backend_supports)
     }
 
-    fn unsupported_with(&self, security_keys: bool) -> Vec<Unsupported> {
+    fn unsupported_with(&self, supports_key: impl Fn(&str) -> bool) -> Vec<Unsupported> {
         let mut found = Vec::new();
         if self.proxy_command {
             found.push(Unsupported::ProxyCommand);
@@ -155,11 +155,10 @@ impl HostFacts {
             if cert_beside(&key) {
                 found.push(Unsupported::Certificate);
             }
-            if !security_keys
-                && std::fs::read_to_string(&key)
-                    .ok()
-                    .and_then(|text| easyssh_ssh::security_key_type(&text))
-                    .is_some()
+            if std::fs::read_to_string(&key)
+                .ok()
+                .and_then(|text| easyssh_ssh::security_key_type(&text))
+                .is_some_and(|key_type| !supports_key(key_type))
             {
                 found.push(Unsupported::SecurityKey);
             }
@@ -562,10 +561,10 @@ proxycommand none
         let text = format!("hostname h\nidentityfile {}\n", key.display());
         let facts = parse_ssh_g(&text).unwrap();
         assert_eq!(
-            facts.unsupported_with(false),
+            facts.unsupported_with(|_| false),
             vec![Unsupported::SecurityKey]
         );
-        assert!(facts.unsupported_with(true).is_empty());
+        assert!(facts.unsupported_with(|_| true).is_empty());
     }
 
     #[test]

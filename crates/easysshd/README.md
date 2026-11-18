@@ -58,7 +58,7 @@ or `unknown_command` for an unknown kind) and the connection stays open.
   (`sftp.*`, `transfer.*`) and tunnels (`tunnel.*`) of one host share one SSH
   connection, kept for 30 seconds after the last user left (`engine.connections`
   shows what is open). The system OpenSSH still runs a host that needs
-  `ProxyCommand`, `Match`, `LocalCommand`, certificates, security keys (on Windows only), a
+  `ProxyCommand`, `Match`, `LocalCommand`, certificates, `sk-ssh-ed25519` security keys (on Windows only), a
   stored remote command or inline forwards, or when the built-in engine
   reports `unsupported` while connecting; `session.open` answers with the
   `engine` and the `engine_reason`. Passwords, passphrases and
