@@ -3,13 +3,17 @@ import { useCallback, useEffect, useState } from "react";
 import mark from "@/assets/mark.svg";
 import { AskpassDialog } from "@/components/app/AskpassDialog";
 import { HostKeyDialog } from "@/components/app/HostKeyDialog";
+import { MobileFiles } from "@/components/mobile/MobileFiles";
+import { MobileForwards } from "@/components/mobile/MobileForwards";
 import { MobileHostForm } from "@/components/mobile/MobileHostForm";
 import { MobileHostList } from "@/components/mobile/MobileHostList";
+import { MobileSync } from "@/components/mobile/MobileSync";
+import { MobileTabBar, type MobileTab } from "@/components/mobile/MobileTabBar";
 import { MobileTerminal } from "@/components/mobile/MobileTerminal";
 import { ConfirmProvider } from "@/components/ui/confirm";
 import { Notice } from "@/components/ui/form";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { loadHosts, onHostsChanged, type Host } from "@/lib/backend";
+import { loadHosts, onHostsChanged, type Group, type Host } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 
 /** The height of what the person can see. On iOS the soft keyboard covers the
@@ -38,20 +42,33 @@ function useVisibleHeight(): number {
   return height;
 }
 
-/** The touch UI of the mobile prototype: host list, then a terminal on the
- *  chosen host. Under the `md` breakpoint (834 px, guidelines/layout.md) the
- *  two are screens; from `md` up (a tablet) they sit side by side. */
+/** What is open on a host. The terminal stays mounted while the files are on
+ *  top of it, so looking at a file does not end the session. */
+interface Open {
+  host: Host;
+  attempt: number;
+  terminal: boolean;
+  files: boolean;
+}
+
+/** The touch UI of the mobile app: three destinations in a tab bar (hosts,
+ *  forwards, sync), and a host opens as a terminal or a file browser. Under the
+ *  `md` breakpoint (834 px, guidelines/layout.md) the destinations and the open
+ *  host are screens; from `md` up (a tablet) they sit side by side. */
 export function MobileApp() {
   const [hosts, setHosts] = useState<Host[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [open, setOpen] = useState<{ host: Host; attempt: number } | null>(null);
-  const [adding, setAdding] = useState(false);
+  const [tab, setTab] = useState<MobileTab>("hosts");
+  const [open, setOpen] = useState<Open | null>(null);
+  const [editing, setEditing] = useState<Host | "new" | null>(null);
   const height = useVisibleHeight();
 
   const reload = useCallback(() => {
     loadHosts()
       .then((snapshot) => {
         setHosts(snapshot.hosts);
+        setGroups(snapshot.groups);
         setLoadError(null);
       })
       .catch((reason) => setLoadError(String(reason)));
@@ -59,7 +76,28 @@ export function MobileApp() {
   useEffect(reload, [reload]);
   useEffect(() => onHostsChanged(reload), [reload]);
 
-  const openHost = (host: Host) => setOpen((current) => ({ host, attempt: (current?.attempt ?? 0) + 1 }));
+  // A host that was deleted or edited elsewhere (sync) is closed or refreshed.
+  useEffect(() => {
+    setOpen((current) => {
+      if (!current) return current;
+      const fresh = hosts.find((host) => host.id === current.host.id);
+      return fresh ? { ...current, host: fresh } : hosts.length > 0 ? null : current;
+    });
+  }, [hosts]);
+
+  const openTerminal = (host: Host) =>
+    setOpen((current) => ({
+      host,
+      attempt: (current?.attempt ?? 0) + 1,
+      terminal: true,
+      files: false,
+    }));
+  const openFiles = (host: Host) =>
+    setOpen((current) =>
+      current?.terminal && current.host.id === host.id
+        ? { ...current, files: true }
+        : { host, attempt: (current?.attempt ?? 0) + 1, terminal: false, files: true },
+    );
 
   return (
     <MotionConfig reducedMotion="user">
@@ -76,18 +114,45 @@ export function MobileApp() {
                 </Notice>
               )}
               <div className="min-h-0 flex-1">
-                <MobileHostList
-                  hosts={hosts}
-                  selectedId={open?.host.id ?? null}
-                  onOpen={openHost}
-                  onAdd={() => setAdding(true)}
-                />
+                {tab === "hosts" && (
+                  <MobileHostList
+                    hosts={hosts}
+                    groups={groups}
+                    selectedId={open?.host.id ?? null}
+                    onOpen={openTerminal}
+                    onFiles={openFiles}
+                    onEdit={setEditing}
+                    onAdd={() => setEditing("new")}
+                    onChanged={reload}
+                  />
+                )}
+                {tab === "forwards" && <MobileForwards hosts={hosts} />}
+                {tab === "sync" && <MobileSync />}
               </div>
+              <MobileTabBar tab={tab} onChange={setTab} />
             </section>
-            <main className={`min-w-0 flex-1 flex-col md:flex ${open ? "flex" : "hidden"}`}>
-              {open ? (
-                <MobileTerminal key={`${open.host.id}:${open.attempt}`} host={open.host} onBack={() => setOpen(null)} />
-              ) : (
+            <main className={`relative min-w-0 flex-1 flex-col md:flex ${open ? "flex" : "hidden"}`}>
+              {open?.terminal && (
+                <div className="flex h-full min-h-0 flex-col">
+                  <MobileTerminal
+                    key={`${open.host.id}:${open.attempt}`}
+                    host={open.host}
+                    onBack={() => setOpen(null)}
+                    onFiles={() => setOpen({ ...open, files: true })}
+                  />
+                </div>
+              )}
+              {open?.files && (
+                <div className="absolute inset-0 z-10 bg-bg">
+                  <MobileFiles
+                    key={`${open.host.id}:files`}
+                    host={open.host}
+                    onBack={() => setOpen(open.terminal ? { ...open, files: false } : null)}
+                    onTerminal={open.terminal ? undefined : () => openTerminal(open.host)}
+                  />
+                </div>
+              )}
+              {!open && (
                 <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
                   <img src={mark} alt="" className="size-16" draggable={false} />
                   <h1 className="text-title-2">{t.emptyTitle}</h1>
@@ -96,11 +161,14 @@ export function MobileApp() {
             </main>
           </div>
           <AnimatePresence>
-            {adding && (
+            {editing && (
               <MobileHostForm
-                onCancel={() => setAdding(false)}
+                host={editing === "new" ? undefined : editing}
+                hosts={hosts}
+                groups={groups}
+                onCancel={() => setEditing(null)}
                 onDone={() => {
-                  setAdding(false);
+                  setEditing(null);
                   reload();
                 }}
               />

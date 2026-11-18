@@ -1,7 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ChevronLeft, RotateCw, Unplug } from "lucide-react";
+import { ChevronLeft, FolderOpen, RotateCw, Unplug } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MobileKeyBar } from "@/components/mobile/MobileKeyBar";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ type Status = { state: "connecting" } | { state: "connected" } | { state: "exite
  *  Unmounting ends the session: a phone has no background process to keep it
  *  (docs/architecture-v2.md section 2). The page above sizes this component to
  *  the visible viewport, so the keyboard never covers the bar. */
-export function MobileTerminal({ host, onBack }: { host: Host; onBack: () => void }) {
+export function MobileTerminal({ host, onBack, onFiles }: { host: Host; onBack: () => void; onFiles?: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const sessionRef = useRef<SessionHandle | null>(null);
@@ -146,6 +146,11 @@ export function MobileTerminal({ host, onBack }: { host: Host; onBack: () => voi
               {statusText} · {host.target}
             </p>
           </div>
+          {onFiles && (
+            <Button variant="quiet" size="icon-lg" aria-label={t.files} onClick={onFiles}>
+              <FolderOpen />
+            </Button>
+          )}
         </div>
       </header>
 

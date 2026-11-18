@@ -54,6 +54,16 @@ const mobileScenes = [
   { name: "mobile-terminal-ctrl", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, open: "prod-web-01", pressCtrl: true },
   { name: "mobile-hostkey", query: "mobile=1&lang=en&hostkey=changed", viewport: { width: 390, height: 844 } },
   { name: "mobile-tablet", query: "mobile=1&lang=en", viewport: { width: 1024, height: 768 }, open: "prod-web-01", type: ["ls"] },
+  // `steps` are taps in order: a button by name, or another role.
+  { name: "mobile-host-menu", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, steps: [{ name: "More: prod-web-01" }] },
+  { name: "mobile-edit-host", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, steps: [{ name: "More: prod-web-01" }, { role: "menuitem", name: "Edit" }] },
+  { name: "mobile-files", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, steps: [{ name: "More: prod-web-01" }, { role: "menuitem", name: "Files" }], waitText: "deploy.sh" },
+  { name: "mobile-files-menu", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, steps: [{ name: "More: prod-web-01" }, { role: "menuitem", name: "Files" }, { name: "More: deploy.sh" }], waitText: "deploy.sh" },
+  { name: "mobile-files-folder", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, steps: [{ name: "More: prod-web-01" }, { role: "menuitem", name: "Files" }, { name: "logs", exact: false }], waitText: "access.log" },
+  { name: "mobile-forwards", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, steps: [{ name: "Forwards" }] },
+  { name: "mobile-forward-form", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, steps: [{ name: "Forwards" }, { name: "New tunnel" }] },
+  { name: "mobile-sync", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, steps: [{ name: "Sync" }] },
+  { name: "mobile-sync-in", query: "mobile=1&lang=en&sync=in", viewport: { width: 390, height: 844 }, steps: [{ name: "Sync" }] },
 ];
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
@@ -145,6 +155,10 @@ for (const colorScheme of ["light", "dark"]) {
         await page.keyboard.press("Enter");
       }
     }
+    for (const step of scene.steps ?? [])
+      await page.getByRole(step.role ?? "button", { name: step.name, exact: step.exact ?? true }).first().click();
+    if (scene.waitText) await page.getByText(scene.waitText).first().waitFor();
+    if (scene.steps) await page.waitForTimeout(300);
     if (scene.pressCtrl) await page.getByRole("button", { name: /^Ctrl/ }).click();
     // Every touch control is at least 44 x 44 px (layout.md); report any that is not.
     const small = await page.evaluate(() =>

@@ -421,11 +421,8 @@ async fn a_host_behind_a_jump_host_opens_through_it_with_its_own_questions() {
         .expect("open through the jump host");
     engine.write(&id, b"hostname; exit\r").unwrap();
     let mut output = String::new();
-    loop {
-        match next(&mut receiver).await {
-            Event::Data(text) => output.push_str(&text),
-            Event::Exit(_) => break,
-        }
+    while let Event::Data(text) = next(&mut receiver).await {
+        output.push_str(&text);
     }
     assert!(output.contains("target"), "{output:?}");
     // Each hop asked about its own host key, and the keys logged both in.
