@@ -669,9 +669,6 @@ fn tunnels_list(state: State<'_, Mobile>) -> Result<Vec<TunnelView>, String> {
 
 #[tauri::command]
 fn tunnel_save(state: State<'_, Mobile>, input: TunnelInput) -> Result<String, String> {
-    if input.kind != easyssh_core::TunnelKind::Local {
-        return Err("only local port forwards are offered on a phone".to_owned());
-    }
     state.with_store(|store| {
         save_tunnel(
             store,
@@ -679,6 +676,7 @@ fn tunnel_save(state: State<'_, Mobile>, input: TunnelInput) -> Result<String, S
                 id: input.id,
                 name: input.name,
                 host_id: input.host_id,
+                kind: input.kind,
                 bind_port: input.bind_port,
                 target_host: input.target_host.unwrap_or_default(),
                 target_port: input.target_port.unwrap_or(0),

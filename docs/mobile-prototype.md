@@ -31,12 +31,21 @@ its socket protocol; the phone calls it in-process. What that gives the phone:
   `AnixNative`, iOS `navigator.share` with the bytes). Cancelled transfers are
   reported and leave no partial file. Only files are transferred on the phone,
   not folders.
-- **Forwards.** Local forwards (`ssh -L`) on the phone's loopback interface,
-  with a switch and the failure reason. Remote forwards and SOCKS proxies stay
-  on the desktop and read correctly when they sync in.
+- **Forwards.** Local forwards (`ssh -L`), remote forwards (`ssh -R`) and
+  SOCKS5 proxies (`ssh -D`), picked with a type switch in the form and started
+  with a per-forward switch that shows the failure reason. They run on the
+  host's shared connection through the same engine code as the desktop. A
+  local forward or proxy listens on the phone's loopback interface; a remote
+  forward listens on the host (loopback) and connects back to a target the phone
+  can reach. Limits of a phone, also said in the form: an app cannot listen on a
+  port below 1024 (the form refuses it for local forwards and proxies; a remote
+  forward's port belongs to the host, so any port works), and the system may
+  suspend the app in the background, which ends the forwards with the connection
+  until the switch is turned on again.
 - **Jump hosts.** A host can be reached through another saved host, chosen from
-  a list; the hop is opened on the shared connection and asks its own host key
-  and password questions.
+  a list; the hop is opened on the shared connection and uses its own saved key
+  or password from the vault when it has one, else asks its own host key and
+  password questions.
 - **Host list.** Group (found by name ignoring case, or created), tags,
   favorites, a jump host, search by name, address, group or `#tag`, and a `⋯`
   menu on each row (terminal, files, edit, favorite, delete).
@@ -53,7 +62,9 @@ Terminal, files and forwards open a host through one function
 (`with_saved_login`), so the vault's saved key and password reach the shared
 connection whichever of them opens it first; a saved key with the vault locked
 is the error `vault_locked`, which the lock screen answers. Jump hops get their
-saved keys too (a hop's saved password is not used; its prompt is asked).
+saved keys and passwords too: each saved password answers only the prompt of its
+own `user@host`, once, so a hop's password is never offered to the target (or
+the other way round).
 Nothing in this update was run on a device; the Android and iOS jobs check that
 it builds.
 

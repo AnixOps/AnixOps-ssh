@@ -525,6 +525,84 @@ test("the bar editor reorders, moves and restores keys", async ({ page }) => {
   assert.equal(await page.locator("[data-bar-item=home]").count(), 1);
 });
 
+// ---- forwards ----------------------------------------------------------------
+
+/** Every control on the page has a name and is at least 44 px. */
+async function touchProblems(page) {
+  await sleep(450); // the form slides in
+  return page.evaluate(() =>
+    [...document.querySelectorAll("form button, form input, form select, ul button")]
+      .filter((element) => element.getClientRects().length > 0)
+      .flatMap((element) => {
+        const name = element.getAttribute("aria-label") || element.textContent?.trim() || element.getAttribute("placeholder") || "";
+        const box = element.getBoundingClientRect();
+        const out = [];
+        if (!name && !element.labels?.length) out.push(`${element.tagName} has no name`);
+        if (box.height < 43.5 || box.width < 43.5) out.push(`${name || element.tagName} is ${Math.round(box.width)}x${Math.round(box.height)}`);
+        return out;
+      }),
+  );
+}
+
+test(
+  "forwards: a remote forward and a SOCKS proxy are made with the type picker",
+  async ({ page }) => {
+    await page.getByRole("button", { name: "Forwards", exact: true }).tap();
+    await page.getByRole("button", { name: "New tunnel", exact: true }).first().tap();
+    const picker = page.getByRole("radiogroup", { name: "Type" });
+    assert.equal(await picker.getByRole("radio").count(), 3);
+    assert.equal(await picker.getByRole("radio", { name: "Local" }).getAttribute("aria-checked"), "true");
+    assert.deepEqual(await touchProblems(page), []);
+
+    // Remote: the port is the host's, so a privileged one is fine; the target is on the phone.
+    await picker.getByRole("radio", { name: "Remote" }).tap();
+    assert.equal(await page.getByText(/^Port on the host/).count(), 1);
+    assert.equal(await page.getByText(/^Target on this phone/).count(), 1);
+    await page.getByPlaceholder("8080").fill("80");
+    await page.getByPlaceholder("5432").fill("3000");
+    await page.getByRole("button", { name: "Save", exact: true }).tap();
+    await page.getByText("80 ← localhost:3000", { exact: true }).waitFor();
+
+    // SOCKS: only a port; below 1024 is refused with the reason.
+    await page.getByRole("button", { name: "New tunnel", exact: true }).first().tap();
+    await page.getByRole("radiogroup", { name: "Type" }).getByRole("radio", { name: "SOCKS" }).tap();
+    assert.equal(await page.getByPlaceholder("5432").count(), 0, "a SOCKS proxy has no target");
+    assert.equal(await page.getByText("Set the app's proxy to SOCKS5 localhost:port").count(), 1);
+    await page.getByPlaceholder("8080").fill("443");
+    await page.getByRole("button", { name: "Save", exact: true }).tap();
+    await page.getByText("below 1024").waitFor();
+    await page.getByPlaceholder("8080").fill("1081");
+    await page.getByRole("button", { name: "Save", exact: true }).tap();
+    await page.getByText("1081 SOCKS", { exact: true }).waitFor();
+    assert.deepEqual(await touchProblems(page), []);
+
+    // The new forward starts like any other and its switch says so.
+    await page.getByRole("switch", { name: /Start.*1081 SOCKS/ }).tap();
+    await page.getByRole("switch", { name: /Stop.*1081 SOCKS/ }).waitFor();
+  },
+  { host: null },
+);
+
+test(
+  "forwards: a failed forward shows why, and a SOCKS proxy edits without a target",
+  async ({ page }) => {
+    await page.getByRole("button", { name: "Forwards", exact: true }).tap();
+    // The preview's Grafana forward failed; the reason is on its row.
+    await page.getByText("Address already in use").waitFor();
+    assert.equal(await page.getByRole("status").filter({ hasText: "Address already in use" }).count(), 1);
+    // The preview's SOCKS proxy opens in the editor with its type selected.
+    await page.getByRole("button", { name: /^More: .*SOCKS/ }).tap();
+    await page.getByRole("menuitem", { name: "Edit" }).tap();
+    const picker = page.getByRole("radiogroup", { name: "Type" });
+    assert.equal(await picker.getByRole("radio", { name: "SOCKS" }).getAttribute("aria-checked"), "true");
+    assert.equal(await page.getByPlaceholder("5432").count(), 0);
+    // The copy tells about the limits of a phone.
+    assert.equal(await page.getByText(/suspend the app in the background/).count(), 1);
+    await page.getByRole("button", { name: "Cancel", exact: true }).tap();
+  },
+  { host: null },
+);
+
 // ---- tablet with a hardware keyboard --------------------------------------------
 
 test("a tablet shows list and terminal together and a hardware keyboard drives the shortcuts", async ({ page }) => {
