@@ -1,4 +1,4 @@
-import { ChevronRight, Plus, Search, Server } from "lucide-react";
+import { ChevronRight, Plus, Search, Server, SlidersHorizontal } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,11 +14,13 @@ export function MobileHostList({
   selectedId,
   onOpen,
   onAdd,
+  onSettings,
 }: {
   hosts: Host[];
   selectedId: string | null;
   onOpen: (host: Host) => void;
   onAdd: () => void;
+  onSettings: () => void;
 }) {
   const [query, setQuery] = useState("");
   const normalized = query.trim().toLowerCase();
@@ -39,9 +41,14 @@ export function MobileHostList({
       <header className="material-bar pt-safe shrink-0 border-b">
         <div className="px-safe flex h-14 items-center justify-between gap-2">
           <h1 className="truncate text-title-3">{t.mobileHostsTitle}</h1>
-          <Button variant="quiet" size="icon-lg" aria-label={t.mobileAddHost} onClick={onAdd}>
-            <Plus />
-          </Button>
+          <div className="flex items-center">
+            <Button variant="quiet" size="icon-lg" aria-label={t.mobileSettingsTitle} onClick={onSettings}>
+              <SlidersHorizontal />
+            </Button>
+            <Button variant="quiet" size="icon-lg" aria-label={t.mobileAddHost} onClick={onAdd}>
+              <Plus />
+            </Button>
+          </div>
         </div>
         <div className="px-safe pb-3">
           <div className="relative">
@@ -51,6 +58,7 @@ export function MobileHostList({
             />
             <Input
               type="search"
+              data-host-search
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={t.searchHosts}

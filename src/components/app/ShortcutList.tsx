@@ -5,7 +5,7 @@ import { Overlay } from "@/components/ui/overlay";
 import { Tooltip } from "@/components/ui/tooltip";
 import { t } from "@/lib/i18n";
 import { isMac } from "@/lib/shortcuts";
-import { shortcutTable, type ShortcutRow } from "@/lib/shortcutTable";
+import { shortcutTable, type ShortcutId, type ShortcutRow } from "@/lib/shortcutTable";
 
 const groups: { id: ShortcutRow["group"]; title: () => string }[] = [
   { id: "app", title: () => t.shortcutsApp },
@@ -15,7 +15,7 @@ const groups: { id: ShortcutRow["group"]; title: () => string }[] = [
 
 /** The list of every shortcut, opened with Mod+/ (keyboard.md K9). It reads the
  *  same table the code and the tooltips use. */
-export function ShortcutList({ onClose }: { onClose: () => void }) {
+export function ShortcutList({ onClose, only }: { onClose: () => void; only?: readonly ShortcutId[] }) {
   return (
     <Overlay labelledBy="shortcut-list-title" onDismiss={onClose} className="flex max-h-full max-w-xl flex-col">
       <div className="flex items-center gap-2 px-6 pt-6">
@@ -29,12 +29,14 @@ export function ShortcutList({ onClose }: { onClose: () => void }) {
         </Tooltip>
       </div>
       <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 pt-4 pb-6">
-        {groups.map((group) => (
+        {groups
+          .filter((group) => shortcutTable.some((row) => row.group === group.id && (!only || only.includes(row.id))))
+          .map((group) => (
           <section key={group.id} aria-label={group.title()}>
             <h3 className="mb-2 text-callout text-label-2">{group.title()}</h3>
             <dl className="divide-y divide-separator">
               {shortcutTable
-                .filter((row) => row.group === group.id)
+                .filter((row) => row.group === group.id && (!only || only.includes(row.id)))
                 .map((row) => (
                   <div key={`${row.group}-${row.id}`} className="flex items-center gap-3 py-2 text-callout">
                     <dt className="min-w-0 flex-1 truncate text-label-1">{row.title()}</dt>

@@ -52,6 +52,9 @@ const mobileScenes = [
   { name: "mobile-add-host", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, click: "Add host" },
   { name: "mobile-terminal", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, open: "prod-web-01", type: ["ls"] },
   { name: "mobile-terminal-ctrl", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, open: "prod-web-01", pressCtrl: true },
+  { name: "mobile-settings", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, taps: ["^Settings$"] },
+  { name: "mobile-bar-editor", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, taps: ["^Settings$", "Customise the key bar"] },
+  { name: "mobile-terminal-landscape", query: "mobile=1&lang=en", viewport: { width: 844, height: 390 }, open: "prod-web-01", type: ["ls"] },
   { name: "mobile-hostkey", query: "mobile=1&lang=en&hostkey=changed", viewport: { width: 390, height: 844 } },
   { name: "mobile-tablet", query: "mobile=1&lang=en", viewport: { width: 1024, height: 768 }, open: "prod-web-01", type: ["ls"] },
 ];
@@ -146,6 +149,7 @@ for (const colorScheme of ["light", "dark"]) {
       }
     }
     if (scene.pressCtrl) await page.getByRole("button", { name: /^Ctrl/ }).click();
+    for (const name of scene.taps ?? []) await page.getByRole("button", { name: new RegExp(name) }).first().click();
     // Every touch control is at least 44 x 44 px (layout.md); report any that is not.
     const small = await page.evaluate(() =>
       [...document.querySelectorAll("button, input")]

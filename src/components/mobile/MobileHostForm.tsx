@@ -2,8 +2,10 @@ import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Notice } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { saveHost } from "@/lib/backend";
 import { t } from "@/lib/i18n";
+import { setHostAttach, type Attach } from "@/lib/mobilePrefs";
 
 /** The smallest host form a terminal needs: name, host, user, port. Full
  *  screen on a phone, with the primary action on top and Cancel below it at
@@ -13,6 +15,7 @@ export function MobileHostForm({ onCancel, onDone }: { onCancel: () => void; onD
   const [hostname, setHostname] = useState("");
   const [username, setUsername] = useState("");
   const [port, setPort] = useState("22");
+  const [attach, setAttach] = useState<Attach>("off");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -41,7 +44,11 @@ export function MobileHostForm({ onCancel, onDone }: { onCancel: () => void; onD
         shellIntegration: false,
       },
     })
-      .then(onDone)
+      .then((id) => {
+        // Where the session is kept is a phone-side choice, stored by host id.
+        if (attach !== "off") setHostAttach(id, attach);
+        onDone();
+      })
       .catch((reason) => {
         setError(String(reason));
         setSaving(false);
@@ -101,6 +108,14 @@ export function MobileHostForm({ onCancel, onDone }: { onCancel: () => void; onD
             onChange={(event) => setPort(event.target.value)}
             inputMode="numeric"
           />
+        </Field>
+        <Field label={t.mobileAttach}>
+          <Select className="h-11" value={attach} onChange={(event) => setAttach(event.target.value as Attach)}>
+            <option value="off">{t.mobileAttachOff}</option>
+            <option value="tmux">tmux</option>
+            <option value="screen">screen</option>
+          </Select>
+          <span className="mt-1 block text-callout text-label-2">{t.mobileAttachHint}</span>
         </Field>
       </div>
       <div className="px-safe pb-safe material-bar flex shrink-0 flex-col gap-2 border-t py-3">
