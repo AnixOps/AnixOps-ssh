@@ -2,7 +2,7 @@ import type { SecretsInput, SecretsStatus } from "./backend";
 
 /** Windows Hello, Touch ID: mirrors `UnlockMethodView` in src-tauri/src/vault.rs. */
 export interface UnlockMethod {
-  /** `windows_hello` or `touch_id`. */
+  /** `windows_hello`, `touch_id`, or `biometric` (the phone's fingerprint or face). */
   name: string;
   /** The OS offers it on this device right now. */
   available: boolean;
@@ -19,9 +19,16 @@ export interface VaultStatus {
   keychainAvailable: boolean;
   keychainError: string | null;
   unlockMethods: UnlockMethod[];
+  /** Mobile only: seconds in the background before the vault locks (0 = at once). */
+  backgroundLockSeconds?: number;
+  /** Mobile only: false until the first-run question was answered. */
+  setupDone?: boolean;
 }
 
 /** In-memory stand-in for the vault in browser previews and CI screenshots.
+ *  The touch UI adds `?vault=first-run` (nothing chosen yet), `?vault=bio`
+ *  (a passphrase and biometrics on, the vault locked) and `?vault=bio-off`
+ *  (a passphrase, biometrics available but off).
  *  Values are kept only to track which secrets exist, as the real backend
  *  never returns them either. `?vault=locked` starts with a passphrase set
  *  and the vault locked; `?vault=nokeychain` simulates a machine without one;
@@ -29,15 +36,24 @@ export interface VaultStatus {
  *  `?vault=hello-on` has it on and the vault locked. */
 const mode = new URLSearchParams(window.location.search).get("vault");
 const hello = mode === "hello" || mode === "hello-on";
+const bio = mode === "bio" || mode === "bio-off";
 let state: VaultStatus = {
-  passphraseSet: mode === "locked" || hello,
-  unlocked: mode !== "locked" && mode !== "hello-on",
+  passphraseSet: mode === "locked" || hello || bio,
+  unlocked: mode !== "locked" && mode !== "hello-on" && mode !== "bio",
   autoLockMinutes: 15,
+  backgroundLockSeconds: 0,
+  setupDone: mode !== "first-run",
   keychainAvailable: mode !== "nokeychain",
   keychainError: mode === "nokeychain" ? "no secret service is running" : null,
-  unlockMethods: hello ? [{ name: "windows_hello", available: true, enabled: mode === "hello-on" }] : [],
+  unlockMethods: hello
+    ? [{ name: "windows_hello", available: true, enabled: mode === "hello-on" }]
+    : bio
+      ? [{ name: "biometric", available: true, enabled: mode === "bio" }]
+      : mode === "first-run"
+        ? [{ name: "biometric", available: true, enabled: false }]
+        : [],
 };
-let passphrase = mode === "locked" || hello ? "preview-passphrase" : "";
+let passphrase = mode === "locked" || hello || bio ? "preview-passphrase" : "";
 const saved = new Map<string, SecretsStatus>([["3", { password: true, privateKey: false, passphrase: false }]]);
 const listeners = new Set<(unlocked: boolean) => void>();
 
@@ -64,7 +80,7 @@ export const previewVault = {
   setPassphrase: async (next: string, current: string | null): Promise<VaultStatus> => {
     if (state.passphraseSet && current !== passphrase) wrong();
     passphrase = next;
-    state = { ...state, passphraseSet: true, unlocked: true };
+    state = { ...state, passphraseSet: true, unlocked: true, setupDone: true };
     return changed();
   },
   removePassphrase: async (given: string): Promise<VaultStatus> => {
@@ -79,7 +95,11 @@ export const previewVault = {
     return changed();
   },
   unlockWith: async (method: string): Promise<VaultStatus> => {
-    if (!state.unlockMethods.some((m) => m.name === method && m.enabled)) throw new Error("the unlock was cancelled");
+    // `?vault=bio` stands for a sensor prompt that was dismissed, so the lock
+    // screen stays up for its screenshot; the passphrase still opens it.
+    if (mode === "bio" || !state.unlockMethods.some((m) => m.name === method && m.enabled)) {
+      throw new Error("the unlock was cancelled");
+    }
     state = { ...state, unlocked: true };
     return changed();
   },
@@ -96,6 +116,26 @@ export const previewVault = {
     state = { ...state, autoLockMinutes: minutes };
     return { ...state };
   },
+  setBackgroundLock: async (seconds: number): Promise<VaultStatus> => {
+    state = { ...state, backgroundLockSeconds: seconds };
+    return { ...state };
+  },
+  setupSkip: async (): Promise<VaultStatus> => {
+    state = { ...state, setupDone: true };
+    return changed();
+  },
+  /** The app left the screen; a passphrase vault locks at once in the preview. */
+  background: async (): Promise<void> => {
+    if (
+      state.passphraseSet &&
+      (state.backgroundLockSeconds ?? 0) === 0 &&
+      state.unlocked
+    ) {
+      state = { ...state, unlocked: false };
+      changed();
+    }
+  },
+  foreground: async (): Promise<void> => {},
   onChanged: (handler: (unlocked: boolean) => void): (() => void) => {
     listeners.add(handler);
     return () => void listeners.delete(handler);

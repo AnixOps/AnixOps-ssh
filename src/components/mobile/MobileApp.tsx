@@ -5,12 +5,23 @@ import { AskpassDialog } from "@/components/app/AskpassDialog";
 import { HostKeyDialog } from "@/components/app/HostKeyDialog";
 import { MobileHostForm } from "@/components/mobile/MobileHostForm";
 import { MobileHostList } from "@/components/mobile/MobileHostList";
+import { MobileLockScreen } from "@/components/mobile/MobileLockScreen";
+import { MobileSettings } from "@/components/mobile/MobileSettings";
 import { MobileTerminal } from "@/components/mobile/MobileTerminal";
+import { MobileVaultSetup } from "@/components/mobile/MobileVaultSetup";
 import { ConfirmProvider } from "@/components/ui/confirm";
 import { Notice } from "@/components/ui/form";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { loadHosts, onHostsChanged, type Host } from "@/lib/backend";
+import {
+  loadHosts,
+  onHostsChanged,
+  vaultBackground,
+  vaultForeground,
+  type Host,
+} from "@/lib/backend";
 import { t } from "@/lib/i18n";
+import { vaultGate, watchLifecycle } from "@/lib/mobileVault";
+import { useVaultStatus } from "@/lib/useVaultStatus";
 
 /** The height of what the person can see. On iOS the soft keyboard covers the
  *  page without resizing it, so the layout follows the visual viewport; on
@@ -46,6 +57,9 @@ export function MobileApp() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [open, setOpen] = useState<{ host: Host; attempt: number } | null>(null);
   const [adding, setAdding] = useState(false);
+  const [settings, setSettings] = useState(false);
+  const vault = useVaultStatus();
+  const gate = vaultGate(vault.status);
   const height = useVisibleHeight();
 
   const reload = useCallback(() => {
@@ -59,13 +73,25 @@ export function MobileApp() {
   useEffect(reload, [reload]);
   useEffect(() => onHostsChanged(reload), [reload]);
 
+  // Tell the backend when the app leaves and returns, so the vault locks (at
+  // once by default); read the state again on return to show the lock screen
+  // before anything else.
+  useEffect(
+    () => watchLifecycle(document, { background: vaultBackground, foreground: vaultForeground }, vault.refresh, window),
+    [vault.refresh],
+  );
+
   const openHost = (host: Host) => setOpen((current) => ({ host, attempt: (current?.attempt ?? 0) + 1 }));
 
   return (
     <MotionConfig reducedMotion="user">
       <TooltipProvider delayDuration={500}>
         <ConfirmProvider>
-          <div className="flex w-full overflow-hidden bg-bg" style={{ height }}>
+          <div
+            className="flex w-full overflow-hidden bg-bg"
+            style={{ height }}
+            inert={gate !== "open"}
+          >
             <section
               aria-label={t.mobileHostsTitle}
               className={`min-w-0 flex-col md:flex md:w-80 md:shrink-0 md:border-r ${open ? "hidden" : "flex w-full"}`}
@@ -81,6 +107,7 @@ export function MobileApp() {
                   selectedId={open?.host.id ?? null}
                   onOpen={openHost}
                   onAdd={() => setAdding(true)}
+                  onSettings={() => setSettings(true)}
                 />
               </div>
             </section>
@@ -95,17 +122,32 @@ export function MobileApp() {
               )}
             </main>
           </div>
-          <AnimatePresence>
-            {adding && (
-              <MobileHostForm
-                onCancel={() => setAdding(false)}
-                onDone={() => {
-                  setAdding(false);
-                  reload();
-                }}
+          <div inert={gate !== "open"}>
+            <AnimatePresence>
+              {adding && (
+                <MobileHostForm
+                  onCancel={() => setAdding(false)}
+                  onDone={() => {
+                    setAdding(false);
+                    reload();
+                  }}
+                />
+              )}
+            </AnimatePresence>
+            {settings && vault.status && (
+              <MobileSettings
+                status={vault.status}
+                onStatus={vault.set}
+                onBack={() => setSettings(false)}
               />
             )}
-          </AnimatePresence>
+          </div>
+          {gate === "setup" && vault.status && (
+            <MobileVaultSetup status={vault.status} onDone={vault.set} />
+          )}
+          {gate === "locked" && vault.status && (
+            <MobileLockScreen status={vault.status} onUnlocked={vault.set} />
+          )}
           <AskpassDialog />
           <HostKeyDialog />
         </ConfirmProvider>

@@ -1,0 +1,8 @@
+.DS_Store
+/.build
+/Packages
+/.tauri
+/*.xcodeproj
+xcuserdata/
+DerivedData/
+Package.resolved

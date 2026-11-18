@@ -17,7 +17,7 @@ use easyssh_crypto::{
 };
 use easyssh_store::{SecretFlags, SecretsUpdate, Store, StoreError, StoredSecrets};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use zeroize::Zeroizing;
 
 /// Auto-lock after this many idle minutes unless the user chose otherwise.
@@ -26,6 +26,11 @@ pub const DEFAULT_AUTO_LOCK_MINUTES: u32 = 15;
 pub const MAX_AUTO_LOCK_MINUTES: u32 = 24 * 60;
 /// Settings key (in the app database) of the auto-lock minutes.
 pub const AUTO_LOCK_SETTING: &str = "vault_auto_lock_minutes";
+/// Settings key (in the app database) of the seconds a phone app may stay in
+/// the background before the vault locks. 0 locks the moment it leaves.
+pub const BACKGROUND_LOCK_SETTING: &str = "vault_background_lock_seconds";
+/// Longest background grace period the UI offers (an hour).
+pub const MAX_BACKGROUND_LOCK_SECONDS: u32 = 60 * 60;
 
 #[derive(Debug, thiserror::Error)]
 pub enum VaultError {
@@ -188,6 +193,12 @@ pub struct VaultStatus {
 struct Inner {
     last_used: Instant,
     auto_lock: Option<Duration>,
+    /// How long the app may be in the background before it locks (zero:
+    /// at once).
+    background_lock: Duration,
+    /// When the app left the screen, on the wall clock: the monotonic clock
+    /// stops while a phone sleeps, which is exactly when this matters.
+    backgrounded_at: Option<SystemTime>,
     providers: Vec<Arc<dyn UnlockProvider>>,
     /// When a provider last declined an automatic attempt.
     declined: Option<Instant>,
@@ -236,6 +247,8 @@ impl Vault {
             inner: Mutex::new(Inner {
                 last_used: Instant::now(),
                 auto_lock: minutes(DEFAULT_AUTO_LOCK_MINUTES),
+                background_lock: Duration::ZERO,
+                backgrounded_at: None,
                 providers: Vec::new(),
                 declined: None,
             }),
@@ -278,11 +291,76 @@ impl Vault {
         Ok(())
     }
 
-    /// Loads the saved auto-lock minutes from the app database.
+    /// Loads the saved auto-lock and background-lock times from the app
+    /// database.
     pub fn load_settings(&self, store: &Store) {
         if let Ok(Some(value)) = store.get_setting_as::<u32>(AUTO_LOCK_SETTING) {
             let _ = self.set_auto_lock_minutes(value);
         }
+        if let Ok(Some(value)) = store.get_setting_as::<u32>(BACKGROUND_LOCK_SETTING) {
+            let _ = self.set_background_lock_seconds(value);
+        }
+    }
+
+    /// Seconds in the background before the vault locks; 0 is at once.
+    pub fn background_lock_seconds(&self) -> u32 {
+        self.inner().background_lock.as_secs() as u32
+    }
+
+    pub fn set_background_lock_seconds(&self, value: u32) -> Result<(), VaultError> {
+        if value > MAX_BACKGROUND_LOCK_SECONDS {
+            return Err(VaultError::Passphrase(
+                "the background lock is limited to one hour",
+            ));
+        }
+        self.inner().background_lock = Duration::from_secs(u64::from(value));
+        Ok(())
+    }
+
+    /// Changes the background lock and saves it to the app database.
+    pub fn save_background_lock(&self, store: &Store, value: u32) -> Result<(), VaultError> {
+        self.set_background_lock_seconds(value)?;
+        store.set_setting_as(BACKGROUND_LOCK_SETTING, &value)?;
+        Ok(())
+    }
+
+    /// The app left the screen at `now`. With a background lock of zero the
+    /// key is dropped now; otherwise the time is noted for
+    /// [`Vault::returned_to_foreground`]. Returns whether it locked.
+    ///
+    /// While a system prompt is up (an unlock method is being asked) some
+    /// phones report the app as inactive; locking then would cancel the
+    /// user's own unlock, so nothing happens.
+    pub fn entered_background(&self, now: SystemTime) -> bool {
+        let Ok(_asking) = self.asking.try_lock() else {
+            return false;
+        };
+        let mut inner = self.inner();
+        inner.backgrounded_at.get_or_insert(now);
+        if inner.background_lock.is_zero() && self.cipher.is_unlocked() {
+            self.cipher.lock();
+            return true;
+        }
+        false
+    }
+
+    /// The app is back at `now`. Locks when it was away for at least the
+    /// background lock time, or when the clock went backwards (a changed
+    /// clock must not keep a vault open). Returns whether it locked.
+    pub fn returned_to_foreground(&self, now: SystemTime) -> bool {
+        let mut inner = self.inner();
+        let Some(since) = inner.backgrounded_at.take() else {
+            return false;
+        };
+        let expired = match now.duration_since(since) {
+            Ok(away) => away >= inner.background_lock,
+            Err(_) => true,
+        };
+        if expired && self.cipher.is_unlocked() {
+            self.cipher.lock();
+            return true;
+        }
+        false
     }
 
     /// Changes the auto-lock and saves it to the app database.
