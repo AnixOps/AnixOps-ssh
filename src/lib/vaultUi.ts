@@ -23,11 +23,13 @@ export function vaultErrorText(reason: unknown): string {
 
 /** The name of an unlock method (Windows Hello, Touch ID). */
 export function unlockMethodLabel(name: string): string {
+  if (name === "biometric") return t.unlockBiometric;
   return name === "windows_hello" ? t.unlockWindowsHello : name === "touch_id" ? t.unlockTouchId : name;
 }
 
 /** The unlock button's text for a method. */
 export function unlockWithLabel(name: string): string {
+  if (name === "biometric") return t.unlockWithBiometric;
   return name === "windows_hello" ? t.unlockWithWindowsHello : name === "touch_id" ? t.unlockWithTouchId : name;
 }
 

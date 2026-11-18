@@ -1,17 +1,23 @@
-import { useState, type FormEvent } from "react";
+import { ClipboardPaste, Eye, EyeOff } from "lucide-react";
+import { useState, type CSSProperties, type FormEvent } from "react";
 import { MobileSwitchRow } from "@/components/mobile/MobileSwitchRow";
 import { Button } from "@/components/ui/button";
-import { Field, Notice } from "@/components/ui/form";
+import { Field, Notice, Textarea } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { saveHost, type Group, type Host } from "@/lib/backend";
+import { isVaultLocked, pasteText, saveHost, secretsSet, type Group, type Host, type SecretsInput } from "@/lib/backend";
 import { t } from "@/lib/i18n";
+import { vaultErrorText } from "@/lib/vaultUi";
 import { groupName, jumpHostFor, jumpOptions, jumpText, parseTags, tagsText } from "@/lib/mobileHosts";
+
+/** What a key field shows while hidden: dots, as a password field would. */
+const MASKED = { WebkitTextSecurity: "disc" } as CSSProperties;
 
 /** The host form of the phone: name, address, user and port, then group, tags,
  *  favorite and a jump host chosen from the saved hosts. Full screen, with the
  *  primary action on top and Cancel below it at full width (actions.md O5).
- *  Keys and passwords are the vault's business, not this form's. */
+ *  The login to keep in the vault (a password, or a private key with its
+ *  passphrase; all optional) comes last; what is left empty is not changed. */
 export function MobileHostForm({
   host,
   hosts,
@@ -34,6 +40,12 @@ export function MobileHostForm({
   const [tags, setTags] = useState(tagsText(host?.tags ?? []));
   const [favorite, setFavorite] = useState(host?.favorite ?? false);
   const [jump, setJump] = useState(host?.fields.proxyJump ?? "");
+  const [password, setPassword] = useState("");
+  const [privateKey, setPrivateKey] = useState("");
+  const [keyPassphrase, setKeyPassphrase] = useState("");
+  const [showKey, setShowKey] = useState(false);
+  /** Set once the host is saved, so a retry after a login failure updates it instead of adding another. */
+  const [savedId, setSavedId] = useState<string | null>(host?.id ?? null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -41,6 +53,28 @@ export function MobileHostForm({
   const chosen = jumpHostFor(options, jump);
   // A jump chain written by hand (on the desktop) is kept as it is.
   const custom = jump !== "" && chosen === null;
+
+  const paste = () => {
+    pasteText()
+      .then((text) => (text === "" ? setError(t.mvPasteEmpty) : (setPrivateKey(text), setError(null))))
+      .catch((reason) => setError(String(reason)));
+  };
+
+  /** The host is saved first, then its login. A login that cannot be kept
+   *  (vault locked) leaves the host in place and says so. */
+  const keepLogin = async (hostId: string): Promise<string | null> => {
+    const input: SecretsInput = {};
+    if (password !== "") input.password = password;
+    if (privateKey.trim() !== "") input.privateKey = privateKey.trim() + "\n";
+    if (keyPassphrase !== "") input.passphrase = keyPassphrase;
+    if (Object.keys(input).length === 0) return null;
+    try {
+      await secretsSet(hostId, input);
+      return null;
+    } catch (reason) {
+      return `${t.mvLoginNotSaved}: ${isVaultLocked(reason) ? t.mvVaultNeedsUnlock : vaultErrorText(reason)}`;
+    }
+  };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -51,7 +85,7 @@ export function MobileHostForm({
     if (!/^\d{1,5}$/.test(port.trim()) || portNumber < 1 || portNumber > 65535) return setError(`${t.port}: 1–65535`);
     setSaving(true);
     saveHost({
-      id: host?.id ?? null,
+      id: savedId,
       name: name.trim() || hostname.trim(),
       group: group.trim() || null,
       tags: parseTags(tags),
@@ -68,7 +102,16 @@ export function MobileHostForm({
         proxyJump: jump.trim() || null,
       },
     })
-      .then(onDone)
+      .then(async (hostId) => {
+        setSavedId(hostId);
+        const problem = await keepLogin(hostId);
+        if (problem) {
+          setError(problem);
+          setSaving(false);
+          return;
+        }
+        onDone();
+      })
       .catch((reason) => {
         setError(String(reason));
         setSaving(false);
@@ -172,6 +215,67 @@ export function MobileHostForm({
           </Select>
         </Field>
         <MobileSwitchRow label={t.favorite} on={favorite} onChange={setFavorite} />
+        <section aria-labelledby="mobile-login-title" className="flex flex-col gap-5">
+          <div className="flex flex-col gap-1">
+            <h3 id="mobile-login-title" className="text-title-3">
+              {t.mvCredentials}
+            </h3>
+            <p className="text-callout text-label-2">{t.mvCredentialsHint}</p>
+            {host && <p className="text-callout text-label-3">{t.secretKeepHint}</p>}
+          </div>
+          <Field label={t.mvPassword} hint={t.optional}>
+            <Input
+              className="h-11"
+              type="password"
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </Field>
+          <Field label={t.mvPrivateKey} hint={t.mvPrivateKeyHint}>
+            <Textarea
+              rows={4}
+              value={privateKey}
+              onChange={(event) => setPrivateKey(event.target.value)}
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              style={showKey ? undefined : MASKED}
+              className="font-mono"
+            />
+          </Field>
+          <div className="flex gap-2">
+            <Button type="button" variant="secondary" size="lg" className="flex-1" onClick={paste}>
+              <ClipboardPaste />
+              {t.mvPasteClipboard}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="icon-lg"
+              aria-label={showKey ? t.mvHideKey : t.mvShowKey}
+              aria-pressed={showKey}
+              onClick={() => setShowKey(!showKey)}
+            >
+              {showKey ? <EyeOff /> : <Eye />}
+            </Button>
+          </div>
+          <Field label={t.mvKeyPassphrase} hint={t.optional}>
+            <Input
+              className="h-11"
+              type="password"
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              value={keyPassphrase}
+              onChange={(event) => setKeyPassphrase(event.target.value)}
+            />
+          </Field>
+        </section>
       </div>
       <div className="px-safe pb-safe material-bar flex shrink-0 flex-col gap-2 border-t py-3">
         <Button type="submit" variant="primary" size="lg" disabled={saving}>

@@ -29,6 +29,7 @@ pub mod files;
 pub mod hosts;
 pub mod known_hosts;
 pub mod local_files;
+pub mod login;
 pub mod prompts;
 pub mod registry;
 mod shell;
@@ -40,6 +41,7 @@ use easyssh_ssh::{Error as SshError, Session};
 use std::sync::Arc;
 
 pub use events::{EventSink, Events};
+pub use login::{saved_login, with_saved_login, SavedLogin, SavedPassword};
 pub use shell::{error_code, Engine, OpenError, ShellSink, Target};
 pub use utf8::Utf8Stream;
 

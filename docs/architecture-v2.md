@@ -193,6 +193,14 @@ encrypted, with keys only you hold, in code anyone can audit".
   through the `SecretSource` trait and keeps the key and its passphrase in
   memory only; a saved passphrase that does not unlock the key falls back to
   asking the user.
+- On mobile the keychain is a native plugin behind the same `KeyStore` seam:
+  the Android Keystore (hardware-backed AES-GCM wrapping key) and the iOS Keychain
+  (`WhenUnlockedThisDeviceOnly`). Biometric unlock is a third `UnlockProvider`
+  (`BoundKeyProvider`): the vault key is sealed under a Keystore key that needs
+  `BiometricPrompt` per use, or a Keychain item with `.biometryCurrentSet`, so
+  it cannot be released without the sensor, and it needs the passphrase to turn on.
+  The vault locks when the app goes to the background (immediately by default,
+  or after the chosen time). See [mobile-prototype.md](mobile-prototype.md).
 - Session logs are encrypted with libsodium secretstream on write.
 
 ## 7. Storage
@@ -345,7 +353,7 @@ end-to-end suite first.
 | 4. Vault | 6 | Device key and keychain, passwords and private keys in the vault, Windows Hello, Touch ID and serial ports (done), FIDO2 `sk-*` SSH keys on the built-in engine (done on Linux and macOS), FIDO2 vault unlock (open). |
 | 5. Sync | 8 | `easyssh-server`, sign-in without sending the passphrase, signed envelopes, field-level merge, history, team vaults and roles. |
 | 6. Terminal | 6 | Splits and broadcast, shell integration, completion specs, AI with the user's key, encrypted session logs and sharing. |
-| 7. Mobile | 10+ | Tauri mobile app with the embedded engine. A one-week viability prototype is done ([mobile-prototype.md](mobile-prototype.md)): the engine crates build for Android and iOS, `easyssh-engine` is the in-process engine, CI builds an Android debug APK and an iOS simulator app, and the recommendation is to commit to Tauri mobile, Android first, after one device test. The connection registry, SFTP, tunnels and the sync service have since moved into `easyssh-engine` (the daemon wraps them in its protocol, the phone calls them in-process), and the phone has files, local port forwards, jump hosts, groups, tags and sync sign-in. The rest of the phase (Keystore and Keychain vault, session policy under background limits, team vaults on the phone, release engineering) is not started. |
+| 7. Mobile | 10+ | Tauri mobile app with the embedded engine. A one-week viability prototype is done ([mobile-prototype.md](mobile-prototype.md)): the engine crates build for Android and iOS, `easyssh-engine` is the in-process engine, CI builds an Android debug APK and an iOS simulator app, and the recommendation is to commit to Tauri mobile, Android first, after one device test. The connection registry, SFTP, tunnels and the sync service have since moved into `easyssh-engine` (the daemon wraps them in its protocol, the phone calls them in-process), and the phone has files, local port forwards, jump hosts, groups, tags and sync sign-in. The Keystore and Keychain vault with biometric unlock, saved logins, background lock and the first-run flow is done. The rest of the phase (session policy under background limits, team vaults on the phone, release engineering) is not started; everything is compiled in CI, untested on a device. |
 
 ## 13. Open questions
 
@@ -363,9 +371,9 @@ To be decided at the start of the phase that needs them:
   - Tauri mobile or not: the evidence supports committing, Android first, behind
     one device test of terminal input (soft keyboard, selection, rotation,
     background and resume). Waiting for the owner's decision.
-  - Device key on mobile: Android Keystore and iOS Keychain implementations of the
-    vault's key store, and whether biometric unlock is a gate or releases the key
-    (the second needs an authentication-bound Keystore or Keychain item).
+  - Device key on mobile: decided and built. Keystore and Keychain key stores;
+    biometric unlock releases the key (an authentication-bound item), with the
+    passphrase as the fallback. Still open: a device test of the prompts.
   - Sessions under background limits: tmux or screen reattach per host, relay
     through the sync server, or reconnect only. A foreground service is a store
     policy question.

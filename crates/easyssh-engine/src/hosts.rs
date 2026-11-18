@@ -308,6 +308,7 @@ fn hop_target(config: &AppConfig, hop_text: &str, fallback_user: &str) -> Result
             user: user.unwrap_or(fallback_user).to_owned(),
             identity: None,
             jump: Vec::new(),
+            saved_password: None,
         });
     }
     let hop = parse_jump(hop_text)?
@@ -333,15 +334,16 @@ fn hop_target(config: &AppConfig, hop_text: &str, fallback_user: &str) -> Result
         user,
         identity: None,
         jump: Vec::new(),
+        saved_password: None,
     })
 }
 
 /// Where to connect for `host_id`, with its jump chain. A host without a user
 /// name cannot be opened: a phone has no local user to default to.
 ///
-/// HOOK(mobile-vault): `identity` is `None` here. The vault lane fills in the
-/// saved key (`MemoryIdentity`) of the host and of each hop before the target
-/// reaches [`crate::Engine`]; nothing else in the engine reads secrets.
+/// `identity` and `saved_password` are `None` here: the vault's saved login is
+/// added by [`crate::with_saved_login`], which is the only place secrets are
+/// read.
 pub fn target_for(config: &AppConfig, host_id: &str) -> Result<Target, String> {
     let connection = config
         .connections
@@ -375,6 +377,7 @@ pub fn target_for(config: &AppConfig, host_id: &str) -> Result<Target, String> {
         user,
         identity: None,
         jump,
+        saved_password: None,
     })
 }
 

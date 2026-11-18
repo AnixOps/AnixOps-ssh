@@ -12,6 +12,7 @@
 //! of the daemon go through its own askpass hub (which also serves OpenSSH).
 
 use crate::events::Events;
+use crate::login::SavedPassword;
 use async_trait::async_trait;
 use easyssh_ssh::known_hosts::KnownHostStatus;
 use easyssh_ssh::{Decision, HostKeyDetails, Interaction, KbdPrompt};
@@ -189,6 +190,8 @@ impl Prompts {
 pub struct PromptInteraction {
     pub prompts: Arc<Prompts>,
     pub label: String,
+    /// The host's saved password, offered once when the server asks for it.
+    pub saved_password: Option<Arc<SavedPassword>>,
 }
 
 #[async_trait]
@@ -215,6 +218,9 @@ impl Interaction for PromptInteraction {
     }
 
     async fn password(&self, prompt: &str) -> Option<String> {
+        if let Some(saved) = self.saved_password.as_ref().and_then(|s| s.take(prompt)) {
+            return Some(saved);
+        }
         self.prompts
             .ask_secret(&self.label, prompt, "password", false)
             .await

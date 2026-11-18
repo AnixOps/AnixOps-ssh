@@ -681,7 +681,54 @@ const zh = {
   mobileForwardTargetHint: "从主机看到的地址",
   mobileForwardInvalid: "无效",
   mobileForwardHint: "转发在应用运行期间有效，只有这台手机上的应用能连到它。",
-  mobileSyncSessionHint: "在这台手机上，登录状态只保留到应用关闭。",
+  mobileSettings: "设置",
+  mobileSettingsBack: "返回主机列表",
+  unlockBiometric: "生物识别",
+  unlockWithBiometric: "使用生物识别解锁",
+  mvLockedTitle: "AnixOps SSH 已锁定",
+  mvLockedHint: "解锁后才能使用已保存的密码和私钥。",
+  mvSetupTitle: "保护已保存的登录信息",
+  mvSetupBody:
+    "密码和私钥只以加密形式保存在这台手机上。设置一个只有你知道的口令；也可以用指纹或面容代替每次输入。",
+  mvSetupBiometric: "用指纹或面容解锁",
+  mvSetupBiometricHint: "口令始终可用。",
+  mvSetupBiometricMissing:
+    "这台手机还没有设置指纹或面容，可以稍后在设置里启用。",
+  mvSetupSkip: "只用这台手机，不设口令",
+  mvSetupSkipHint:
+    "密钥由手机的安全硬件保管。能解锁这台手机的人，就能使用已保存的登录信息。",
+  mvSetupFinish: "保护保险库",
+  mvSetupBiometricFailed:
+    "口令已设置，但没能启用生物识别。可以稍后在设置里再试。",
+  mvDeviceOnlyIntro:
+    "已保存的密码和私钥以加密形式保存在这台手机上，密钥由手机的安全硬件保管。没有设置口令时，能解锁这台手机的人就能使用它们。",
+  mvBiometricHint: "用指纹或面容打开保险库，口令始终可用。",
+  mvBiometricGone: "新增指纹或面容后，这个功能会自动关闭；用口令重新启用即可。",
+  mvBiometricNeedsPassphrase: "先设置保险库口令，才能启用生物识别。",
+  mvBiometricUnavailable: "先在系统设置里录入指纹或面容。",
+  mvBackgroundLock: "切到后台时锁定",
+  mvBackgroundLockHint: "应用离开屏幕多久后锁定保险库。",
+  mvImmediately: "立即",
+  mvAfter30s: "30 秒后",
+  mvAfter1m: "1 分钟后",
+  mvAfter5m: "5 分钟后",
+  mvAfter15m: "15 分钟后",
+  mvAfterMinutes: "{n} 分钟后",
+  mvAfterSeconds: "{n} 秒后",
+  mvCredentials: "登录信息",
+  mvCredentialsHint: "加密后保存在这台手机的保险库里，可以留空，连接时再输入。",
+  mvPassword: "密码",
+  mvPrivateKey: "私钥",
+  mvPrivateKeyHint: "OpenSSH 或 PEM 格式",
+  mvKeyPassphrase: "私钥口令",
+  mvPasteClipboard: "从剪贴板粘贴",
+  mvPasteEmpty: "剪贴板里没有文字",
+  mvVaultNeedsUnlock: "保险库已锁定。解锁后再保存登录信息。",
+  mvLoginNotSaved: "主机已保存，但登录信息没有保存",
+  mvSecurity: "安全",
+  mvContinue: "继续",
+  mvShowKey: "显示私钥",
+  mvHideKey: "隐藏私钥",
 };
 
 const en: typeof zh = {
@@ -1365,7 +1412,60 @@ const en: typeof zh = {
   mobileForwardTargetHint: "As the host sees it",
   mobileForwardInvalid: "Not valid",
   mobileForwardHint: "A forward runs while the app is open, and only apps on this phone can reach it.",
-  mobileSyncSessionHint: "On this phone the sign-in lasts until the app is closed.",
+  mobileSettings: "Settings",
+  mobileSettingsBack: "Back to hosts",
+  unlockBiometric: "Biometrics",
+  unlockWithBiometric: "Unlock with biometrics",
+  mvLockedTitle: "AnixOps SSH is locked",
+  mvLockedHint: "Unlock to use your saved passwords and keys.",
+  mvSetupTitle: "Protect your saved logins",
+  mvSetupBody:
+    "Passwords and keys are stored only in encrypted form on this phone. Set a passphrase that only you know, and optionally open the vault with your fingerprint or face instead of typing it every time.",
+  mvSetupBiometric: "Unlock with fingerprint or face",
+  mvSetupBiometricHint: "The passphrase always works too.",
+  mvSetupBiometricMissing:
+    "No fingerprint or face is set up on this phone. You can turn it on later in Settings.",
+  mvSetupSkip: "Use this phone only, no passphrase",
+  mvSetupSkipHint:
+    "The key is held by the phone's secure hardware. Anyone who can unlock this phone can use saved logins.",
+  mvSetupFinish: "Protect the vault",
+  mvSetupBiometricFailed:
+    "The passphrase is set, but biometrics could not be turned on. You can try again in Settings.",
+  mvDeviceOnlyIntro:
+    "Saved passwords and keys are stored encrypted on this phone, and the key is held by the phone's secure hardware. Without a passphrase, anyone who can unlock this phone can use them.",
+  mvBiometricHint:
+    "Open the vault with your fingerprint or face. The passphrase always works too.",
+  mvBiometricGone:
+    "Adding a fingerprint or face turns this off. Turn it on again with your passphrase.",
+  mvBiometricNeedsPassphrase:
+    "Set a vault passphrase first to turn on biometrics.",
+  mvBiometricUnavailable:
+    "Set up a fingerprint or face in the system settings first.",
+  mvBackgroundLock: "Lock in the background",
+  mvBackgroundLockHint:
+    "How long the app may stay off screen before the vault locks.",
+  mvImmediately: "Immediately",
+  mvAfter30s: "After 30 seconds",
+  mvAfter1m: "After 1 minute",
+  mvAfter5m: "After 5 minutes",
+  mvAfter15m: "After 15 minutes",
+  mvAfterMinutes: "After {n} minutes",
+  mvAfterSeconds: "After {n} seconds",
+  mvCredentials: "Login",
+  mvCredentialsHint:
+    "Saved encrypted in this phone's vault. Leave empty to type them at each connection.",
+  mvPassword: "Password",
+  mvPrivateKey: "Private key",
+  mvPrivateKeyHint: "OpenSSH or PEM format",
+  mvKeyPassphrase: "Key passphrase",
+  mvPasteClipboard: "Paste from clipboard",
+  mvPasteEmpty: "The clipboard has no text",
+  mvVaultNeedsUnlock: "The vault is locked. Unlock it to save the login.",
+  mvLoginNotSaved: "The host was saved, but its login was not",
+  mvSecurity: "Security",
+  mvContinue: "Continue",
+  mvShowKey: "Show private key",
+  mvHideKey: "Hide private key",
 };
 
 export type Strings = typeof zh;

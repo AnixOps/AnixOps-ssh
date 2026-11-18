@@ -7,14 +7,19 @@ import { MobileFiles } from "@/components/mobile/MobileFiles";
 import { MobileForwards } from "@/components/mobile/MobileForwards";
 import { MobileHostForm } from "@/components/mobile/MobileHostForm";
 import { MobileHostList } from "@/components/mobile/MobileHostList";
+import { MobileLockScreen } from "@/components/mobile/MobileLockScreen";
+import { MobileSettings } from "@/components/mobile/MobileSettings";
 import { MobileSync } from "@/components/mobile/MobileSync";
 import { MobileTabBar, type MobileTab } from "@/components/mobile/MobileTabBar";
 import { MobileTerminal } from "@/components/mobile/MobileTerminal";
+import { MobileVaultSetup } from "@/components/mobile/MobileVaultSetup";
 import { ConfirmProvider } from "@/components/ui/confirm";
 import { Notice } from "@/components/ui/form";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { loadHosts, onHostsChanged, type Group, type Host } from "@/lib/backend";
+import { loadHosts, onHostsChanged, vaultBackground, vaultForeground, type Group, type Host } from "@/lib/backend";
 import { t } from "@/lib/i18n";
+import { vaultGate, watchLifecycle } from "@/lib/mobileVault";
+import { useVaultStatus } from "@/lib/useVaultStatus";
 
 /** The height of what the person can see. On iOS the soft keyboard covers the
  *  page without resizing it, so the layout follows the visual viewport; on
@@ -62,6 +67,9 @@ export function MobileApp() {
   const [tab, setTab] = useState<MobileTab>("hosts");
   const [open, setOpen] = useState<Open | null>(null);
   const [editing, setEditing] = useState<Host | "new" | null>(null);
+  const [settings, setSettings] = useState(false);
+  const vault = useVaultStatus();
+  const gate = vaultGate(vault.status);
   const height = useVisibleHeight();
 
   const reload = useCallback(() => {
@@ -75,6 +83,14 @@ export function MobileApp() {
   }, []);
   useEffect(reload, [reload]);
   useEffect(() => onHostsChanged(reload), [reload]);
+
+  // Tell the backend when the app leaves and returns, so the vault locks (at
+  // once by default); read the state again on return to show the lock screen
+  // before anything else.
+  useEffect(
+    () => watchLifecycle(document, { background: vaultBackground, foreground: vaultForeground }, vault.refresh, window),
+    [vault.refresh],
+  );
 
   // A host that was deleted or edited elsewhere (sync) is closed or refreshed.
   useEffect(() => {
@@ -103,7 +119,7 @@ export function MobileApp() {
     <MotionConfig reducedMotion="user">
       <TooltipProvider delayDuration={500}>
         <ConfirmProvider>
-          <div className="flex w-full overflow-hidden bg-bg" style={{ height }}>
+          <div className="flex w-full overflow-hidden bg-bg" style={{ height }} inert={gate !== "open"}>
             <section
               aria-label={t.mobileHostsTitle}
               className={`min-w-0 flex-col md:flex md:w-80 md:shrink-0 md:border-r ${open ? "hidden" : "flex w-full"}`}
@@ -123,6 +139,7 @@ export function MobileApp() {
                     onFiles={openFiles}
                     onEdit={setEditing}
                     onAdd={() => setEditing("new")}
+                    onSettings={() => setSettings(true)}
                     onChanged={reload}
                   />
                 )}
@@ -160,20 +177,27 @@ export function MobileApp() {
               )}
             </main>
           </div>
-          <AnimatePresence>
-            {editing && (
-              <MobileHostForm
-                host={editing === "new" ? undefined : editing}
-                hosts={hosts}
-                groups={groups}
-                onCancel={() => setEditing(null)}
-                onDone={() => {
-                  setEditing(null);
-                  reload();
-                }}
-              />
+          <div inert={gate !== "open"}>
+            <AnimatePresence>
+              {editing && (
+                <MobileHostForm
+                  host={editing === "new" ? undefined : editing}
+                  hosts={hosts}
+                  groups={groups}
+                  onCancel={() => setEditing(null)}
+                  onDone={() => {
+                    setEditing(null);
+                    reload();
+                  }}
+                />
+              )}
+            </AnimatePresence>
+            {settings && vault.status && (
+              <MobileSettings status={vault.status} onStatus={vault.set} onBack={() => setSettings(false)} />
             )}
-          </AnimatePresence>
+          </div>
+          {gate === "setup" && vault.status && <MobileVaultSetup status={vault.status} onDone={vault.set} />}
+          {gate === "locked" && vault.status && <MobileLockScreen status={vault.status} onUnlocked={vault.set} />}
           <AskpassDialog />
           <HostKeyDialog />
         </ConfirmProvider>

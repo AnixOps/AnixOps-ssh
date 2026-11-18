@@ -15,7 +15,7 @@
 //! platform shell (`gen/android/.../AnixNative.kt`; the web view's own share on
 //! iOS).
 
-use easyssh_crypto::{KeyStore, MemoryKeyStore};
+use crate::mobile_vault;
 use easyssh_engine::events::{ui_event_name, Events};
 use easyssh_engine::hosts::{save_host, save_tunnel, snapshot, target_for, NewHost, NewTunnel};
 use easyssh_engine::known_hosts::StoreKnownHosts;
@@ -23,12 +23,13 @@ use easyssh_engine::local_files::{sweep, unique_path, Staging};
 use easyssh_engine::prompts::Prompts;
 use easyssh_engine::sync::{SyncFailure, SyncOptions, SyncService};
 use easyssh_engine::tunnels::ui_status_event;
-use easyssh_engine::{Engine, ShellSink, Target};
+use easyssh_engine::{with_saved_login, Engine, ShellSink, Target};
+use easyssh_mobile_keys::mobile_vault as build_vault;
 use easyssh_store::{open_app_store_with, Store};
-use easyssh_vault::Vault;
+use easyssh_vault::{SecretSource, Vault, VaultSecrets};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::ipc::{Channel, InvokeBody, Request, Response};
@@ -38,48 +39,64 @@ use tauri::{Emitter, Manager, State};
 /// after this long.
 const LEFTOVER_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
-struct Mobile {
+pub(crate) struct Mobile {
     store: Arc<Mutex<Store>>,
     engine: Arc<Engine>,
     sync: Arc<SyncService>,
+    pub(crate) vault: Arc<Vault>,
+    secrets: Arc<VaultSecrets>,
     /// Files picked on the phone, waiting to be uploaded.
     staging: Staging,
     /// Where downloads land before they are shared or saved.
     downloads: PathBuf,
 }
 
+/// The parts of [`Mobile`] a blocking task needs, which must be `'static`.
+#[derive(Clone)]
+pub(crate) struct Shared {
+    pub(crate) vault: Arc<Vault>,
+    store: Arc<Mutex<Store>>,
+}
+
+impl Shared {
+    /// Runs `work` with the database. Never call anything that can raise a
+    /// system prompt inside it: the lock is held for as long as it runs.
+    pub(crate) fn with_store<T>(&self, work: impl FnOnce(&Store) -> T) -> T {
+        let store = self.store.lock().unwrap_or_else(|p| p.into_inner());
+        work(&store)
+    }
+}
+
 impl Mobile {
+    pub(crate) fn share(&self) -> Shared {
+        Shared {
+            vault: self.vault.clone(),
+            store: self.store.clone(),
+        }
+    }
+
     fn with_store<T>(&self, work: impl FnOnce(&Store) -> Result<T, String>) -> Result<T, String> {
         let store = self.store.lock().unwrap_or_else(|p| p.into_inner());
         work(&store)
     }
 
-    /// Where to connect for a saved host, with its jump hosts.
-    fn target(&self, host_id: &str) -> Result<Target, String> {
+    /// Where to connect for a saved host, with its jump hosts and the saved
+    /// login of the host (key and password) from the vault. Every way of opening
+    /// a host (terminal, files, forward) comes through here, so they all make
+    /// the same connection and share it. Reading the vault can raise the
+    /// biometric prompt, so it runs off the async threads; a saved key with the
+    /// vault locked is the error "the vault is locked".
+    async fn target(&self, host_id: &str) -> Result<Target, String> {
         let target = self.with_store(|store| {
             let config = store.load_app_config().map_err(|error| error.to_string())?;
             target_for(&config, host_id)
         })?;
-        with_saved_identities(target)
+        let secrets: Arc<dyn SecretSource> = self.secrets.clone();
+        tauri::async_runtime::spawn_blocking(move || with_saved_login(&secrets, target))
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.message)
     }
-}
-
-/// HOOK(mobile-vault): fills in the saved private key (a `MemoryIdentity`
-/// built from the vault's `host_secrets`, never written to a file) of the
-/// target and of each of its jump hosts. A locked vault with a saved key must
-/// fail with `vault_locked`, as on the desktop. Until the Keystore and
-/// Keychain key stores exist the phone has no saved keys, so every target logs
-/// in with the password prompt or keyboard-interactive.
-fn with_saved_identities(target: Target) -> Result<Target, String> {
-    Ok(target)
-}
-
-/// HOOK(mobile-vault): where the device key lives. The vault lane replaces
-/// this with the Android Keystore and iOS Keychain `KeyStore`. Until then the
-/// key exists only while the app runs, so what is sealed with it (the sync
-/// account) is not readable after a restart and the person signs in again.
-fn device_keystore(_data_dir: &Path) -> Arc<dyn KeyStore> {
-    Arc::new(MemoryKeyStore::new())
 }
 
 /// Same shape as the desktop's session events.
@@ -198,7 +215,7 @@ async fn session_open(
     events: Channel<SessionEvent>,
 ) -> Result<OpenedSession, String> {
     let host_id = host_id.ok_or("a phone has no local shell; open a host")?;
-    let target = state.target(&host_id)?;
+    let target = state.target(&host_id).await?;
     let id = state
         .engine
         .open_shell(target, cols, rows, Arc::new(ChannelSink(events)))
@@ -275,7 +292,7 @@ fn sftp_entry(state: &Mobile, id: &str) -> Result<Arc<easyssh_engine::files::Sft
 
 #[tauri::command]
 async fn sftp_open(state: State<'_, Mobile>, host_id: String) -> Result<OpenedFiles, String> {
-    let target = state.target(&host_id)?;
+    let target = state.target(&host_id).await?;
     let (id, home) = state
         .engine
         .open_files(&target)
@@ -396,7 +413,7 @@ async fn transfer_start(
         (local, remote)
     };
 
-    let target = state.target(&host_id)?;
+    let target = state.target(&host_id).await?;
     // A file session of its own on the shared connection, closed when the
     // transfer ends.
     let (sftp_id, _) = state
@@ -629,7 +646,7 @@ async fn tunnel_start(state: State<'_, Mobile>, id: String) -> Result<(), String
         .into_iter()
         .find(|tunnel| tunnel.id == id)
         .ok_or("this forward no longer exists")?;
-    let target = state.target(&tunnel.host_id)?;
+    let target = state.target(&tunnel.host_id).await?;
     state
         .engine
         .start_tunnel(&tunnel, &target)
@@ -712,6 +729,7 @@ fn init_certificate_verifier() {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_device_key::init())
         .invoke_handler(tauri::generate_handler![
             load_hosts,
             host_save,
@@ -746,6 +764,22 @@ pub fn run() {
             tunnel_stop,
             sync_call,
             telemetry_report_frontend,
+            mobile_vault::vault_status,
+            mobile_vault::vault_unlock,
+            mobile_vault::vault_unlock_with,
+            mobile_vault::vault_enable_unlock,
+            mobile_vault::vault_disable_unlock,
+            mobile_vault::vault_lock,
+            mobile_vault::vault_set_passphrase,
+            mobile_vault::vault_remove_passphrase,
+            mobile_vault::vault_setup_skip,
+            mobile_vault::vault_set_auto_lock,
+            mobile_vault::vault_set_background_lock,
+            mobile_vault::vault_background,
+            mobile_vault::vault_foreground,
+            mobile_vault::vault_forget_all,
+            mobile_vault::secrets_status,
+            mobile_vault::secrets_set,
         ])
         .setup(|app| {
             #[cfg(target_os = "android")]
@@ -753,13 +787,17 @@ pub fn run() {
 
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
-            // HOOK(mobile-vault): the vault's cipher seals the sync account (and
-            // later the saved keys); see `device_keystore`.
-            let vault = Arc::new(Vault::new(device_keystore(&dir)));
+            // The device key sits in the Android Keystore or the iOS Keychain;
+            // the vault's cipher seals the sync account and the saved
+            // passwords and keys in the store.
+            let vault = build_vault(tauri_plugin_device_key::bridge(app.handle()));
             // The v1 JSON file never exists on a phone; its path only names
             // the folder the database lives in.
             let opened = open_app_store_with(&dir.join("config.json"), vault.cipher())?;
+            vault.load_settings(&opened.store);
             let store = Arc::new(Mutex::new(opened.store));
+            let secrets = Arc::new(VaultSecrets::new(vault.clone(), store.clone()));
+            mobile_vault::start_idle_timer(app.handle().clone(), vault.clone());
 
             let cache = app.path().app_cache_dir()?;
             let downloads = cache.join("downloads");
@@ -790,7 +828,7 @@ pub fn run() {
             let sync = tauri::async_runtime::block_on(async {
                 SyncService::start(
                     store.clone(),
-                    vault,
+                    vault.clone(),
                     SyncOptions::default(),
                     Arc::new(move |name: &str, payload: Value| {
                         let pulled = payload["last"]["pulled"].as_u64().unwrap_or(0)
@@ -807,6 +845,8 @@ pub fn run() {
                 store,
                 engine,
                 sync,
+                vault,
+                secrets,
                 staging,
                 downloads,
             });

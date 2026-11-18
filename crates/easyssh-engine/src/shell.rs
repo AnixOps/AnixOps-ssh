@@ -9,6 +9,7 @@
 
 use crate::events::Events;
 use crate::files::Files;
+use crate::login::SavedPassword;
 use crate::prompts::{PromptInteraction, Prompts};
 use crate::registry::{self, Key, Registry};
 use crate::tunnels::Tunnels;
@@ -44,6 +45,8 @@ pub struct Target {
     pub identity: Option<MemoryIdentity>,
     /// Jump hosts, in order; each hop is reached through the one before it.
     pub jump: Vec<Target>,
+    /// The saved password, offered once at the password prompt.
+    pub saved_password: Option<Arc<SavedPassword>>,
 }
 
 impl Target {
@@ -184,6 +187,7 @@ impl Engine {
         let interaction = PromptInteraction {
             prompts: self.prompts.clone(),
             label: target.label.clone(),
+            saved_password: target.saved_password.clone(),
         };
         Session::connect_via(&hops, self.params(target), &interaction)
             .await
@@ -197,6 +201,24 @@ impl Engine {
             .acquire(target.key(), || self.connect(target))
             .await
             .map_err(|error| fail(&error))
+    }
+
+    /// Like [`Engine::open_shell`], with the host's saved password to offer at
+    /// the password prompt (a saved key travels in `target.identity`; see
+    /// [`crate::saved_login`]). The login only matters for the connection that
+    /// is made: a host already connected is reused as it is.
+    pub async fn open_shell_with_login(
+        &self,
+        mut target: Target,
+        saved_password: Option<Arc<SavedPassword>>,
+        cols: u16,
+        rows: u16,
+        sink: Arc<dyn ShellSink>,
+    ) -> Result<String, OpenError> {
+        if saved_password.is_some() {
+            target.saved_password = saved_password;
+        }
+        self.open_shell(target, cols, rows, sink).await
     }
 
     /// Connects (asking whatever it takes), opens a shell on a terminal of
@@ -399,6 +421,7 @@ mod tests {
             user: "me".into(),
             identity: None,
             jump,
+            saved_password: None,
         }
     }
 

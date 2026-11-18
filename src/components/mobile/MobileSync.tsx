@@ -120,7 +120,6 @@ export function MobileSync() {
               />
             </Field>
             <p className="text-callout text-label-3">{t.syncPassphraseHint}</p>
-            <p className="text-callout text-label-3">{t.mobileSyncSessionHint}</p>
           </div>
           <div className="px-safe material-bar flex shrink-0 flex-col gap-2 border-t py-3">
             <Button

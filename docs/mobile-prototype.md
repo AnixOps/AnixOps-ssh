@@ -50,11 +50,13 @@ its socket protocol; the phone calls it in-process. What that gives the phone:
   terminal or a file browser, and the terminal stays alive while the files are
   on top of it.
 
-Still open: the device key store (Keystore and Keychain). The vault hooks are
-marked `HOOK(mobile-vault)` in `mobile.rs` and `hosts.rs`: until they exist the
-phone has no saved passwords or keys (every connection asks) and the sync
-sign-in lasts only until the app closes. Nothing in this update was run on a
-device; the Android and iOS jobs check that it builds.
+Terminal, files and forwards open a host through one function
+(`with_saved_login`), so the vault's saved key and password reach the shared
+connection whichever of them opens it first; a saved key with the vault locked
+is the error `vault_locked`, which the lock screen answers. Jump hops get their
+saved keys too (a hop's saved password is not used; its prompt is asked).
+Nothing in this update was run on a device; the Android and iOS jobs check that
+it builds.
 
 ## What was built
 
@@ -132,7 +134,9 @@ Verified in CI or in the browser preview:
   the terminal's cursor-key mode, Ctrl turns the next letter into a control
   character, Ctrl with an arrow sends the xterm modifier form.
 
-Not verified on any device: typing with a real soft keyboard, scrolling and
+Not verified on any device: the Keystore and Keychain plugin, the biometric
+prompt and a lock when the app goes to the background (their logic is unit tested
+with a fake phone; the Kotlin and Swift only compile in CI), typing with a real soft keyboard, scrolling and
 selecting in xterm.js by touch, the keyboard covering or resizing the view,
 safe-area values in a real Android WebView, how the app behaves when the system
 suspends it, TLS from the sync client, and every performance number that is not
@@ -182,28 +186,61 @@ policy so a locked phone does not hold ten half-open sockets.
 
 ### Device key: Keystore and Keychain
 
-The desktop vault keeps the device key in the OS keychain through the `keyring`
-crate behind the `os-keyring` feature. That feature is off in the mobile build,
-and the prototype opens the store with a cipher that refuses every secret, so
-**saved passwords and keys do not work on mobile yet**; the user types the
-password at each connection. A real build needs an implementation of the vault's
-key store for the Android Keystore (hardware-backed, through JNI or a Kotlin
-plugin; `keyring` has no Android store of its own) and for the iOS Keychain (the
-Apple store the desktop macOS build already uses is the starting point). The
-vault trait is the seam; the crypto crate already separates the key store from
-the record encryption.
+Done (release item 3). The vault's `KeyStore` seam is implemented by a small
+native plugin, `src-tauri/plugins/device-key`, in Kotlin (Android) and Swift
+(iOS), behind one Rust trait (`NativeBridge` in `crates/easyssh-mobile-keys`) so
+everything above it is tested with a fake phone.
+
+- Android: an AES-256/GCM wrapping key in the Android Keystore (hardware-backed
+  where the phone has it, StrongBox first and the TEE as the fallback), never
+  exported. The vault's device key is stored as a ciphertext in the app's private
+  preferences, with the account name as associated data. `allowBackup` is off so
+  the ciphertext never travels to another phone, where it could not be opened
+  anyway.
+- iOS: a generic-password Keychain item with
+  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`: no iCloud Keychain, no backup
+  restore onto another device, readable only while the phone is unlocked.
+- Without a passphrase ("this phone only", the first-run choice) the device key is
+  released by that store alone: anyone who can unlock the phone can use the saved
+  logins. The first-run screen says so in those words.
+- With a passphrase the device key is wrapped by the Argon2id passphrase key, as on
+  the desktop; the store holds only the wrapped copy.
 
 ### Biometric unlock
 
-`tauri-plugin-biometric` is the official plugin for BiometricPrompt and Face ID /
-Touch ID. It was not integrated: the prototype stores no secret to protect. A gate
-that only asks "is this the owner?" before showing the vault is not the same as a
-key that cannot be released without the sensor; the second needs the Keystore or
-Keychain item created with user-authentication required. Plan for the second, and
-treat what the plugin offers beyond `authenticate` as something to check against its
-current API before relying on it. The desktop already has the same shape
-(`easyssh-unlock`: a platform gate over the vault), so the mobile gate is a third
-backend for it.
+Done, as the third backend of the `UnlockProvider` shape that `easyssh-unlock`
+has on the desktop (`BoundKeyProvider` in `easyssh-vault`, name `biometric`). It is
+a key that cannot be released without the sensor, not a gate in front of one:
+
+- Android: a second Keystore key with `setUserAuthenticationRequired(true)`
+  (`AUTH_BIOMETRIC_STRONG`, per use), invalidated when a fingerprint or face is
+  added (`setInvalidatedByBiometricEnrollment`). The vault key is encrypted under
+  it, and decrypting goes through a `BiometricPrompt` with a `CryptoObject`, so the
+  cipher is unusable until the sensor approves.
+- iOS: a Keychain item with `SecAccessControl` `.biometryCurrentSet` (also lost when
+  the enrolled set changes). Reading it shows the system prompt; whether it exists
+  is checked without one (`errSecInteractionNotAllowed` means present).
+- Enabling needs the vault passphrase once, so biometrics are always on top of a
+  passphrase and never replace it; a cancelled, locked-out or failed prompt falls
+  back to the passphrase field. When the platform drops the item (new fingerprint),
+  the stale copy is removed and the screen offers the passphrase.
+- The own plugin was written instead of `tauri-plugin-biometric` because that plugin
+  answers "is this the owner?"; it does not give a key that needs the sensor.
+- Prompts need the main thread, so the vault commands that may prompt are async and
+  run their blocking work off it.
+
+### Auto-lock on background and the screens
+
+The web view tells the backend when the page is hidden or comes back
+(`visibilitychange`, plus `pagehide` and `pageshow` for iOS), once per transition
+(`watchLifecycle`, unit tested). The default is to lock at once; Settings offers
+30 seconds, 1, 5 and 15 minutes. A passphrase vault that is locked shows a full
+screen lock with the biometric prompt tried once on arrival and the passphrase
+field always there; the page behind is `inert`. A device-only vault opens itself
+and shows nothing. The first run asks once (passphrase with optional biometrics, or
+"this phone only") and Settings can change it later. The host form can save a
+password, or a private key and its passphrase, into the vault; the saved login is
+used at the next connection (`open_shell_with_login` in `easyssh-engine`).
 
 ### IME and the soft keyboard in xterm.js
 
@@ -308,8 +345,10 @@ In rough order:
    selection and copy, safe areas, rotation, tablets).
 2. ~~Move the connection registry, SFTP and tunnels into `easyssh-engine`.~~
    Done, see the update at the top.
-3. Vault on mobile: Android Keystore and iOS Keychain key stores, biometric
-   unlock, auto-lock on background, saved passwords and keys, the first-run flow.
+3. ~~Vault on mobile~~ Done: Keystore and Keychain key stores, biometric unlock,
+   auto-lock on background, saved passwords and keys, the first-run flow and the
+   vault settings. Compiled in CI; the native code is not run on a device yet (see
+   the list of what is not verified above).
 4. Sessions under background limits: reconnect policy, a "attach to tmux" option per
    host, optional relay through the sync server, a foreground notification only if
    the policy allows it.

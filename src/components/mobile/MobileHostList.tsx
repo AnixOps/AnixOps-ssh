@@ -1,4 +1,4 @@
-import { FolderOpen, Pencil, Plus, Search, Server, SquareTerminal, Star, StarOff, Trash2 } from "lucide-react";
+import { FolderOpen, Pencil, Plus, Search, Server, Settings, SquareTerminal, Star, StarOff, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
@@ -21,6 +21,7 @@ export function MobileHostList({
   onFiles,
   onEdit,
   onAdd,
+  onSettings,
   onChanged,
 }: {
   hosts: Host[];
@@ -30,6 +31,7 @@ export function MobileHostList({
   onFiles: (host: Host) => void;
   onEdit: (host: Host) => void;
   onAdd: () => void;
+  onSettings: () => void;
   onChanged: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -54,9 +56,14 @@ export function MobileHostList({
       <header className="material-bar pt-safe shrink-0 border-b">
         <div className="px-safe flex h-14 items-center justify-between gap-2">
           <h1 className="truncate text-title-3">{t.mobileHostsTitle}</h1>
-          <Button variant="quiet" size="icon-lg" aria-label={t.mobileAddHost} onClick={onAdd}>
-            <Plus />
-          </Button>
+          <div className="flex items-center">
+            <Button variant="quiet" size="icon-lg" aria-label={t.mobileSettings} onClick={onSettings}>
+              <Settings />
+            </Button>
+            <Button variant="quiet" size="icon-lg" aria-label={t.mobileAddHost} onClick={onAdd}>
+              <Plus />
+            </Button>
+          </div>
         </div>
         <div className="px-safe pb-3">
           <div className="relative">

@@ -80,6 +80,7 @@ fn target() -> Target {
         user: PW_USER.into(),
         identity: None,
         jump: Vec::new(),
+        saved_password: None,
     }
 }
 
@@ -402,6 +403,7 @@ async fn a_host_behind_a_jump_host_opens_through_it_with_its_own_questions() {
         user: "keyuser".into(),
         identity: identity("bastion key"),
         jump: Vec::new(),
+        saved_password: None,
     };
     let behind = Target {
         host_id: "inner".into(),
@@ -411,6 +413,7 @@ async fn a_host_behind_a_jump_host_opens_through_it_with_its_own_questions() {
         user: "keyuser".into(),
         identity: identity("inner key"),
         jump: vec![bastion],
+        saved_password: None,
     };
     let asked = Arc::new(Mutex::new(Vec::new()));
     let engine = engine(PW_PASSWORD, asked.clone());
