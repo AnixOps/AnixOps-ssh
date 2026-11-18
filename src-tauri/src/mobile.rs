@@ -5,22 +5,30 @@
 //! `session_open`, `askpass_reply`, ...) for the screens the prototype needs,
 //! so the React components that show prompts are shared. A session lives
 //! exactly as long as its terminal screen: when the operating system suspends
-//! the app the TCP connection dies and the UI offers to reconnect.
+//! the app the TCP connection dies. Hosts that opted in attach to tmux or
+//! screen and reconnect into the same session (`easyssh_engine::supervisor`);
+//! for the others the UI offers a new shell.
 
 use easyssh_engine::hosts::{add_host, snapshot, target_for, NewHost};
 use easyssh_engine::known_hosts::StoreKnownHosts;
 use easyssh_engine::prompts::Prompts;
+use easyssh_engine::supervisor::{
+    Attach, ReconnectPolicy, SessionOptions, Status, SupervisedSink, Supervisor,
+};
 use easyssh_engine::{Engine, ShellSink};
 use easyssh_store::{open_app_store, Store};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::{Emitter, Manager, State};
 
 struct Mobile {
     store: Arc<Mutex<Store>>,
     engine: Arc<Engine>,
+    /// Attach to tmux/screen and reconnect on top of the engine.
+    sessions: Supervisor,
 }
 
 impl Mobile {
@@ -34,8 +42,19 @@ impl Mobile {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 enum SessionEvent {
-    Data { data: String },
-    Exit { code: Option<u32> },
+    Data {
+        data: String,
+    },
+    Exit {
+        code: Option<u32>,
+    },
+    /// The connection dropped; `attempt` of the retries starts after `delay_ms`.
+    Reconnecting {
+        attempt: u32,
+        delay_ms: u64,
+    },
+    /// A new connection is up and attached again.
+    Resumed,
 }
 
 struct ChannelSink(Channel<SessionEvent>);
@@ -47,6 +66,18 @@ impl ShellSink for ChannelSink {
 
     fn exit(&self, code: Option<u32>) {
         let _ = self.0.send(SessionEvent::Exit { code });
+    }
+}
+
+impl SupervisedSink for ChannelSink {
+    fn status(&self, status: Status) {
+        let _ = self.0.send(match status {
+            Status::Reconnecting { attempt, delay } => SessionEvent::Reconnecting {
+                attempt,
+                delay_ms: delay.as_millis() as u64,
+            },
+            Status::Resumed => SessionEvent::Resumed,
+        });
     }
 }
 
@@ -112,15 +143,33 @@ async fn session_open(
     cols: u16,
     rows: u16,
     events: Channel<SessionEvent>,
+    attach: Option<String>,
+    keepalive_secs: Option<u64>,
 ) -> Result<OpenedSession, String> {
     let host_id = host_id.ok_or("a phone has no local shell; open a host")?;
     let target = state.with_store(|store| {
         let config = store.load_app_config().map_err(|error| error.to_string())?;
         target_for(&config, &host_id)
     })?;
+    // Keepalive applies to connections opened from now on; 0 turns it off.
+    if let Some(seconds) = keepalive_secs {
+        let interval = if seconds > 0 {
+            Some(Duration::from_secs(seconds))
+        } else {
+            None
+        };
+        state.engine.set_keepalive(interval);
+    }
+    let attach = Attach::parse(attach.as_deref().unwrap_or(""));
+    let options = SessionOptions {
+        attach,
+        // A reconnect only makes sense where it lands in the same session.
+        reconnect: attach != Attach::None,
+        policy: ReconnectPolicy::default(),
+    };
     let id = state
-        .engine
-        .open_shell(target, cols, rows, Arc::new(ChannelSink(events)))
+        .sessions
+        .open(target, cols, rows, Arc::new(ChannelSink(events)), options)
         .await
         .map_err(|error| error.to_string())?;
     Ok(OpenedSession {
@@ -132,7 +181,7 @@ async fn session_open(
 
 #[tauri::command]
 fn session_write(state: State<'_, Mobile>, id: String, data: String) -> Result<(), String> {
-    state.engine.write(&id, data.as_bytes())
+    state.sessions.write(&id, data.as_bytes())
 }
 
 #[tauri::command]
@@ -142,18 +191,26 @@ fn session_resize(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    state.engine.resize(&id, cols, rows)
+    state.sessions.resize(&id, cols, rows)
 }
 
 #[tauri::command]
 fn session_close(state: State<'_, Mobile>, id: String) {
-    state.engine.close(&id);
+    state.sessions.close(&id);
+}
+
+/// The app came back from the background: replace the connection of an
+/// attached session at once instead of waiting for the old socket to fail.
+/// Async so it runs inside the runtime the reconnect task is spawned on.
+#[tauri::command]
+async fn session_reconnect(state: State<'_, Mobile>, id: String) -> Result<(), String> {
+    state.sessions.reconnect(&id)
 }
 
 /// A phone keeps no session once its screen is gone, so detaching ends it.
 #[tauri::command]
 fn session_detach(state: State<'_, Mobile>, id: String) {
-    state.engine.close(&id);
+    state.sessions.close(&id);
 }
 
 #[tauri::command]
@@ -187,6 +244,7 @@ pub fn run() {
             session_write,
             session_resize,
             session_close,
+            session_reconnect,
             session_detach,
             sessions_list,
             askpass_reply,
@@ -205,14 +263,19 @@ pub fn run() {
                 let _ = handle.emit(name, payload);
             }));
             let engine = Engine::new(prompts, Arc::new(StoreKnownHosts::new(store.clone())));
-            app.manage(Mobile { store, engine });
+            let sessions = Supervisor::new(engine.clone());
+            app.manage(Mobile {
+                store,
+                engine,
+                sessions,
+            });
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("failed to build AnixOps SSH")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
-                app.state::<Mobile>().engine.close_all();
+                app.state::<Mobile>().sessions.close_all();
             }
         });
 }

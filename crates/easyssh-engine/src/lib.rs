@@ -14,11 +14,13 @@
 //! - [`known_hosts`]: host keys in the store (shared with the daemon).
 //! - [`prompts`]: passwords and host-key questions asked through events.
 //! - [`Engine`]: opens shells and keeps them by id.
+//! - [`supervisor`]: tmux/screen attach and reconnect with backoff on top of it.
 
 pub mod hosts;
 pub mod known_hosts;
 pub mod prompts;
 mod shell;
+pub mod supervisor;
 mod utf8;
 
 pub use shell::{error_code, Engine, OpenError, ShellSink, Target};
