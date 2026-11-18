@@ -528,6 +528,71 @@ impl SyncService {
         })
     }
 
+    /// The sync commands the app's UI sends (`sync_call`), by their protocol
+    /// names. The phone offers sign-in, devices and syncing; team vaults,
+    /// members and host history are desktop screens for now, and answer
+    /// `unavailable`.
+    pub async fn call(&self, kind: &str, payload: Value) -> Result<Value, SyncFailure> {
+        #[derive(Deserialize)]
+        struct Credentials {
+            server_url: String,
+            username: String,
+            passphrase: String,
+            device_name: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct Revoke {
+            device_id: String,
+        }
+        fn parse<T: serde::de::DeserializeOwned>(payload: Value) -> Result<T, SyncFailure> {
+            // The UI sends `null` for "no arguments".
+            let payload = if payload.is_null() {
+                json!({})
+            } else {
+                payload
+            };
+            serde_json::from_value(payload).map_err(|e| failure("invalid_command", e.to_string()))
+        }
+        match kind {
+            "sync.status" => {
+                self.restore();
+                Ok(self.status_json())
+            }
+            "sync.signup" => {
+                let c: Credentials = parse(payload)?;
+                self.signup(
+                    &c.server_url,
+                    &c.username,
+                    &c.passphrase,
+                    c.device_name.as_deref(),
+                )
+                .await
+            }
+            "sync.signin" => {
+                let c: Credentials = parse(payload)?;
+                self.signin(
+                    &c.server_url,
+                    &c.username,
+                    &c.passphrase,
+                    c.device_name.as_deref(),
+                )
+                .await
+            }
+            "sync.signout" => self.signout().await,
+            "sync.now" => Ok(self.sync_now().await),
+            "sync.devices.list" => self.devices_list().await,
+            "sync.devices.revoke" => {
+                let r: Revoke = parse(payload)?;
+                self.devices_revoke(&r.device_id).await?;
+                Ok(Value::Null)
+            }
+            other => Err(failure(
+                "unavailable",
+                format!("{other} is not available on this device yet"),
+            )),
+        }
+    }
+
     // ---- account ---------------------------------------------------------
 
     fn check_credentials(
@@ -1274,6 +1339,60 @@ mod tests {
             let error = validate_server_url(bad).unwrap_err();
             assert_eq!(error.code, "invalid_url", "{bad}");
         }
+    }
+
+    fn service() -> Arc<SyncService> {
+        let store =
+            Store::open_in_memory("phone", Arc::new(easyssh_store::NotConfigured)).expect("store");
+        let keys = Arc::new(easyssh_crypto::MemoryKeyStore::new());
+        SyncService::start(
+            Arc::new(Mutex::new(store)),
+            Arc::new(Vault::new(keys)),
+            SyncOptions::default(),
+            Arc::new(|_, _| {}),
+        )
+    }
+
+    #[tokio::test]
+    async fn the_phones_sync_commands_start_signed_out_and_refuse_what_it_cannot_do() {
+        let service = service();
+        let status = service.call("sync.status", Value::Null).await.unwrap();
+        assert_eq!(status["signed_in"], false);
+        assert_eq!(status["state"], "signed_out");
+        // Nothing to list or revoke without an account.
+        let error = service
+            .call("sync.devices.list", Value::Null)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "not_signed_in");
+        // Team vaults and host history are not on the phone yet.
+        for kind in ["vaults.list", "vault.members.add", "hosts.history"] {
+            let error = service.call(kind, json!({})).await.unwrap_err();
+            assert_eq!(error.code, "unavailable", "{kind}");
+        }
+        // A request that does not parse is the caller's mistake, said as such.
+        let error = service
+            .call("sync.signin", json!({"server_url": "https://x.example"}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_command");
+        // A plain http server on the network is refused before anything is sent.
+        let error = service
+            .call(
+                "sync.signin",
+                json!({
+                    "server_url": "http://sync.example.org",
+                    "username": "ann",
+                    "passphrase": "correct horse battery",
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_url");
+        assert_eq!(
+            service.call("sync.now", Value::Null).await.unwrap()["state"],
+            "signed_out"
+        );
     }
 
     #[test]

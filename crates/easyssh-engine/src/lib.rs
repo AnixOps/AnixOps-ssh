@@ -20,6 +20,7 @@
 //!   tunnels (shared with the daemon).
 //! - [`files`]: SFTP sessions and the transfer queue (shared with the daemon).
 //! - [`tunnels`]: forwards on the shared connection (shared with the daemon).
+//! - [`sync`]: the account, devices and the sync loop (shared with the daemon).
 //! - [`Engine`]: puts them together for the app: opens shells, file sessions
 //!   and tunnels on leases of the shared connection.
 
@@ -27,9 +28,11 @@ pub mod events;
 pub mod files;
 pub mod hosts;
 pub mod known_hosts;
+pub mod local_files;
 pub mod prompts;
 pub mod registry;
 mod shell;
+pub mod sync;
 pub mod tunnels;
 mod utf8;
 

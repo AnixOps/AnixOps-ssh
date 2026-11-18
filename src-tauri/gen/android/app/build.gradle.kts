@@ -69,7 +69,20 @@ rust {
     rootDirRel = "../../../"
 }
 
+// The native half's version must equal the Rust crate's, which Cargo.lock pins
+// (`rustls-platform-verifier-android`).
+val rustlsPlatformVerifierVersion: String = run {
+    val lines = file("../../../../Cargo.lock").readLines()
+    val name = lines.indexOfFirst { it.trim() == "name = \"rustls-platform-verifier-android\"" }
+    require(name >= 0) { "rustls-platform-verifier-android is not in Cargo.lock" }
+    lines.drop(name + 1)
+        .first { it.trimStart().startsWith("version = ") }
+        .substringAfter('"')
+        .substringBefore('"')
+}
+
 dependencies {
+    implementation("rustls:rustls-platform-verifier:$rustlsPlatformVerifierVersion")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")

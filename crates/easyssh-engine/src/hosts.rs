@@ -24,7 +24,8 @@ pub struct NewHost {
     pub hostname: String,
     pub username: Option<String>,
     pub port: u16,
-    pub group_id: Option<String>,
+    /// The group's name; found ignoring case, or created.
+    pub group: Option<String>,
     pub tags: Vec<String>,
     pub favorite: bool,
     /// The jump host chain, `[user@]host[:port]` separated by commas.
@@ -221,7 +222,7 @@ pub fn save_host(store: &Store, input: &NewHost) -> Result<String, String> {
             .map(str::to_owned),
         port: input.port,
     };
-    connection.group_id = input.group_id.clone().filter(|id| !id.is_empty());
+    connection.group_id = group_for(store, input.group.as_deref())?;
     connection.tags = clean_tags(&input.tags);
     connection.favorite = input.favorite;
     connection.proxy_jump = match input.jump.as_deref().map(str::trim) {
@@ -250,58 +251,33 @@ pub fn add_host(store: &Store, input: &NewHost) -> Result<String, String> {
     )
 }
 
-/// Creates a group, or renames the one named by `id`, and returns its id.
-pub fn save_group(store: &Store, id: Option<&str>, name: &str) -> Result<String, String> {
-    let name = name.trim();
-    if name.is_empty() || name.chars().any(char::is_control) {
-        return Err("the group needs a name".into());
-    }
-    let existing = match id {
-        Some(id) => Some(
-            store
-                .get_group(id)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| format!("unknown group: {id}"))?
-                .item,
-        ),
-        None => None,
+/// The id of the group called `name` (ignoring case), created when there is
+/// none. An empty name is no group.
+fn group_for(store: &Store, name: Option<&str>) -> Result<Option<String>, String> {
+    let name = name.map(str::trim).filter(|name| !name.is_empty());
+    let Some(name) = name else {
+        return Ok(None);
     };
-    let group = match existing {
-        Some(group) => Group {
-            name: name.to_owned(),
-            ..group
-        },
-        None => Group {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: name.to_owned(),
-            color: None,
-            parent_id: None,
-        },
+    if name.chars().any(char::is_control) || name.chars().count() > 80 {
+        return Err("the group name is not valid".into());
+    }
+    let groups = store.list_groups().map_err(|error| error.to_string())?;
+    if let Some(found) = groups
+        .iter()
+        .find(|record| record.item.name.eq_ignore_ascii_case(name))
+    {
+        return Ok(Some(found.item.id.clone()));
+    }
+    let group = Group {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.to_owned(),
+        color: None,
+        parent_id: None,
     };
     store
         .upsert_group(&group)
         .map_err(|error| error.to_string())?;
-    Ok(group.id)
-}
-
-/// Deletes a group. Its hosts stay and become ungrouped.
-pub fn delete_group(store: &Store, id: &str) -> Result<(), String> {
-    let config = store.load_app_config().map_err(|error| error.to_string())?;
-    for connection in config
-        .connections
-        .iter()
-        .filter(|connection| connection.group_id.as_deref() == Some(id))
-    {
-        let mut moved = connection.clone();
-        moved.group_id = None;
-        store
-            .save_host(&moved, None)
-            .map_err(|error| error.to_string())?;
-    }
-    store
-        .soft_delete_group(id)
-        .map_err(|error| error.to_string())?;
-    Ok(())
+    Ok(Some(group.id))
 }
 
 fn endpoint(connection: &Connection) -> Option<(&str, Option<&str>, u16)> {
@@ -524,11 +500,10 @@ mod tests {
         original.local_forwards = vec!["8080:localhost:80".into()];
         store.save_host(&original, None).unwrap();
 
-        let group = save_group(&store, None, "Production").unwrap();
         let edited = NewHost {
             id: Some(id.clone()),
             tags: vec!["web".into(), " #Prod ".into(), "WEB".into(), "".into()],
-            group_id: Some(group.clone()),
+            group: Some("Production".into()),
             favorite: true,
             ..new_host("web 1", "10.0.0.6", Some("root"), 2200)
         };
@@ -540,6 +515,7 @@ mod tests {
         let mut tags = saved.tags.clone();
         tags.sort();
         assert_eq!(tags, vec!["Prod", "web"]);
+        let group = config.groups[0].id.clone();
         assert_eq!(saved.group_id.as_deref(), Some(group.as_str()));
         assert!(saved.favorite);
         assert_eq!(saved.notes, "restart nginx after deploy");
@@ -559,31 +535,55 @@ mod tests {
     }
 
     #[test]
-    fn groups_are_renamed_and_deleting_one_ungroups_its_hosts() {
+    fn a_group_is_found_by_name_ignoring_case_or_created() {
         let (_dir, store) = store();
-        let group = save_group(&store, None, "Lab").unwrap();
-        assert_eq!(save_group(&store, Some(&group), "Home lab").unwrap(), group);
-        assert!(save_group(&store, None, "  ").is_err());
-        assert!(save_group(&store, Some("nope"), "x").is_err());
-        let host = save_host(
+        let first = save_host(
             &store,
             &NewHost {
-                group_id: Some(group.clone()),
+                group: Some(" Lab ".into()),
                 ..new_host("pi", "pi.local", Some("pi"), 22)
             },
         )
         .unwrap();
+        let second = save_host(
+            &store,
+            &NewHost {
+                group: Some("lab".into()),
+                ..new_host("nas", "nas.local", Some("admin"), 22)
+            },
+        )
+        .unwrap();
+        let none = save_host(
+            &store,
+            &NewHost {
+                group: Some("  ".into()),
+                ..new_host("x", "x.local", Some("me"), 22)
+            },
+        )
+        .unwrap();
         let config = store.load_app_config().unwrap();
-        assert_eq!(config.groups[0].name, "Home lab");
-        assert_eq!(
-            config.connections[0].group_id.as_deref(),
-            Some(group.as_str())
-        );
-        delete_group(&store, &group).unwrap();
-        let config = store.load_app_config().unwrap();
-        assert!(config.groups.is_empty());
-        assert_eq!(config.connections[0].id, host);
-        assert_eq!(config.connections[0].group_id, None);
+        assert_eq!(config.groups.len(), 1, "one group, not two");
+        assert_eq!(config.groups[0].name, "Lab");
+        let group_of = |id: &str| {
+            config
+                .connections
+                .iter()
+                .find(|c| c.id == id)
+                .unwrap()
+                .group_id
+                .clone()
+        };
+        assert_eq!(group_of(&first), Some(config.groups[0].id.clone()));
+        assert_eq!(group_of(&second), group_of(&first));
+        assert_eq!(group_of(&none), None);
+        assert!(save_host(
+            &store,
+            &NewHost {
+                group: Some("bad\nname".into()),
+                ..new_host("y", "y.local", Some("me"), 22)
+            }
+        )
+        .is_err());
     }
 
     #[test]

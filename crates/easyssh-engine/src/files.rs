@@ -64,6 +64,59 @@ pub fn entry_json(entry: &DirEntry) -> Value {
     })
 }
 
+/// `ls -l` style permissions: `drwxr-xr-x`.
+pub fn mode_string(kind: EntryKind, permissions: Option<u32>) -> String {
+    let mut text = String::from(match kind {
+        EntryKind::Dir => 'd',
+        EntryKind::File => '-',
+        EntryKind::Symlink => 'l',
+        EntryKind::Other => '?',
+    });
+    let bits = permissions.unwrap_or(0);
+    for (index, symbol) in "rwxrwxrwx".chars().enumerate() {
+        text.push(if bits & (1 << (8 - index)) != 0 {
+            symbol
+        } else {
+            '-'
+        });
+    }
+    text
+}
+
+/// A listing row as the file browsers show it (the UI's `RemoteFile`):
+/// `kind` is `directory`, `file`, `symlink` or `other`, `modified` reads like
+/// `ls -l` (`Oct 14 09:12`, or `Oct 14  2025` when it is older than half a
+/// year), in the local time zone.
+pub fn remote_file_json(entry: &DirEntry) -> Value {
+    let kind = match entry.stat.kind {
+        EntryKind::File => "file",
+        EntryKind::Dir => "directory",
+        EntryKind::Symlink => "symlink",
+        EntryKind::Other => "other",
+    };
+    let modified = entry
+        .stat
+        .modified
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .and_then(|age| chrono::DateTime::from_timestamp(age.as_secs() as i64, 0))
+        .map(|time| {
+            let local = time.with_timezone(&chrono::Local);
+            if (chrono::Utc::now() - time).num_days().abs() < 180 {
+                local.format("%b %e %H:%M").to_string()
+            } else {
+                local.format("%b %e  %Y").to_string()
+            }
+        })
+        .unwrap_or_default();
+    json!({
+        "name": entry.name,
+        "kind": kind,
+        "size": entry.stat.size,
+        "modified": modified,
+        "permissions": mode_string(entry.stat.kind, entry.stat.permissions),
+    })
+}
+
 /// Names from the server must not point outside the directory they are
 /// listed in.
 fn safe_name(name: &str) -> bool {
@@ -395,6 +448,20 @@ async fn download_path(
 }
 
 impl SftpEntry {
+    /// The listing as the mobile file browser shows it: directories first,
+    /// then by name, without the names that cannot be safely joined.
+    pub async fn list_view(&self, path: &str) -> Result<Vec<Value>, SshError> {
+        let mut entries = self.sftp.list(path).await?;
+        entries.retain(|entry| safe_name(&entry.name));
+        entries.sort_by(|a, b| {
+            let dir = |e: &DirEntry| e.stat.kind == EntryKind::Dir;
+            dir(b)
+                .cmp(&dir(a))
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        Ok(entries.iter().map(remote_file_json).collect())
+    }
+
     pub async fn list(&self, path: &str) -> Result<Value, SshError> {
         let entries = self.sftp.list(path).await?;
         Ok(json!({"entries": entries.iter().map(entry_json).collect::<Vec<_>>()}))
@@ -459,6 +526,44 @@ mod tests {
         missing.stat.modified = None::<SystemTime>;
         assert!(entry_json(&missing)["modified"].is_null());
         easyssh_proto::validate("SftpEntry", &entry_json(&entry)).unwrap();
+    }
+
+    #[test]
+    fn listing_rows_look_like_ls_output() {
+        assert_eq!(mode_string(EntryKind::Dir, Some(0o755)), "drwxr-xr-x");
+        assert_eq!(mode_string(EntryKind::File, Some(0o640)), "-rw-r-----");
+        assert_eq!(mode_string(EntryKind::File, None), "----------");
+        assert_eq!(mode_string(EntryKind::Symlink, Some(0o777)), "lrwxrwxrwx");
+        let row = remote_file_json(&DirEntry {
+            name: "a.txt".into(),
+            stat: easyssh_ssh::FileStat {
+                kind: EntryKind::File,
+                size: 12,
+                modified: Some(UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
+                permissions: Some(0o644),
+                uid: None,
+                gid: None,
+            },
+        });
+        assert_eq!(row["name"], "a.txt");
+        assert_eq!(row["kind"], "file");
+        assert_eq!(row["size"], 12);
+        assert_eq!(row["permissions"], "-rw-r--r--");
+        // Older than half a year: month, day and year.
+        assert!(row["modified"].as_str().unwrap().ends_with(" 2023"));
+        let dir = remote_file_json(&DirEntry {
+            name: "d".into(),
+            stat: easyssh_ssh::FileStat {
+                kind: EntryKind::Dir,
+                size: 0,
+                modified: None,
+                permissions: None,
+                uid: None,
+                gid: None,
+            },
+        });
+        assert_eq!(dir["kind"], "directory");
+        assert_eq!(dir["modified"], "");
     }
 
     #[test]

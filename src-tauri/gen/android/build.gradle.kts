@@ -13,6 +13,11 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // The Kotlin half of rustls-platform-verifier, which the app's TLS
+        // (sync server) uses to check certificates with the system trust store.
+        maven {
+            url = uri("https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/")
+        }
     }
 }
 

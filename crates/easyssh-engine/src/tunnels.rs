@@ -63,7 +63,39 @@ fn bind_host(tunnel: &Tunnel) -> &str {
     }
 }
 
+/// A tunnel's state as the UI's `TunnelStatus`: `{"state": "running"}`, or
+/// `{"state": "failed", "message": "..."}`.
+pub fn ui_status(state: &str, error: Option<&str>) -> Value {
+    match state {
+        "starting" | "running" | "stopped" => json!({ "state": state }),
+        _ => json!({
+            "state": "failed",
+            "message": error.unwrap_or("the tunnel stopped"),
+        }),
+    }
+}
+
+/// The `tunnel.status` event as the UI's `tunnel-status` payload.
+pub fn ui_status_event(payload: &Value) -> Value {
+    json!({
+        "id": payload["id"],
+        "status": ui_status(
+            payload["state"].as_str().unwrap_or("failed"),
+            payload["error"].as_str(),
+        ),
+    })
+}
+
 impl Tunnels {
+    /// The last status of one tunnel, as the UI shows it; `stopped` when it
+    /// never ran.
+    pub fn ui_status_of(&self, id: &str) -> Value {
+        match lock(&self.statuses).get(id) {
+            Some(status) => ui_status(status.state, status.error.as_deref()),
+            None => ui_status("stopped", None),
+        }
+    }
+
     pub fn list(&self) -> Value {
         let statuses = lock(&self.statuses);
         let mut tunnels: Vec<Value> = statuses
@@ -300,6 +332,24 @@ mod tests {
         assert_eq!(bind_host(&tunnel(Some("localhost"))), "127.0.0.1");
         assert_eq!(bind_host(&tunnel(Some("*"))), "0.0.0.0");
         assert_eq!(bind_host(&tunnel(Some("10.0.0.2"))), "10.0.0.2");
+    }
+
+    #[test]
+    fn states_become_the_uis_tunnel_status() {
+        assert_eq!(ui_status("running", None), json!({"state": "running"}));
+        assert_eq!(ui_status("stopped", None), json!({"state": "stopped"}));
+        assert_eq!(
+            ui_status("failed", Some("port busy")),
+            json!({"state": "failed", "message": "port busy"})
+        );
+        assert_eq!(
+            ui_status_event(&json!({"id": "t", "state": "failed", "error": "lost"})),
+            json!({"id": "t", "status": {"state": "failed", "message": "lost"}})
+        );
+        assert_eq!(
+            Tunnels::default().ui_status_of("never-ran"),
+            json!({"state": "stopped"})
+        );
     }
 
     #[tokio::test]

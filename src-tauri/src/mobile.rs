@@ -2,25 +2,50 @@
 //!
 //! There is no daemon, no OpenSSH, no local shell and no OS keychain here. The
 //! commands have the names and shapes of the desktop ones (`load_hosts`,
-//! `session_open`, `askpass_reply`, ...) for the screens the prototype needs,
-//! so the React components that show prompts are shared. A session lives
-//! exactly as long as its terminal screen: when the operating system suspends
-//! the app the TCP connection dies and the UI offers to reconnect.
+//! `session_open`, `sftp_*`, `transfer_*`, `tunnel_*`, `sync_call`,
+//! `askpass_reply`, ...), so the React components that show prompts, files and
+//! forwards are shared with the desktop UI. A terminal, the file browser and a
+//! forward on one host share one connection (`easyssh_engine::registry`); it
+//! lingers for 30 s after the last of them closes. A session lives exactly as
+//! long as its terminal screen: when the operating system suspends the app the
+//! TCP connection dies and the UI offers to reconnect.
+//!
+//! What the web view cannot do for itself is done here in the app process
+//! (staging a picked file, the download folder) or, for the share sheet, in the
+//! platform shell (`gen/android/.../AnixNative.kt`; the web view's own share on
+//! iOS).
 
-use easyssh_engine::hosts::{add_host, snapshot, target_for, NewHost};
+use easyssh_crypto::{KeyStore, MemoryKeyStore};
+use easyssh_engine::events::{ui_event_name, Events};
+use easyssh_engine::hosts::{save_host, save_tunnel, snapshot, target_for, NewHost, NewTunnel};
 use easyssh_engine::known_hosts::StoreKnownHosts;
+use easyssh_engine::local_files::{sweep, unique_path, Staging};
 use easyssh_engine::prompts::Prompts;
-use easyssh_engine::{Engine, ShellSink};
-use easyssh_store::{open_app_store, Store};
+use easyssh_engine::sync::{SyncFailure, SyncOptions, SyncService};
+use easyssh_engine::tunnels::ui_status_event;
+use easyssh_engine::{Engine, ShellSink, Target};
+use easyssh_store::{open_app_store_with, Store};
+use easyssh_vault::Vault;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::ipc::Channel;
+use std::time::Duration;
+use tauri::ipc::{Channel, InvokeBody, Request, Response};
 use tauri::{Emitter, Manager, State};
+
+/// Uploads that were never finished and downloads nobody shared are removed
+/// after this long.
+const LEFTOVER_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 struct Mobile {
     store: Arc<Mutex<Store>>,
     engine: Arc<Engine>,
+    sync: Arc<SyncService>,
+    /// Files picked on the phone, waiting to be uploaded.
+    staging: Staging,
+    /// Where downloads land before they are shared or saved.
+    downloads: PathBuf,
 }
 
 impl Mobile {
@@ -28,6 +53,33 @@ impl Mobile {
         let store = self.store.lock().unwrap_or_else(|p| p.into_inner());
         work(&store)
     }
+
+    /// Where to connect for a saved host, with its jump hosts.
+    fn target(&self, host_id: &str) -> Result<Target, String> {
+        let target = self.with_store(|store| {
+            let config = store.load_app_config().map_err(|error| error.to_string())?;
+            target_for(&config, host_id)
+        })?;
+        with_saved_identities(target)
+    }
+}
+
+/// HOOK(mobile-vault): fills in the saved private key (a `MemoryIdentity`
+/// built from the vault's `host_secrets`, never written to a file) of the
+/// target and of each of its jump hosts. A locked vault with a saved key must
+/// fail with `vault_locked`, as on the desktop. Until the Keystore and
+/// Keychain key stores exist the phone has no saved keys, so every target logs
+/// in with the password prompt or keyboard-interactive.
+fn with_saved_identities(target: Target) -> Result<Target, String> {
+    Ok(target)
+}
+
+/// HOOK(mobile-vault): where the device key lives. The vault lane replaces
+/// this with the Android Keystore and iOS Keychain `KeyStore`. Until then the
+/// key exists only while the app runs, so what is sealed with it (the sync
+/// account) is not readable after a restart and the person signs in again.
+fn device_keystore(_data_dir: &Path) -> Arc<dyn KeyStore> {
+    Arc::new(MemoryKeyStore::new())
 }
 
 /// Same shape as the desktop's session events.
@@ -59,16 +111,25 @@ struct OpenedSession {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct HostFieldsInput {
     hostname: String,
     username: Option<String>,
     port: u16,
+    proxy_jump: Option<String>,
 }
 
 /// The part of the desktop's `HostInput` the mobile form fills in.
 #[derive(Deserialize)]
 struct HostInput {
+    id: Option<String>,
     name: String,
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    favorite: bool,
     fields: HostFieldsInput,
 }
 
@@ -83,13 +144,18 @@ fn load_hosts(state: State<'_, Mobile>) -> Result<Value, String> {
 #[tauri::command]
 fn host_save(state: State<'_, Mobile>, input: HostInput) -> Result<String, String> {
     state.with_store(|store| {
-        add_host(
+        save_host(
             store,
             &NewHost {
+                id: input.id,
                 name: input.name,
                 hostname: input.fields.hostname,
                 username: input.fields.username,
                 port: input.fields.port,
+                group: input.group,
+                tags: input.tags,
+                favorite: input.favorite,
+                jump: input.fields.proxy_jump,
             },
         )
     })
@@ -106,6 +172,24 @@ fn host_delete(state: State<'_, Mobile>, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn host_set_favorite(state: State<'_, Mobile>, id: String, favorite: bool) -> Result<(), String> {
+    state.with_store(|store| {
+        let config = store.load_app_config().map_err(|error| error.to_string())?;
+        let mut connection = config
+            .connections
+            .into_iter()
+            .find(|connection| connection.id == id)
+            .ok_or("only saved hosts can be favorites")?;
+        connection.favorite = favorite;
+        store
+            .save_host(&connection, None)
+            .map_err(|error| error.to_string())
+    })
+}
+
+// ---- terminal ----------------------------------------------------------
+
+#[tauri::command]
 async fn session_open(
     state: State<'_, Mobile>,
     host_id: Option<String>,
@@ -114,10 +198,7 @@ async fn session_open(
     events: Channel<SessionEvent>,
 ) -> Result<OpenedSession, String> {
     let host_id = host_id.ok_or("a phone has no local shell; open a host")?;
-    let target = state.with_store(|store| {
-        let config = store.load_app_config().map_err(|error| error.to_string())?;
-        target_for(&config, &host_id)
-    })?;
+    let target = state.target(&host_id)?;
     let id = state
         .engine
         .open_shell(target, cols, rows, Arc::new(ChannelSink(events)))
@@ -171,10 +252,462 @@ fn hostkey_reply(state: State<'_, Mobile>, id: u64, decision: String) {
     state.engine.prompts().reply_hostkey(id, &decision);
 }
 
+// ---- files -------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenedFiles {
+    id: String,
+    home: String,
+}
+
+fn files_error(error: impl std::fmt::Display) -> String {
+    error.to_string()
+}
+
+fn sftp_entry(state: &Mobile, id: &str) -> Result<Arc<easyssh_engine::files::SftpEntry>, String> {
+    state
+        .engine
+        .files()
+        .get(id)
+        .ok_or_else(|| "the file session has ended".to_owned())
+}
+
+#[tauri::command]
+async fn sftp_open(state: State<'_, Mobile>, host_id: String) -> Result<OpenedFiles, String> {
+    let target = state.target(&host_id)?;
+    let (id, home) = state
+        .engine
+        .open_files(&target)
+        .await
+        .map_err(files_error)?;
+    Ok(OpenedFiles { id, home })
+}
+
+#[tauri::command]
+async fn sftp_list(
+    state: State<'_, Mobile>,
+    id: String,
+    path: String,
+) -> Result<Vec<Value>, String> {
+    sftp_entry(&state, &id)?
+        .list_view(&path)
+        .await
+        .map_err(files_error)
+}
+
+#[tauri::command]
+async fn sftp_mkdir(state: State<'_, Mobile>, id: String, path: String) -> Result<(), String> {
+    sftp_entry(&state, &id)?
+        .mkdir(&path)
+        .await
+        .map_err(files_error)
+}
+
+#[tauri::command]
+async fn sftp_remove(
+    state: State<'_, Mobile>,
+    id: String,
+    path: String,
+    directory: bool,
+) -> Result<(), String> {
+    sftp_entry(&state, &id)?
+        .remove(&path, directory)
+        .await
+        .map_err(files_error)
+}
+
+#[tauri::command]
+async fn sftp_rename(
+    state: State<'_, Mobile>,
+    id: String,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    sftp_entry(&state, &id)?
+        .rename(&from, &to)
+        .await
+        .map_err(files_error)
+}
+
+#[tauri::command]
+async fn sftp_close(state: State<'_, Mobile>, id: String) -> Result<(), String> {
+    state.engine.files().close(&id).await;
+    Ok(())
+}
+
+/// What a transfer reports to the web view (the desktop's `TransferEvent`).
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+enum TransferEvent {
+    Progress { bytes: u64 },
+    Done,
+    Failed { message: String },
+    Cancelled,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartedTransfer {
+    id: String,
+    local: String,
+    remote: String,
+}
+
+fn remote_join(dir: &str, name: &str) -> String {
+    if dir.ends_with('/') {
+        format!("{dir}{name}")
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// Uploads `local` (a file staged by `stage_*`) into the remote directory
+/// `remote`, or downloads the remote file `remote` into the app's download
+/// folder. The result is reported on `events`.
+#[tauri::command]
+async fn transfer_start(
+    state: State<'_, Mobile>,
+    host_id: String,
+    upload: bool,
+    remote: String,
+    local: Option<String>,
+    events: Channel<TransferEvent>,
+) -> Result<StartedTransfer, String> {
+    let (local, remote) = if upload {
+        let local = PathBuf::from(local.ok_or("no local file was given")?);
+        // Only what `stage_*` produced can be uploaded: the web view has no
+        // business reading other files of the app.
+        if state.staging.id_of(&local).is_none() {
+            return Err("the file was not picked on this phone".to_owned());
+        }
+        let name = local
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("the local file name is not valid UTF-8")?;
+        let remote = remote_join(&remote, name);
+        (local, remote)
+    } else {
+        let name = remote
+            .rsplit('/')
+            .find(|part| !part.is_empty())
+            .ok_or("the remote path has no file name")?;
+        let local = unique_path(&state.downloads, name)?;
+        (local, remote)
+    };
+
+    let target = state.target(&host_id)?;
+    // A file session of its own on the shared connection, closed when the
+    // transfer ends.
+    let (sftp_id, _) = state
+        .engine
+        .open_files(&target)
+        .await
+        .map_err(files_error)?;
+    let entry = match sftp_entry(&state, &sftp_id) {
+        Ok(entry) => entry,
+        Err(error) => {
+            state.engine.files().close(&sftp_id).await;
+            return Err(error);
+        }
+    };
+
+    let engine = state.engine.clone();
+    let staging = state.staging.clone();
+    let staged = upload.then(|| local.clone());
+    let sink: Events = Arc::new(move |name: &str, payload: Value| {
+        match name {
+            "transfer.progress" => {
+                let bytes = payload["bytes"].as_u64().unwrap_or(0);
+                let _ = events.send(TransferEvent::Progress { bytes });
+            }
+            "transfer.done" => {
+                let event = match payload["status"].as_str() {
+                    Some("completed") => TransferEvent::Done,
+                    Some("cancelled") => TransferEvent::Cancelled,
+                    _ => TransferEvent::Failed {
+                        message: payload["error"]
+                            .as_str()
+                            .unwrap_or("the transfer failed")
+                            .to_owned(),
+                    },
+                };
+                let _ = events.send(event);
+                // The staged copy and the file session are not needed any more.
+                if let Some(id) = staged.as_ref().and_then(|path| staging.id_of(path)) {
+                    staging.discard(&id);
+                }
+                let engine = engine.clone();
+                let sftp_id = sftp_id.clone();
+                tauri::async_runtime::spawn(async move {
+                    engine.files().close(&sftp_id).await;
+                });
+            }
+            _ => {}
+        }
+        1usize
+    });
+    let id = state.engine.files().start_transfer(
+        entry,
+        upload,
+        local.clone(),
+        remote.clone(),
+        false,
+        sink,
+    );
+    Ok(StartedTransfer {
+        id,
+        local: local.to_string_lossy().into_owned(),
+        remote,
+    })
+}
+
+#[tauri::command]
+fn transfer_cancel(state: State<'_, Mobile>, id: String) {
+    state.engine.files().cancel_transfer(&id);
+}
+
+// ---- picked files and downloads -----------------------------------------
+
+/// Starts staging a file the person picked; returns its id.
+#[tauri::command]
+fn stage_begin(state: State<'_, Mobile>, name: String) -> Result<String, String> {
+    state.staging.begin(&name)
+}
+
+/// One chunk of a picked file: the bytes are the request body, the headers say
+/// which upload (`x-upload-id`) and where the chunk starts (`x-offset`).
+/// Returns the new length.
+#[tauri::command]
+fn stage_chunk(state: State<'_, Mobile>, request: Request<'_>) -> Result<u64, String> {
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("the chunk must be raw bytes".to_owned());
+    };
+    let header = |name: &str| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+    let id = header("x-upload-id").ok_or("the upload id is missing")?;
+    let offset: u64 = header("x-offset")
+        .and_then(|value| value.parse().ok())
+        .ok_or("the offset is missing")?;
+    state.staging.append(&id, offset, bytes)
+}
+
+/// The path of a staged file, to hand to `transfer_start`.
+#[tauri::command]
+fn stage_finish(state: State<'_, Mobile>, id: String) -> Result<String, String> {
+    state
+        .staging
+        .path(&id)
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn stage_discard(state: State<'_, Mobile>, id: String) {
+    state.staging.discard(&id);
+}
+
+/// The bytes of a finished download (inside the download folder only), for the
+/// web view's share sheet on iOS.
+#[tauri::command]
+fn read_download(state: State<'_, Mobile>, path: String) -> Result<Response, String> {
+    let root = state
+        .downloads
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let file = PathBuf::from(&path)
+        .canonicalize()
+        .map_err(|_| "the download is gone".to_owned())?;
+    if !file.starts_with(&root) {
+        return Err("not a download".to_owned());
+    }
+    std::fs::read(file)
+        .map(Response::new)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn forget_download(state: State<'_, Mobile>, path: String) {
+    let Ok(root) = state.downloads.canonicalize() else {
+        return;
+    };
+    if let Ok(file) = PathBuf::from(path).canonicalize() {
+        if file.starts_with(&root) && file.is_file() {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+}
+
+// ---- forwards ----------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TunnelView {
+    id: String,
+    name: String,
+    host_id: String,
+    kind: easyssh_core::TunnelKind,
+    bind_address: Option<String>,
+    bind_port: u16,
+    target_host: Option<String>,
+    target_port: Option<u16>,
+    status: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TunnelInput {
+    id: Option<String>,
+    name: String,
+    host_id: String,
+    kind: easyssh_core::TunnelKind,
+    bind_port: u16,
+    target_host: Option<String>,
+    target_port: Option<u16>,
+}
+
+#[tauri::command]
+fn tunnels_list(state: State<'_, Mobile>) -> Result<Vec<TunnelView>, String> {
+    let config = state.with_store(|store| store.load_app_config().map_err(|e| e.to_string()))?;
+    Ok(config
+        .tunnels
+        .into_iter()
+        .map(|tunnel| TunnelView {
+            status: state.engine.tunnels().ui_status_of(&tunnel.id),
+            id: tunnel.id,
+            name: tunnel.name,
+            host_id: tunnel.host_id,
+            kind: tunnel.kind,
+            bind_address: tunnel.bind_address,
+            bind_port: tunnel.bind_port,
+            target_host: tunnel.target_host,
+            target_port: tunnel.target_port,
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn tunnel_save(state: State<'_, Mobile>, input: TunnelInput) -> Result<String, String> {
+    if input.kind != easyssh_core::TunnelKind::Local {
+        return Err("only local port forwards are offered on a phone".to_owned());
+    }
+    state.with_store(|store| {
+        save_tunnel(
+            store,
+            &NewTunnel {
+                id: input.id,
+                name: input.name,
+                host_id: input.host_id,
+                bind_port: input.bind_port,
+                target_host: input.target_host.unwrap_or_default(),
+                target_port: input.target_port.unwrap_or(0),
+            },
+        )
+    })
+}
+
+#[tauri::command]
+async fn tunnel_delete(state: State<'_, Mobile>, id: String) -> Result<(), String> {
+    state.engine.stop_tunnel(&id).await;
+    state.with_store(|store| {
+        store
+            .remove_tunnel(&id)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+async fn tunnel_start(state: State<'_, Mobile>, id: String) -> Result<(), String> {
+    let config = state.with_store(|store| store.load_app_config().map_err(|e| e.to_string()))?;
+    let tunnel = config
+        .tunnels
+        .into_iter()
+        .find(|tunnel| tunnel.id == id)
+        .ok_or("this forward no longer exists")?;
+    let target = state.target(&tunnel.host_id)?;
+    state
+        .engine
+        .start_tunnel(&tunnel, &target)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn tunnel_stop(state: State<'_, Mobile>, id: String) -> Result<(), String> {
+    state.engine.stop_tunnel(&id).await;
+    Ok(())
+}
+
+// ---- sync --------------------------------------------------------------
+
+/// The error the UI receives: a stable code and a message to show.
+#[derive(Debug, Serialize)]
+struct SyncError {
+    code: String,
+    message: String,
+}
+
+impl From<SyncFailure> for SyncError {
+    fn from(failure: SyncFailure) -> Self {
+        SyncError {
+            code: failure.code.to_owned(),
+            message: failure.message,
+        }
+    }
+}
+
+#[tauri::command]
+async fn sync_call(
+    state: State<'_, Mobile>,
+    app: tauri::AppHandle,
+    kind: String,
+    payload: Option<Value>,
+) -> Result<Value, SyncError> {
+    let result = state
+        .sync
+        .call(&kind, payload.unwrap_or(Value::Null))
+        .await?;
+    // A sign-in pulls the hosts: tell the lists to reload.
+    if matches!(kind.as_str(), "sync.signin" | "sync.signup" | "sync.now") {
+        let _ = app.emit("hosts-changed", ());
+    }
+    Ok(result)
+}
+
 /// Crash reports are a desktop feature for now; the web view still reports
 /// its errors through this command, so it must exist.
 #[tauri::command]
 fn telemetry_report_frontend() {}
+
+/// HTTPS to the sync server verifies certificates through the Android trust
+/// store (rustls-platform-verifier). That crate calls into the JVM through a
+/// small Kotlin component (`gen/android/app/build.gradle.kts` adds it), and it
+/// needs the JVM and the application context once, before the first request.
+/// `tao` stored both in `ndk-context` when it created the activity.
+#[cfg(target_os = "android")]
+fn init_certificate_verifier() {
+    use jni::objects::JObject;
+    use jni::JavaVM;
+
+    let context = ndk_context::android_context();
+    // SAFETY: `tao` initialised these pointers from the live activity, and
+    // both stay valid for the life of the process.
+    let vm = unsafe { JavaVM::from_raw(context.vm().cast()) };
+    let result = vm.attach_current_thread(|env| -> Result<(), jni::errors::Error> {
+        let application = unsafe { JObject::from_raw(env, context.context().cast()) };
+        rustls_platform_verifier::android::init_with_env(env, application)
+    });
+    if let Err(error) = result {
+        // Sync then fails with a certificate error; the terminal is unaffected.
+        eprintln!("cannot initialise the certificate verifier: {error}");
+    }
+}
 
 pub fn run() {
     tauri::Builder::default()
@@ -183,6 +716,7 @@ pub fn run() {
             load_hosts,
             host_save,
             host_delete,
+            host_set_favorite,
             session_open,
             session_write,
             session_resize,
@@ -191,28 +725,113 @@ pub fn run() {
             sessions_list,
             askpass_reply,
             hostkey_reply,
+            sftp_open,
+            sftp_list,
+            sftp_mkdir,
+            sftp_remove,
+            sftp_rename,
+            sftp_close,
+            transfer_start,
+            transfer_cancel,
+            stage_begin,
+            stage_chunk,
+            stage_finish,
+            stage_discard,
+            read_download,
+            forget_download,
+            tunnels_list,
+            tunnel_save,
+            tunnel_delete,
+            tunnel_start,
+            tunnel_stop,
+            sync_call,
             telemetry_report_frontend,
         ])
         .setup(|app| {
+            #[cfg(target_os = "android")]
+            init_certificate_verifier();
+
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
+            // HOOK(mobile-vault): the vault's cipher seals the sync account (and
+            // later the saved keys); see `device_keystore`.
+            let vault = Arc::new(Vault::new(device_keystore(&dir)));
             // The v1 JSON file never exists on a phone; its path only names
             // the folder the database lives in.
-            let opened = open_app_store(&dir.join("config.json"))?;
+            let opened = open_app_store_with(&dir.join("config.json"), vault.cipher())?;
             let store = Arc::new(Mutex::new(opened.store));
+
+            let cache = app.path().app_cache_dir()?;
+            let downloads = cache.join("downloads");
+            let staging = Staging::new(cache.join("uploads"));
+            std::fs::create_dir_all(&downloads)?;
+            sweep(&downloads, LEFTOVER_AGE);
+            staging.sweep(LEFTOVER_AGE);
+
+            // Engine events become Tauri events the web view listens to.
             let handle = app.handle().clone();
-            let prompts = Prompts::new(Arc::new(move |name, payload| {
-                let _ = handle.emit(name, payload);
-            }));
-            let engine = Engine::new(prompts, Arc::new(StoreKnownHosts::new(store.clone())));
-            app.manage(Mobile { store, engine });
+            let events: Events = Arc::new(move |name: &str, payload: Value| {
+                let (name, payload) = if name == "tunnel.status" {
+                    ("tunnel-status".to_owned(), ui_status_event(&payload))
+                } else {
+                    (ui_event_name(name), payload)
+                };
+                let _ = handle.emit(&name, payload);
+                1usize
+            });
+            let prompts = Prompts::new(events.clone());
+            let engine = Engine::new(
+                prompts,
+                Arc::new(StoreKnownHosts::new(store.clone())),
+                events,
+            );
+
+            let handle = app.handle().clone();
+            let sync = tauri::async_runtime::block_on(async {
+                SyncService::start(
+                    store.clone(),
+                    vault,
+                    SyncOptions::default(),
+                    Arc::new(move |name: &str, payload: Value| {
+                        let pulled = payload["last"]["pulled"].as_u64().unwrap_or(0)
+                            + payload["last"]["merged"].as_u64().unwrap_or(0);
+                        let _ = handle.emit(&ui_event_name(name), payload);
+                        if name == "sync.state" && pulled > 0 {
+                            let _ = handle.emit("hosts-changed", ());
+                        }
+                    }),
+                )
+            });
+
+            app.manage(Mobile {
+                store,
+                engine,
+                sync,
+                staging,
+                downloads,
+            });
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("failed to build AnixOps SSH")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
-                app.state::<Mobile>().engine.close_all();
+                let engine = app.state::<Mobile>().engine.clone();
+                tauri::async_runtime::block_on(async move { engine.shutdown().await });
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use easyssh_engine::local_files::safe_file_name;
+
+    #[test]
+    fn remote_paths_are_joined_with_one_slash() {
+        assert_eq!(remote_join("/a", "b"), "/a/b");
+        assert_eq!(remote_join("/a/", "b"), "/a/b");
+        assert_eq!(remote_join("/", "b"), "/b");
+        assert_eq!(safe_file_name("x/y"), "x_y");
+    }
 }
