@@ -15,8 +15,9 @@
 //! `get_assertion` with `clientDataHash = SHA256(message)` produces it.
 //!
 //! The device is behind the [`SecurityKey`] trait so tests (and the e2e
-//! suite) use a software authenticator. The real one, [`HidSecurityKey`],
-//! talks CTAP2 over USB HID.
+//! suite) use a software authenticator. The real ones are
+//! [`HidSecurityKey`], which talks CTAP2 over USB HID (Linux, macOS), and
+//! [`WebAuthnSecurityKey`], which goes through the Windows WebAuthn API.
 
 use crate::error::{Error, Result};
 use crate::interaction::Interaction;
@@ -169,10 +170,17 @@ pub trait SecurityKey: Send + Sync {
         request: &SkSignRequest<'_>,
         pin: Option<&str>,
     ) -> std::result::Result<SkAssertion, SkError>;
+
+    /// The backend asks for the PIN and user verification itself (a system
+    /// dialog), so the engine must not ask for one and passes no PIN.
+    fn handles_user_verification(&self) -> bool {
+        false
+    }
 }
 
 /// The authenticator backend of this build: real devices over USB HID where
-/// the platform has one, `None` otherwise.
+/// the platform has one, the Windows WebAuthn API on Windows, `None`
+/// otherwise (and on Windows when `webauthn.dll` is too old or missing).
 pub fn default_security_key() -> Option<Arc<dyn SecurityKey>> {
     #[cfg(all(
         feature = "hardware-key",
@@ -181,9 +189,14 @@ pub fn default_security_key() -> Option<Arc<dyn SecurityKey>> {
     {
         Some(Arc::new(HidSecurityKey))
     }
+    #[cfg(all(feature = "hardware-key", windows))]
+    {
+        WebAuthnSecurityKey::available()
+            .then(|| Arc::new(WebAuthnSecurityKey) as Arc<dyn SecurityKey>)
+    }
     #[cfg(not(all(
         feature = "hardware-key",
-        any(target_os = "linux", target_os = "macos")
+        any(target_os = "linux", target_os = "macos", windows)
     )))]
     {
         None
@@ -191,12 +204,27 @@ pub fn default_security_key() -> Option<Arc<dyn SecurityKey>> {
 }
 
 /// Whether [`default_security_key`] returns a backend. When it does not,
-/// hosts with `sk-*` keys run on OpenSSH.
-pub const fn hardware_backend_available() -> bool {
-    cfg!(all(
+/// hosts with `sk-*` keys run on OpenSSH. On Windows this asks
+/// `webauthn.dll` for its API version, so it is not a constant.
+pub fn hardware_backend_available() -> bool {
+    #[cfg(all(
         feature = "hardware-key",
         any(target_os = "linux", target_os = "macos")
-    ))
+    ))]
+    {
+        true
+    }
+    #[cfg(all(feature = "hardware-key", windows))]
+    {
+        WebAuthnSecurityKey::available()
+    }
+    #[cfg(not(all(
+        feature = "hardware-key",
+        any(target_os = "linux", target_os = "macos", windows)
+    )))]
+    {
+        false
+    }
 }
 
 #[cfg(all(
@@ -204,6 +232,9 @@ pub const fn hardware_backend_available() -> bool {
     any(target_os = "linux", target_os = "macos")
 ))]
 pub use crate::security_key_hid::HidSecurityKey;
+
+#[cfg(all(feature = "hardware-key", windows))]
+pub use crate::security_key_winhello::WebAuthnSecurityKey;
 
 /// Without a hardware backend there is no `HidSecurityKey`; this keeps the
 /// public name resolvable for documentation only.
@@ -220,6 +251,24 @@ pub struct HidSecurityKey;
 )))]
 #[async_trait]
 impl SecurityKey for HidSecurityKey {
+    async fn sign(
+        &self,
+        _: &SkSignRequest<'_>,
+        _: Option<&str>,
+    ) -> std::result::Result<SkAssertion, SkError> {
+        Err(SkError::NoDevice)
+    }
+}
+
+/// Without the Windows backend there is no `WebAuthnSecurityKey`; this keeps
+/// the public name resolvable for documentation only.
+#[cfg(not(all(feature = "hardware-key", windows)))]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WebAuthnSecurityKey;
+
+#[cfg(not(all(feature = "hardware-key", windows)))]
+#[async_trait]
+impl SecurityKey for WebAuthnSecurityKey {
     async fn sign(
         &self,
         _: &SkSignRequest<'_>,
@@ -323,9 +372,12 @@ pub async fn sign_with_security_key(
     message: &[u8],
 ) -> Result<Vec<u8>> {
     let request = SkSignRequest { info, message };
+    // A backend with its own PIN dialog is never given a PIN, and the PIN is
+    // not asked for here.
+    let own_dialog = backend.handles_user_verification();
     let mut pin: Option<Zeroizing<String>> = None;
     let mut retries: Option<u32> = None;
-    if info.needs_pin() {
+    if info.needs_pin() && !own_dialog {
         pin = Some(ask_pin(interaction, label, None).await?);
     }
     for attempt in 0..=PIN_ATTEMPTS {
@@ -338,7 +390,7 @@ pub async fn sign_with_security_key(
         if info.needs_touch() {
             interaction.security_key_touch_done(label).await;
         }
-        let last = attempt == PIN_ATTEMPTS;
+        let last = attempt == PIN_ATTEMPTS || own_dialog;
         match result {
             Ok(assertion) => return encode_signature(info, &assertion),
             Err(SkError::PinRequired) if !last => {
