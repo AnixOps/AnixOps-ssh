@@ -10,6 +10,7 @@ use easyssh_ssh::{
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -79,6 +80,8 @@ pub struct Engine {
     known_hosts: Arc<dyn KnownHosts>,
     shells: Mutex<HashMap<String, mpsc::UnboundedSender<Command>>>,
     next: AtomicU64,
+    /// SSH keepalive interval for new connections (`None` turns them off).
+    keepalive: Mutex<Option<Duration>>,
 }
 
 impl Engine {
@@ -88,7 +91,15 @@ impl Engine {
             known_hosts,
             shells: Mutex::new(HashMap::new()),
             next: AtomicU64::new(1),
+            keepalive: Mutex::new(Some(Duration::from_secs(60))),
         })
+    }
+
+    /// Sets the keepalive interval used by connections opened from now on.
+    /// A phone on a mobile network wants a shorter one than the desktop's 60 s
+    /// so a dead path is noticed sooner; `None` turns keepalives off.
+    pub fn set_keepalive(&self, interval: Option<Duration>) {
+        *lock(&self.keepalive) = interval;
     }
 
     pub fn prompts(&self) -> &Arc<Prompts> {
@@ -123,6 +134,7 @@ impl Engine {
     ) -> Result<String, OpenError> {
         let mut params = ConnectParams::new(target.host.clone(), target.port, target.user.clone())
             .known_hosts(self.known_hosts.clone())
+            .keepalive(*lock(&self.keepalive))
             .agent(AgentSource::Disabled);
         if let Some(identity) = target.identity.clone() {
             params = params.memory_identity(identity);

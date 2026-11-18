@@ -3,6 +3,7 @@ import { useState, type CSSProperties, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Field, Notice, Textarea } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import {
   isVaultLocked,
   pasteText,
@@ -11,6 +12,7 @@ import {
   type SecretsInput,
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
+import { setHostAttach, type Attach } from "@/lib/mobilePrefs";
 import { vaultErrorText } from "@/lib/vaultUi";
 
 /** What a key field shows while hidden: dots, as a password field would. */
@@ -26,6 +28,7 @@ export function MobileHostForm({ onCancel, onDone }: { onCancel: () => void; onD
   const [hostname, setHostname] = useState("");
   const [username, setUsername] = useState("");
   const [port, setPort] = useState("22");
+  const [attach, setAttach] = useState<Attach>("off");
   const [password, setPassword] = useState("");
   const [privateKey, setPrivateKey] = useState("");
   const [keyPassphrase, setKeyPassphrase] = useState("");
@@ -88,7 +91,8 @@ export function MobileHostForm({ onCancel, onDone }: { onCancel: () => void; onD
     })
       .then(async (hostId) => {
         setSavedId(hostId);
-        setSavedId(hostId);
+        // Where the session is kept is a phone-side choice, stored by host id.
+        if (attach !== "off") setHostAttach(hostId, attach);
         const problem = await keepLogin(hostId);
         if (problem) {
           setError(problem);
@@ -156,6 +160,14 @@ export function MobileHostForm({ onCancel, onDone }: { onCancel: () => void; onD
             onChange={(event) => setPort(event.target.value)}
             inputMode="numeric"
           />
+        </Field>
+        <Field label={t.mobileAttach}>
+          <Select className="h-11" value={attach} onChange={(event) => setAttach(event.target.value as Attach)}>
+            <option value="off">{t.mobileAttachOff}</option>
+            <option value="tmux">tmux</option>
+            <option value="screen">screen</option>
+          </Select>
+          <span className="mt-1 block text-callout text-label-2">{t.mobileAttachHint}</span>
         </Field>
         <section
           aria-labelledby="mobile-login-title"

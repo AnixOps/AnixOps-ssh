@@ -132,6 +132,30 @@
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* With the soft keyboard up it covers the system bar, so a bar above it needs
+   no bottom inset (lib/keyboardViewport.ts sets data-keyboard). */
+:root[data-keyboard="open"] .pb-safe {
+  padding-bottom: 0;
+}
+
+/* The terminal surface of the touch UI: the app reads the touches itself
+   (scroll, select, pinch), so the browser must not scroll, zoom or open its
+   own selection menu on it. */
+.touch-surface,
+.touch-surface * {
+  /* Including xterm's scrolling viewport: a scroller ends the inheritance of
+     touch-action, and the browser would then pan it natively and stop sending
+     the touches to the app. */
+  touch-action: none;
+}
+
+.touch-surface {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
 @utility px-safe {
   padding-left: max(var(--space-4), env(safe-area-inset-left));
   padding-right: max(var(--space-4), env(safe-area-inset-right));

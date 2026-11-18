@@ -47,6 +47,7 @@ jobs:
           npm run preview > logs/preview.log 2>&1 &
           npx --yes wait-on@8 http://localhost:4173 --timeout 30000
           npm run screenshots -- http://localhost:4173 screenshots 2>&1 | tee logs/screenshots.log
+          npm run test:mobile -- http://localhost:4173 2>&1 | tee logs/mobile-e2e.log
       - if: always()
         uses: actions/upload-artifact@v4
         with:

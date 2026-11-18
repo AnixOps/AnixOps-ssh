@@ -12,6 +12,7 @@ let previewCount = 0;
 export function previewSession(
   hostId: string | null,
   onEvent: (event: SessionEvent) => void,
+  attach?: "tmux" | "screen",
 ): SessionHandle {
   const entry = previewSnapshot().hosts.find((candidate) => candidate.id === hostId);
   const host = entry?.name ?? "local";
@@ -46,7 +47,10 @@ export function previewSession(
         "",
       ]
     : [];
-  window.setTimeout(() => emit(banner.map((text) => text + CRLF).join("") + prompt), 120);
+  window.setTimeout(() => {
+    emit(banner.map((text) => text + CRLF).join("") + prompt);
+    if (attach) emit(color("2", `[${attach}: anixops]`) + CRLF + prompt);
+  }, 120);
 
   const run = (command: string) => {
     if (command === "exit") {
@@ -94,6 +98,17 @@ export function previewSession(
       }
     },
     resize() {},
+    // The mobile app replaces the connection of an attached session; the
+    // preview shows the status events and that the screen is still there.
+    reconnect() {
+      if (closed || !attach) return;
+      onEvent({ kind: "reconnecting", attempt: 1, delay_ms: 0 });
+      window.setTimeout(() => {
+        if (closed) return;
+        onEvent({ kind: "resumed" });
+        emit(color("2", `[${attach}: anixops]`) + CRLF + prompt);
+      }, 200);
+    },
     detach() {
       closed = true;
     },

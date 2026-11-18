@@ -118,7 +118,7 @@ export type SessionEvent =
   | { kind: "data"; data: string }
   | { kind: "exit"; code: number | null }
   /** The connection to the background daemon dropped; output resumes after "resumed". */
-  | { kind: "reconnecting" }
+  | { kind: "reconnecting"; attempt?: number; delay_ms?: number }
   | { kind: "resumed" };
 
 export interface SessionHandle {
@@ -130,6 +130,9 @@ export interface SessionHandle {
   detach(): void;
   /** Ends the session. */
   close(): void;
+  /** Mobile, attached sessions: replace the connection now (the app is back
+   *  in front and the old socket cannot be trusted). */
+  reconnect?(): void;
   /** The engine the session runs on; absent for a local shell. */
   engine?: SshEngine | null;
   /** Why that engine was chosen (English, for a tooltip). */
@@ -270,13 +273,16 @@ export async function openSession(
   cols: number,
   rows: number,
   onEvent: (event: SessionEvent) => void,
+  /** The touch app only: attach to `tmux` or `screen` on the host and the
+   *  SSH keepalive interval in seconds (0 turns it off). */
+  options?: { attach?: "tmux" | "screen"; keepaliveSecs?: number },
 ): Promise<SessionHandle> {
-  if (!isTauri) return previewSession(hostId, onEvent);
+  if (!isTauri) return previewSession(hostId, onEvent, options?.attach);
   const events = new Channel<SessionEvent>();
   events.onmessage = onEvent;
   const opened = await invoke<{ id: string; engine: SshEngine | null; engineReason: string | null }>(
     "session_open",
-    { hostId, cols, rows, events },
+    { hostId, cols, rows, events, attach: options?.attach, keepaliveSecs: options?.keepaliveSecs },
   );
   return sessionHandle(opened.id, opened.engine, opened.engineReason);
 }
@@ -291,6 +297,7 @@ function sessionHandle(id: string, engine: SshEngine | null = null, engineReason
     resize: (cols, rows) => void invoke("session_resize", { id, cols, rows }).catch(report),
     detach: () => void invoke("session_detach", { id }).catch(report),
     close: () => void invoke("session_close", { id }).catch(report),
+    reconnect: () => void invoke("session_reconnect", { id }).catch(report),
   };
 }
 
