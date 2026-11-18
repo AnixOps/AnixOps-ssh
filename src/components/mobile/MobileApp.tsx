@@ -6,17 +6,27 @@ import { AskpassDialog } from "@/components/app/AskpassDialog";
 import { HostKeyDialog } from "@/components/app/HostKeyDialog";
 import { MobileHostForm } from "@/components/mobile/MobileHostForm";
 import { MobileHostList } from "@/components/mobile/MobileHostList";
+import { MobileLockScreen } from "@/components/mobile/MobileLockScreen";
 import { MobileSettings, MOBILE_SHORTCUTS } from "@/components/mobile/MobileSettings";
 import { MobileTerminal, type TerminalController } from "@/components/mobile/MobileTerminal";
+import { MobileVaultSetup } from "@/components/mobile/MobileVaultSetup";
 import { ConfirmProvider } from "@/components/ui/confirm";
 import { Notice } from "@/components/ui/form";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { setSessionNotification } from "@/lib/androidBridge";
-import { loadHosts, onHostsChanged, type Host } from "@/lib/backend";
+import {
+  loadHosts,
+  onHostsChanged,
+  vaultBackground,
+  vaultForeground,
+  type Host,
+} from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { useKeyboardViewport } from "@/lib/keyboardViewport";
 import { useMobilePrefs } from "@/lib/mobilePrefs";
+import { vaultGate, watchLifecycle } from "@/lib/mobileVault";
 import { appShortcut, inTerminal, type AppShortcut } from "@/lib/shortcuts";
+import { useVaultStatus } from "@/lib/useVaultStatus";
 
 /** The touch UI of the mobile app: host list, then a terminal on the chosen
  *  host. Under the `md` breakpoint (834 px, guidelines/layout.md) the two are
@@ -34,6 +44,8 @@ export function MobileApp() {
   const viewport = useKeyboardViewport();
   const prefs = useMobilePrefs();
   const controller = useRef<TerminalController | null>(null);
+  const vault = useVaultStatus();
+  const gate = vaultGate(vault.status);
 
   const reload = useCallback(() => {
     loadHosts()
@@ -45,6 +57,14 @@ export function MobileApp() {
   }, []);
   useEffect(reload, [reload]);
   useEffect(() => onHostsChanged(reload), [reload]);
+
+  // Tell the backend when the app leaves and returns, so the vault locks (at
+  // once by default); read the state again on return to show the lock screen
+  // before anything else.
+  useEffect(
+    () => watchLifecycle(document, { background: vaultBackground, foreground: vaultForeground }, vault.refresh, window),
+    [vault.refresh],
+  );
 
   const openHost = (host: Host) => setOpen((current) => ({ host, attempt: (current?.attempt ?? 0) + 1 }));
 
@@ -120,6 +140,7 @@ export function MobileApp() {
           <div
             className="fixed inset-x-0 flex overflow-hidden bg-bg"
             style={{ top: viewport.top, height: viewport.height }}
+            inert={gate !== "open"}
           >
             <section
               aria-label={t.mobileHostsTitle}
@@ -158,21 +179,34 @@ export function MobileApp() {
               )}
             </main>
           </div>
-          <AnimatePresence>
-            {adding && (
-              <MobileHostForm
-                onCancel={() => setAdding(false)}
-                onDone={() => {
-                  setAdding(false);
-                  reload();
-                }}
+          <div inert={gate !== "open"}>
+            <AnimatePresence>
+              {adding && (
+                <MobileHostForm
+                  onCancel={() => setAdding(false)}
+                  onDone={() => {
+                    setAdding(false);
+                    reload();
+                  }}
+                />
+              )}
+            </AnimatePresence>
+            {settings && vault.status && (
+              <MobileSettings
+                host={open ? { id: open.host.id, name: open.host.name } : null}
+                status={vault.status}
+                onStatus={vault.set}
+                onBack={() => setSettings(false)}
               />
             )}
-          </AnimatePresence>
-          {settings && (
-            <MobileSettings host={open ? { id: open.host.id, name: open.host.name } : null} onClose={() => setSettings(false)} />
+            {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} only={MOBILE_SHORTCUTS} />}
+          </div>
+          {gate === "setup" && vault.status && (
+            <MobileVaultSetup status={vault.status} onDone={vault.set} />
           )}
-          {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} only={MOBILE_SHORTCUTS} />}
+          {gate === "locked" && vault.status && (
+            <MobileLockScreen status={vault.status} onUnlocked={vault.set} />
+          )}
           <AskpassDialog />
           <HostKeyDialog />
         </ConfirmProvider>

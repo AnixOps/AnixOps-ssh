@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { openSession, isTauri, type Host, type SessionEvent, type SessionHandle } from "@/lib/backend";
 import { snippetBytes } from "@/lib/barLayout";
 import { BackgroundPolicy, resumeAction } from "@/lib/backgroundPolicy";
+import { watchLifecycle } from "@/lib/mobileVault";
 import { t } from "@/lib/i18n";
 import { attachImeLayer, type ImeLayer } from "@/lib/imeLayer";
 import {
@@ -292,8 +293,17 @@ export function MobileTerminal({
       },
     });
     policyRef.current = policy;
-    const onVisibility = () => (document.visibilityState === "hidden" ? policy.hidden() : policy.visible());
-    document.addEventListener("visibilitychange", onVisibility);
+    // The same lifecycle source as the vault auto-lock (lib/mobileVault.ts): one
+    // definition of "the app left" for visibilitychange, pagehide and pageshow.
+    const stopLifecycle = watchLifecycle(
+      document,
+      {
+        background: async () => policy.hidden(),
+        foreground: async () => policy.visible(),
+      },
+      () => {},
+      window,
+    );
 
     const observer = new ResizeObserver(() => {
       if (surface.clientWidth > 0 && surface.clientHeight > 0) {
@@ -316,7 +326,7 @@ export function MobileTerminal({
 
     return () => {
       disposed = true;
-      document.removeEventListener("visibilitychange", onVisibility);
+      stopLifecycle();
       policy.dispose();
       policyRef.current = null;
       scheme.removeEventListener("change", updateTheme);

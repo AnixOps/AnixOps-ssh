@@ -184,7 +184,7 @@ function AddKey({ bar, save }: { bar: BarLayout; save: (layout: BarLayout) => vo
           </Field>
           <div className="flex items-center gap-3">
             <span className="min-w-0 flex-1 text-body">{t.mobileSnippetRun}</span>
-            <MobileSwitch on={run} label={t.mobileSnippetRun} onToggle={() => setRun(!run)} />
+            <MobileSwitch on={run} label={t.mobileSnippetRun} onClick={() => setRun(!run)} />
           </div>
           <Button variant="secondary" size="lg" onClick={addSnippetKey}>
             <Plus />

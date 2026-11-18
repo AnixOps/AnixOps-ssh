@@ -593,6 +593,34 @@ export async function vaultSetAutoLock(minutes: number): Promise<VaultStatus> {
   return isTauri ? invoke<VaultStatus>("vault_set_auto_lock", { minutes }) : previewVault.setAutoLock(minutes);
 }
 
+/** Mobile: seconds the app may stay in the background before the vault locks. */
+export async function vaultSetBackgroundLock(
+  seconds: number,
+): Promise<VaultStatus> {
+  return isTauri
+    ? invoke<VaultStatus>("vault_set_background_lock", { seconds })
+    : previewVault.setBackgroundLock(seconds);
+}
+
+/** Mobile first run: use this device only, no passphrase. */
+export async function vaultSetupSkip(): Promise<VaultStatus> {
+  return isTauri
+    ? invoke<VaultStatus>("vault_setup_skip")
+    : previewVault.setupSkip();
+}
+
+/** Mobile: the app left the screen (the vault may lock now). */
+export async function vaultBackground(): Promise<void> {
+  if (isTauri) await invoke("vault_background");
+  else await previewVault.background();
+}
+
+/** Mobile: the app is back on screen (the vault locks if it was away too long). */
+export async function vaultForeground(): Promise<void> {
+  if (isTauri) await invoke("vault_foreground");
+  else await previewVault.foreground();
+}
+
 /** Deletes every saved password, key and passphrase; resolves to the number of hosts that had any. */
 export async function vaultForgetAll(): Promise<number> {
   return isTauri ? invoke<number>("vault_forget_all") : previewForgetAll();

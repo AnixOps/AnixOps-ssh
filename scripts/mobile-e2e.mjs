@@ -201,7 +201,7 @@ test("the second row swipes sideways to F12, and snippet keys can be added", asy
   await page.getByLabel("What it types").fill("uptime");
   await page.getByRole("button", { name: "Add a command key" }).tap();
   await page.getByRole("button", { name: "Settings", exact: true }).first().tap();
-  await page.getByRole("button", { name: "Close" }).tap();
+  await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Back", exact: true }).tap();
   await row.evaluate((element) => element.scrollTo({ left: element.scrollWidth }));
   await clearWrites(page);
   await page.getByRole("button", { name: /^up: uptime/ }).tap();
@@ -427,7 +427,7 @@ test("without tmux the session closes in the background and asks before opening 
 test("with tmux the session reconnects by itself and says so", async ({ page }) => {
   await page.getByRole("button", { name: "Terminal settings" }).tap();
   await page.getByLabel("Keep session").selectOption("tmux");
-  await page.getByRole("button", { name: "Close" }).tap();
+  await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Back", exact: true }).tap();
   // A new terminal reads the choice at connect time.
   await page.getByRole("button", { name: "Back to hosts" }).tap();
   await page.getByRole("button", { name: /prod-web-01/ }).first().tap();
@@ -504,7 +504,7 @@ test("settings: font size, IME mode and the explanation of the background policy
   await page.waitForFunction((size) => window.__mobileDebug.terminal.options.fontSize === size, before + 1);
   await dialog.getByLabel("Keyboard composition").selectOption("hold");
   await dialog.getByLabel("Keep the connection in the background").selectOption("300");
-  await dialog.getByRole("button", { name: "Close" }).tap();
+  await dialog.getByRole("button", { name: "Back", exact: true }).tap();
   const prefs = await page.evaluate(() => JSON.parse(localStorage.getItem("anixops.mobile.prefs.v1")));
   assert.equal(prefs.imeMode, "hold");
   assert.equal(prefs.graceSeconds, 300);
@@ -542,7 +542,7 @@ test("a tablet shows list and terminal together and a hardware keyboard drives t
   await page.locator(".xterm-helper-textarea").focus();
   await page.keyboard.press("Control+Shift+,");
   await page.getByRole("dialog", { name: "Settings" }).waitFor();
-  await page.getByRole("button", { name: "Close" }).tap();
+  await page.getByRole("dialog", { name: "Settings" }).getByRole("button", { name: "Back", exact: true }).tap();
   // Plain Ctrl+C inside the terminal belongs to the shell.
   await clearWrites(page);
   await page.locator(".xterm-helper-textarea").focus();

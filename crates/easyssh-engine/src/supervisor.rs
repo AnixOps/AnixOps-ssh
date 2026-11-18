@@ -21,7 +21,7 @@
 //! The public id stays the same across reconnects. Everything is generic over
 //! the backend so the logic is tested without a network.
 
-use crate::{Engine, OpenError, ShellSink, Target};
+use crate::{Engine, OpenError, SavedPassword, ShellSink, Target};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -141,6 +141,7 @@ pub trait ShellBackend: Send + Sync + 'static {
     async fn open(
         &self,
         target: Target,
+        password: Option<Arc<SavedPassword>>,
         cols: u16,
         rows: u16,
         sink: Arc<dyn ShellSink>,
@@ -155,11 +156,13 @@ impl ShellBackend for Engine {
     async fn open(
         &self,
         target: Target,
+        password: Option<Arc<SavedPassword>>,
         cols: u16,
         rows: u16,
         sink: Arc<dyn ShellSink>,
     ) -> Result<String, OpenError> {
-        self.open_shell(target, cols, rows, sink).await
+        self.open_shell_with_login(target, password, cols, rows, sink)
+            .await
     }
     fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
         Engine::write(self, id, data)
@@ -190,6 +193,7 @@ struct Session<B: ShellBackend> {
     registry: Arc<Mutex<HashMap<String, Arc<Session<B>>>>>,
     public_id: String,
     target: Target,
+    password: Option<Arc<SavedPassword>>,
     options: SessionOptions,
     sink: Arc<dyn SupervisedSink>,
     state: Mutex<State>,
@@ -250,7 +254,7 @@ impl<B: ShellBackend> Session<B> {
         });
         let id = self
             .backend
-            .open(self.target.clone(), cols, rows, sink)
+            .open(self.target.clone(), self.password.clone(), cols, rows, sink)
             .await?;
         let superseded = {
             let mut state = lock(&self.state);
@@ -353,12 +357,29 @@ impl<B: ShellBackend> Supervisor<B> {
         sink: Arc<dyn SupervisedSink>,
         options: SessionOptions,
     ) -> Result<String, OpenError> {
+        self.open_with_login(target, None, cols, rows, sink, options)
+            .await
+    }
+
+    /// Like [`Supervisor::open`], with the host's saved password. A reconnect
+    /// offers it again; it lives in memory for as long as the session does (a
+    /// saved key travels in `target.identity`, see [`crate::saved_login`]).
+    pub async fn open_with_login(
+        &self,
+        target: Target,
+        password: Option<Arc<SavedPassword>>,
+        cols: u16,
+        rows: u16,
+        sink: Arc<dyn SupervisedSink>,
+        options: SessionOptions,
+    ) -> Result<String, OpenError> {
         let public_id = format!("s{}", self.next.fetch_add(1, Ordering::Relaxed));
         let session = Arc::new(Session {
             backend: self.backend.clone(),
             registry: self.sessions.clone(),
             public_id: public_id.clone(),
             target,
+            password,
             options,
             sink,
             state: Mutex::new(State {
@@ -489,6 +510,7 @@ mod tests {
         async fn open(
             &self,
             _target: Target,
+            _password: Option<Arc<SavedPassword>>,
             _cols: u16,
             _rows: u16,
             sink: Arc<dyn ShellSink>,

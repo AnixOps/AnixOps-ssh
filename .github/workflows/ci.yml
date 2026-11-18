@@ -207,7 +207,7 @@ jobs:
           export CC_aarch64_linux_android="$BIN/aarch64-linux-android24-clang"
           export AR_aarch64_linux_android="$BIN/llvm-ar"
           cargo check --target aarch64-linux-android \
-            -p easyssh-core -p easyssh-crypto -p easyssh-ssh -p easyssh-store -p easyssh-vault -p easyssh-engine \
+            -p easyssh-core -p easyssh-crypto -p easyssh-ssh -p easyssh-store -p easyssh-vault -p easyssh-engine -p easyssh-mobile-keys \
             2>&1 | tee logs/android-engine-check.log
       - name: Install frontend
         run: npm install > logs/npm-install.log 2>&1
@@ -284,7 +284,7 @@ jobs:
       - name: Engine crates build for iOS
         run: |
           cargo check --target aarch64-apple-ios \
-            -p easyssh-core -p easyssh-crypto -p easyssh-ssh -p easyssh-store -p easyssh-vault -p easyssh-engine \
+            -p easyssh-core -p easyssh-crypto -p easyssh-ssh -p easyssh-store -p easyssh-vault -p easyssh-engine -p easyssh-mobile-keys \
             2>&1 | tee logs/ios-engine-check.log
       - name: App library for the iOS simulator
         run: |

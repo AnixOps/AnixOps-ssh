@@ -1,16 +1,28 @@
 import { cn } from "@/lib/utils";
 
-/** An on/off switch with a 44 px touch target around the 40 x 24 track
- *  (layout.md: touch targets are never smaller than 44 x 44). */
-export function MobileSwitch({ on, label, onToggle }: { on: boolean; label: string; onToggle: () => void }) {
+/** The switch of the settings rows, with a 44 x 44 touch target around the
+ *  usual 40 x 24 track (layout.md: touch targets are never smaller than 44).
+ *  `label` is its accessible name. */
+export function MobileSwitch({
+  on,
+  label,
+  onClick,
+  disabled,
+}: {
+  on: boolean;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
       aria-label={label}
-      onClick={onToggle}
-      className="-mr-2 flex h-11 w-14 shrink-0 items-center justify-center"
+      onClick={onClick}
+      disabled={disabled}
+      className="flex size-11 shrink-0 items-center justify-center disabled:opacity-40"
     >
       <span
         aria-hidden

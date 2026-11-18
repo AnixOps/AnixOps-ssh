@@ -1,4 +1,4 @@
-import { ChevronRight, Plus, Search, Server, SlidersHorizontal } from "lucide-react";
+import { ChevronRight, Plus, Search, Server, Settings } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,8 +42,8 @@ export function MobileHostList({
         <div className="px-safe flex h-14 items-center justify-between gap-2">
           <h1 className="truncate text-title-3">{t.mobileHostsTitle}</h1>
           <div className="flex items-center">
-            <Button variant="quiet" size="icon-lg" aria-label={t.mobileSettingsTitle} onClick={onSettings}>
-              <SlidersHorizontal />
+            <Button variant="quiet" size="icon-lg" aria-label={t.mobileSettings} onClick={onSettings}>
+              <Settings />
             </Button>
             <Button variant="quiet" size="icon-lg" aria-label={t.mobileAddHost} onClick={onAdd}>
               <Plus />

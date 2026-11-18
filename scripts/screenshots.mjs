@@ -52,9 +52,14 @@ const mobileScenes = [
   { name: "mobile-add-host", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, click: "Add host" },
   { name: "mobile-terminal", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, open: "prod-web-01", type: ["ls"] },
   { name: "mobile-terminal-ctrl", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, open: "prod-web-01", pressCtrl: true },
-  { name: "mobile-settings", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, taps: ["^Settings$"] },
   { name: "mobile-bar-editor", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, taps: ["^Settings$", "Customise the key bar"] },
   { name: "mobile-terminal-landscape", query: "mobile=1&lang=en", viewport: { width: 844, height: 390 }, open: "prod-web-01", type: ["ls"] },
+  { name: "mobile-add-host-login", query: "mobile=1&lang=en", viewport: { width: 390, height: 844 }, click: "Add host", scrollEnd: true },
+  { name: "mobile-vault-first-run", query: "mobile=1&lang=en&vault=first-run", viewport: { width: 390, height: 844 } },
+  { name: "mobile-vault-locked", query: "mobile=1&lang=en&vault=locked", viewport: { width: 390, height: 844 } },
+  { name: "mobile-vault-locked-bio", query: "mobile=1&lang=en&vault=bio", viewport: { width: 390, height: 844 } },
+  { name: "mobile-settings", query: "mobile=1&lang=en&vault=bio-off", viewport: { width: 390, height: 844 }, click: "Settings" },
+  { name: "mobile-settings-passphrase", query: "mobile=1&lang=en&vault=bio-off", viewport: { width: 390, height: 844 }, click: "Settings", click2: "Change passphrase", scrollEnd: true },
   { name: "mobile-hostkey", query: "mobile=1&lang=en&hostkey=changed", viewport: { width: 390, height: 844 } },
   { name: "mobile-tablet", query: "mobile=1&lang=en", viewport: { width: 1024, height: 768 }, open: "prod-web-01", type: ["ls"] },
 ];
@@ -139,6 +144,13 @@ for (const colorScheme of ["light", "dark"]) {
     await page.goto(`${baseUrl}/?${scene.query}`);
     await page.waitForLoadState("networkidle");
     if (scene.click) await page.getByRole("button", { name: scene.click, exact: true }).first().click();
+    if (scene.click2) await page.getByRole("button", { name: scene.click2, exact: true }).first().click();
+    if (scene.scrollEnd) {
+      await page.evaluate(() => {
+        for (const element of document.querySelectorAll("form, [role=dialog]"))
+          for (const child of element.querySelectorAll("div")) child.scrollTop = child.scrollHeight;
+      });
+    }
     if (scene.open) {
       await page.getByRole("button", { name: new RegExp(scene.open) }).first().click();
       await page.locator(".xterm-screen").waitFor();
