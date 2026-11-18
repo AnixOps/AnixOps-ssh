@@ -69,10 +69,22 @@ rust {
     rootDirRel = "../../../"
 }
 
+// Version of rustls-platform-verifier-android in the workspace's Cargo.lock
+// (four levels up from this module).
+val rustlsVerifierVersion: Provider<String> =
+    providers.fileContents(layout.projectDirectory.file("../../../../Cargo.lock")).asText.map { text ->
+        val lines = text.lines()
+        val at = lines.indexOfFirst { it.trim() == "name = \"rustls-platform-verifier-android\"" }
+        check(at >= 0) { "rustls-platform-verifier-android not found in Cargo.lock" }
+        lines.drop(at + 1).first { it.trimStart().startsWith("version = ") }
+            .substringAfter('"').substringBefore('"')
+    }
+
 dependencies {
     // The Kotlin half of rustls-platform-verifier (repository in the root
-    // build file). The newest published release is the one the crate expects.
-    implementation("rustls:rustls-platform-verifier:latest.release")
+    // build file). Its version must equal the Rust crate's, so it is read from
+    // Cargo.lock, as the crate's README prescribes.
+    implementation("rustls:rustls-platform-verifier:${rustlsVerifierVersion.get()}")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")
