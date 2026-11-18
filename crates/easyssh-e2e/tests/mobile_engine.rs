@@ -331,6 +331,8 @@ async fn the_terminal_the_files_and_a_forward_share_one_connection() {
     entry.remove(&dir, true).await.expect("rmdir");
     assert!(entry.list(&dir).await.is_err());
     engine.files().close(&sftp_id).await;
+    // The handle itself holds a lease on the connection until it is dropped.
+    drop(entry);
     engine.close(&shell);
     loop {
         if let Event::Exit(_) = next(&mut receiver).await {

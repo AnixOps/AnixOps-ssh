@@ -43,8 +43,7 @@ its socket protocol; the phone calls it in-process. What that gives the phone:
 - **Sync.** Sign up and sign in to your own server, sync now, the devices of the
   account and the safety number. HTTPS verification uses the platform trust
   store (`rustls-platform-verifier`; on Android its Kotlin half comes from the
-  Gradle repository in `src-tauri/gen/android/build.gradle.kts`, at the version
-  `Cargo.lock` pins). Team vaults and host history are desktop screens for now
+  Gradle repository in `src-tauri/gen/android/build.gradle.kts`, newest release). Team vaults and host history are desktop screens for now
   and answer `unavailable`.
 - **Navigation.** A tab bar with Hosts, Forwards and Sync; a host opens as a
   terminal or a file browser, and the terminal stays alive while the files are
