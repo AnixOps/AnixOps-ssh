@@ -5,9 +5,17 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { saveTunnel, type Host, type Tunnel } from "@/lib/backend";
 import { t } from "@/lib/i18n";
-import { checkDraft, draftOf, emptyDraft } from "@/lib/mobileForwards";
+import { checkDraft, draftOf, emptyDraft, FORWARD_KINDS } from "@/lib/mobileForwards";
+import { cn } from "@/lib/utils";
 
-/** A local port forward: a port on this phone, and the target a host reaches.
+const kindLabel = { local: () => t.tunnelLocal, remote: () => t.tunnelRemote, dynamic: () => t.tunnelDynamic };
+const kindHint = {
+  local: () => t.mobileForwardKindLocalHint,
+  remote: () => t.mobileForwardKindRemoteHint,
+  dynamic: () => t.mobileForwardKindDynamicHint,
+};
+
+/** A port forward: local (`-L`), remote (`-R`) or a SOCKS proxy (`-D`).
  *  Full screen with the primary action on top of Cancel (actions.md O5). */
 export function MobileForwardForm({
   tunnel,
@@ -24,6 +32,8 @@ export function MobileForwardForm({
   const [draft, setDraft] = useState(() => (tunnel ? draftOf(tunnel) : emptyDraft(choices[0]?.id ?? "")));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const remote = draft.kind === "remote";
+  const bindLabel = remote ? t.mobileForwardHostPort : t.mobileForwardPhonePort;
   const set = (change: Partial<typeof draft>) => setDraft((current) => ({ ...current, ...change }));
 
   const submit = (event: FormEvent) => {
@@ -32,11 +42,18 @@ export function MobileForwardForm({
     if (!checked.ok) {
       const label = {
         host: t.tunnelVia,
-        bindPort: t.mobileForwardPhonePort,
-        targetHost: t.tunnelTargetHost,
+        bindPort: bindLabel,
+        privilegedPort: bindLabel,
+        targetHost: remote ? t.mobileForwardPhoneTarget : t.tunnelTargetHost,
         targetPort: t.tunnelTargetPort,
       }[checked.problem];
-      return setError(`${label}: ${checked.problem === "host" ? t.required : t.mobileForwardInvalid}`);
+      const reason =
+        checked.problem === "host"
+          ? t.required
+          : checked.problem === "privilegedPort"
+            ? t.mobileForwardPrivileged
+            : t.mobileForwardInvalid;
+      return setError(`${label}: ${reason}`);
     }
     setSaving(true);
     saveTunnel({ ...checked.input, id: tunnel?.id ?? null })
@@ -56,6 +73,25 @@ export function MobileForwardForm({
       </header>
       <div className="px-safe flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto py-5">
         {error && <Notice>{error}</Notice>}
+        <Field label={t.mobileForwardKind} hint={kindHint[draft.kind]()} group>
+          <div role="radiogroup" aria-label={t.mobileForwardKind} className="flex gap-1 rounded-pill bg-fill-1 p-0.5">
+            {FORWARD_KINDS.map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                role="radio"
+                aria-checked={draft.kind === kind}
+                onClick={() => set({ kind })}
+                className={cn(
+                  "h-11 min-w-11 flex-1 rounded-pill px-3 text-callout transition-colors duration-toggle ease-standard",
+                  draft.kind === kind ? "bg-bg-elevated text-label-1 shadow-1" : "text-label-2",
+                )}
+              >
+                {kindLabel[kind]()}
+              </button>
+            ))}
+          </div>
+        </Field>
         <Field label={t.tunnelVia}>
           <Select className="h-11" value={draft.hostId} onChange={(event) => set({ hostId: event.target.value })}>
             {choices.map((host) => (
@@ -65,7 +101,7 @@ export function MobileForwardForm({
             ))}
           </Select>
         </Field>
-        <Field label={t.mobileForwardPhonePort} hint={t.mobileForwardPhonePortHint}>
+        <Field label={bindLabel} hint={remote ? t.mobileForwardHostPortHint : t.mobileForwardPhonePortHint}>
           <Input
             className="h-11"
             value={draft.bindPort}
@@ -74,7 +110,14 @@ export function MobileForwardForm({
             placeholder="8080"
           />
         </Field>
-        <Field label={t.tunnelTargetHost} hint={t.mobileForwardTargetHint}>
+        {draft.kind === "dynamic" ? (
+          <p className="text-callout text-label-3">{t.mobileForwardSocksHint}</p>
+        ) : (
+          <>
+        <Field
+          label={remote ? t.mobileForwardPhoneTarget : t.tunnelTargetHost}
+          hint={remote ? t.mobileForwardPhoneTargetHint : t.mobileForwardTargetHint}
+        >
           <Input
             className="h-11"
             value={draft.targetHost}
@@ -94,6 +137,8 @@ export function MobileForwardForm({
             placeholder="5432"
           />
         </Field>
+          </>
+        )}
         <Field label={t.snippetName} hint={t.optional}>
           <Input
             className="h-11"

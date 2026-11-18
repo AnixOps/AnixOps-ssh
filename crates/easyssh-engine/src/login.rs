@@ -106,8 +106,8 @@ pub fn saved_login(
     Ok(login)
 }
 
-/// `target` with the vault's saved login filled in: the key of the host and of
-/// each jump hop that is a saved host, and the host's saved password. Every
+/// `target` with the vault's saved login filled in: the key and password of the
+/// host and of each jump hop that is a saved host. Every
 /// way of opening a host (terminal, files, forward) goes through this, so they
 /// all make the same connection and share it. Nothing saved leaves the target
 /// as it is; a saved key with a locked vault is the error `vault_locked`.
@@ -120,6 +120,7 @@ pub fn with_saved_login(
         if !hop.host_id.starts_with("jump:") {
             let login = saved_login(secrets, &hop.host_id, hop)?;
             hop.identity = login.identity;
+            hop.saved_password = login.password;
         }
     }
     let login = saved_login(secrets, &target.host_id, &target)?;
@@ -295,7 +296,9 @@ mod tests {
         assert!(opened.identity.is_some() && opened.saved_password.is_some());
         // A hop that is a saved host brings its key; a bare address has none.
         assert!(opened.jump[0].identity.is_some());
+        assert!(opened.jump[0].saved_password.is_some());
         assert!(opened.jump[1].identity.is_none());
+        assert!(opened.jump[1].saved_password.is_none());
         // A locked vault with a saved key stops the connection before it starts.
         let error = with_saved_login(
             &source(Saved {

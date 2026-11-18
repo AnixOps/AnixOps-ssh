@@ -190,8 +190,9 @@ impl Prompts {
 pub struct PromptInteraction {
     pub prompts: Arc<Prompts>,
     pub label: String,
-    /// The host's saved password, offered once when the server asks for it.
-    pub saved_password: Option<Arc<SavedPassword>>,
+    /// The saved passwords of the host and of its jump hosts, each offered
+    /// once, and only at the prompt of its own account.
+    pub saved_passwords: Vec<Arc<SavedPassword>>,
 }
 
 #[async_trait]
@@ -218,7 +219,7 @@ impl Interaction for PromptInteraction {
     }
 
     async fn password(&self, prompt: &str) -> Option<String> {
-        if let Some(saved) = self.saved_password.as_ref().and_then(|s| s.take(prompt)) {
+        if let Some(saved) = self.saved_passwords.iter().find_map(|s| s.take(prompt)) {
             return Some(saved);
         }
         self.prompts
@@ -305,6 +306,58 @@ mod tests {
         prompts.reply_secret(payload["id"].as_u64().unwrap(), Some("pw".into()));
         assert_eq!(task.await.unwrap().as_deref(), Some("pw"));
         assert_eq!(lock(&seen)[1].0, "askpass.resolved");
+    }
+
+    #[tokio::test]
+    async fn each_jump_hop_and_the_host_answer_their_own_password_prompt_from_the_vault() {
+        use easyssh_crypto::SecretText;
+        use easyssh_store::{SecretFlags, StoredSecrets};
+        use easyssh_vault::{SecretSource, VaultError};
+
+        struct Vault;
+        impl SecretSource for Vault {
+            fn host_secrets(&self, id: &str) -> Result<StoredSecrets, VaultError> {
+                Ok(StoredSecrets {
+                    password: Some(SecretText::new(format!("pw-of-{id}"))),
+                    private_key: None,
+                    passphrase: None,
+                })
+            }
+            fn secret_flags(&self, _: &str) -> Result<SecretFlags, VaultError> {
+                Ok(SecretFlags {
+                    password: true,
+                    private_key: false,
+                    passphrase: false,
+                })
+            }
+        }
+        let vault: Arc<dyn easyssh_vault::SecretSource> = Arc::new(Vault);
+        let saved = |account: &str, id: &str| {
+            Arc::new(SavedPassword::new(account.into(), vault.clone(), id.into()))
+        };
+        let (emit, seen) = recording();
+        let interaction = PromptInteraction {
+            prompts: Prompts::new(emit),
+            label: "inner".into(),
+            saved_passwords: vec![saved("ops@bastion", "bastion"), saved("me@inner", "inner")],
+        };
+        // The jump host's prompt gets the jump host's password, the target's
+        // prompt the target's; nobody is asked.
+        assert_eq!(
+            interaction
+                .password("ops@bastion's password: ")
+                .await
+                .as_deref(),
+            Some("pw-of-bastion")
+        );
+        assert_eq!(
+            interaction
+                .password("me@inner's password: ")
+                .await
+                .as_deref(),
+            Some("pw-of-inner")
+        );
+        assert!(lock(&seen).is_empty());
     }
 
     #[tokio::test]

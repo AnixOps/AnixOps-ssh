@@ -1,10 +1,15 @@
-import type { Tunnel, TunnelInput } from "./backend";
+import type { Tunnel, TunnelInput, TunnelKind } from "./backend";
 
-/** Pure logic of the phone's port-forward form. A phone offers local forwards
- *  (`ssh -L`): a port on the phone that reaches a target through a host. Remote
- *  forwards and SOCKS proxies stay on the desktop. */
+/** Pure logic of the phone's port-forward form. Three kinds, all on the host's
+ *  one shared connection:
+ *  - local (`ssh -L`): a port on the phone that reaches a target as the host sees it;
+ *  - remote (`ssh -R`): a port on the host that reaches a target as the phone sees it;
+ *  - dynamic (`ssh -D`): a SOCKS5 proxy on the phone, no target.
+ *  Android and iOS apps cannot listen on a port below 1024, so a port that
+ *  listens on the phone (local, dynamic) must be 1024 or more. */
 
 export interface ForwardDraft {
+  kind: TunnelKind;
   name: string;
   hostId: string;
   bindPort: string;
@@ -12,14 +17,20 @@ export interface ForwardDraft {
   targetPort: string;
 }
 
-export type ForwardProblem = "host" | "bindPort" | "targetHost" | "targetPort";
+export type ForwardProblem = "host" | "bindPort" | "privilegedPort" | "targetHost" | "targetPort";
+
+export const FORWARD_KINDS: TunnelKind[] = ["local", "remote", "dynamic"];
+
+/** The lowest port an app may listen on a phone. */
+export const FIRST_PHONE_PORT = 1024;
 
 export function emptyDraft(hostId = ""): ForwardDraft {
-  return { name: "", hostId, bindPort: "", targetHost: "localhost", targetPort: "" };
+  return { kind: "local", name: "", hostId, bindPort: "", targetHost: "localhost", targetPort: "" };
 }
 
 export function draftOf(tunnel: Tunnel): ForwardDraft {
   return {
+    kind: tunnel.kind,
     name: tunnel.name,
     hostId: tunnel.hostId,
     bindPort: String(tunnel.bindPort),
@@ -55,16 +66,21 @@ export function checkDraft(
   if (!draft.hostId) return { ok: false, problem: "host" };
   const bindPort = port(draft.bindPort);
   if (bindPort === null) return { ok: false, problem: "bindPort" };
-  const targetHost = draft.targetHost.trim();
-  if (!targetHost || /\s/.test(targetHost)) return { ok: false, problem: "targetHost" };
-  const targetPort = port(draft.targetPort);
-  if (targetPort === null) return { ok: false, problem: "targetPort" };
+  if (draft.kind !== "remote" && bindPort < FIRST_PHONE_PORT) return { ok: false, problem: "privilegedPort" };
+  let targetHost: string | null = null;
+  let targetPort: number | null = null;
+  if (draft.kind !== "dynamic") {
+    targetHost = draft.targetHost.trim();
+    if (!targetHost || /\s/.test(targetHost)) return { ok: false, problem: "targetHost" };
+    targetPort = port(draft.targetPort);
+    if (targetPort === null) return { ok: false, problem: "targetPort" };
+  }
   return {
     ok: true,
     input: {
-      name: draft.name.trim() || describe({ bindPort, targetHost, targetPort }),
+      name: draft.name.trim() || describe({ kind: draft.kind, bindPort, targetHost, targetPort }),
       hostId: draft.hostId,
-      kind: "local",
+      kind: draft.kind,
       bindAddress: null,
       bindPort,
       targetHost,

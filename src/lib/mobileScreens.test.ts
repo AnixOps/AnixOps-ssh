@@ -201,6 +201,38 @@ describe("forward form", () => {
     expect(checkDraft({ ...filled, targetPort: "" })).toEqual({ ok: false, problem: "targetPort" });
   });
 
+  it("a remote forward listens on the host, so any port is fine and the target is on the phone", () => {
+    const remote = { ...filled, kind: "remote" as const, bindPort: "80", targetHost: "localhost", targetPort: "3000" };
+    const result = checkDraft(remote);
+    expect(result.ok && result.input).toMatchObject({
+      name: "80 ← localhost:3000",
+      kind: "remote",
+      bindPort: 80,
+      targetHost: "localhost",
+      targetPort: 3000,
+    });
+    expect(checkDraft({ ...remote, targetPort: "" })).toEqual({ ok: false, problem: "targetPort" });
+  });
+
+  it("a SOCKS proxy needs only a port and drops the target", () => {
+    const socks = { ...filled, kind: "dynamic" as const, bindPort: "1080", targetHost: "", targetPort: "" };
+    const result = checkDraft(socks);
+    expect(result.ok && result.input).toMatchObject({
+      name: "1080 SOCKS",
+      kind: "dynamic",
+      bindPort: 1080,
+      targetHost: null,
+      targetPort: null,
+    });
+  });
+
+  it("a port that listens on the phone must be 1024 or more", () => {
+    expect(checkDraft({ ...filled, bindPort: "80" })).toEqual({ ok: false, problem: "privilegedPort" });
+    expect(checkDraft({ ...filled, kind: "dynamic", bindPort: "1023" })).toEqual({ ok: false, problem: "privilegedPort" });
+    expect(checkDraft({ ...filled, kind: "dynamic", bindPort: "1024" }).ok).toBe(true);
+    expect(checkDraft({ ...filled, bindPort: "0" })).toEqual({ ok: false, problem: "bindPort" });
+  });
+
   it("round-trips a saved forward into a draft", () => {
     const tunnel: Tunnel = {
       id: "t",
@@ -214,12 +246,14 @@ describe("forward form", () => {
       status: { state: "stopped" },
     };
     expect(draftOf(tunnel)).toEqual({
+      kind: "local",
       name: "db",
       hostId: "h1",
       bindPort: "5432",
       targetHost: "db.internal",
       targetPort: "5433",
     });
+    expect(draftOf({ ...tunnel, kind: "dynamic", targetHost: null, targetPort: null }).kind).toBe("dynamic");
     expect(describeForward(tunnel)).toBe("5432 → db.internal:5433");
     expect(describeForward({ ...tunnel, kind: "dynamic", targetHost: null, targetPort: null })).toBe("5432 SOCKS");
     expect(describeForward({ ...tunnel, kind: "remote" })).toBe("5432 ← db.internal:5433");

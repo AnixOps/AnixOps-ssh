@@ -206,7 +206,12 @@ impl Engine {
         let interaction = PromptInteraction {
             prompts: self.prompts.clone(),
             label: target.label.clone(),
-            saved_password: target.saved_password.clone(),
+            saved_passwords: target
+                .jump
+                .iter()
+                .chain(std::iter::once(target))
+                .filter_map(|t| t.saved_password.clone())
+                .collect(),
         };
         Session::connect_via(&hops, self.params(target), &interaction)
             .await

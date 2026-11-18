@@ -33,9 +33,10 @@ function statusText(status: TunnelStatus): string {
   }
 }
 
-/** The port forwards of the phone (`ssh -L`): a port on the phone that reaches
- *  a service behind a saved host. A forward runs while the app does; the
- *  switch starts and stops it. */
+/** The port forwards of the phone: local (`ssh -L`), remote (`ssh -R`) and a
+ *  SOCKS proxy (`ssh -D`) through a saved host. A forward runs while the app
+ *  does (the system may suspend it in the background); the switch starts and
+ *  stops it, and a failed one shows why. */
 export function MobileForwards({ hosts }: { hosts: Host[] }) {
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -162,8 +163,6 @@ export function MobileForwards({ hosts }: { hosts: Host[] }) {
                       key: "edit",
                       label: t.edit,
                       icon: <Pencil />,
-                      // Remote forwards and SOCKS proxies are made on the desktop.
-                      disabled: tunnel.kind !== "local",
                       onSelect: () => setEditing(tunnel),
                     },
                     "separator",

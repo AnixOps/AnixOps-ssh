@@ -381,20 +381,34 @@ pub fn target_for(config: &AppConfig, host_id: &str) -> Result<Target, String> {
     })
 }
 
-/// What the tunnel form submits: a local forward through a saved host.
+/// What the tunnel form submits: a forward through a saved host.
+///
+/// - `Local` (`-L`): listens on the phone's loopback at `bind_port`, connects
+///   to `target_host:target_port` as the server sees it.
+/// - `Remote` (`-R`): the server listens on `bind_port` (its loopback) and
+///   connects back to `target_host:target_port` as the phone sees it.
+/// - `Dynamic` (`-D`): a SOCKS5 proxy on the phone's loopback at `bind_port`;
+///   it has no target.
 #[derive(Debug, Clone)]
 pub struct NewTunnel {
     pub id: Option<String>,
     pub name: String,
     pub host_id: String,
+    pub kind: TunnelKind,
     pub bind_port: u16,
     pub target_host: String,
     pub target_port: u16,
 }
 
-/// Saves a local port forward (`-L bind_port:target_host:target_port`) and
-/// returns its id. It listens on the loopback interface of the phone.
+/// Saves a port forward and returns its id. A forward that listens on the
+/// phone (`-L`, `-D`) binds the loopback interface and cannot use a port below
+/// 1024: Android and iOS do not let an app have one. Port 0 lets the system
+/// choose. A remote forward's port is the server's, so it may be any port.
 pub fn save_tunnel(store: &Store, input: &NewTunnel) -> Result<String, String> {
+    let dynamic = input.kind == TunnelKind::Dynamic;
+    if input.kind != TunnelKind::Remote && (1..1024).contains(&input.bind_port) {
+        return Err("a phone cannot listen on a port below 1024; use 1024 or higher".into());
+    }
     let tunnel = Tunnel {
         id: input
             .id
@@ -402,11 +416,11 @@ pub fn save_tunnel(store: &Store, input: &NewTunnel) -> Result<String, String> {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         name: input.name.trim().to_owned(),
         host_id: input.host_id.clone(),
-        kind: TunnelKind::Local,
+        kind: input.kind,
         bind_address: None,
         bind_port: input.bind_port,
-        target_host: Some(input.target_host.trim().to_owned()),
-        target_port: Some(input.target_port),
+        target_host: (!dynamic).then(|| input.target_host.trim().to_owned()),
+        target_port: (!dynamic).then_some(input.target_port),
     };
     if tunnel.name.is_empty() || tunnel.name.chars().any(char::is_control) {
         return Err("the forward needs a name".into());
@@ -710,6 +724,7 @@ mod tests {
                 id: None,
                 name: "Postgres".into(),
                 host_id: host.clone(),
+                kind: TunnelKind::Local,
                 bind_port: 5433,
                 target_host: "localhost".into(),
                 target_port: 5432,
@@ -729,6 +744,7 @@ mod tests {
                     id: None,
                     name: name.into(),
                     host_id: host_id.into(),
+                    kind: TunnelKind::Local,
                     bind_port: bind,
                     target_host: "localhost".into(),
                     target_port: target,
@@ -738,6 +754,51 @@ mod tests {
         assert!(bad("", 1, 1, &host).is_err());
         assert!(bad("x", 0, 80, &host).is_err());
         assert!(bad("x", 80, 0, &host).is_err());
-        assert!(bad("x", 80, 80, "missing").is_err());
+        assert!(bad("x", 8080, 80, "missing").is_err());
+        // A phone cannot listen below 1024.
+        let low = bad("x", 80, 80, &host).unwrap_err();
+        assert!(low.contains("1024"), "{low}");
+    }
+
+    #[test]
+    fn remote_and_socks_forwards_are_saved_with_the_right_shape() {
+        let (_dir, store) = store();
+        let host = add_host(&store, &new_host("db", "10.0.0.9", Some("me"), 22)).unwrap();
+        let save = |kind, bind, target_host: &str, target_port| {
+            save_tunnel(
+                &store,
+                &NewTunnel {
+                    id: None,
+                    name: "t".into(),
+                    host_id: host.clone(),
+                    kind,
+                    bind_port: bind,
+                    target_host: target_host.into(),
+                    target_port,
+                },
+            )
+        };
+        // -R: the server's port may be a privileged one; the target is on the phone.
+        save(TunnelKind::Remote, 80, "127.0.0.1", 8000).unwrap();
+        assert_eq!(
+            store.load_app_config().unwrap().tunnels[0]
+                .forward_spec()
+                .unwrap(),
+            "80:127.0.0.1:8000"
+        );
+        assert!(save(TunnelKind::Remote, 9000, "", 0).is_err());
+        // -D: only a port; any target the form sent is dropped.
+        save(TunnelKind::Dynamic, 1080, "ignored", 9).unwrap();
+        let config = store.load_app_config().unwrap();
+        let socks = config
+            .tunnels
+            .iter()
+            .find(|t| t.kind == TunnelKind::Dynamic)
+            .unwrap();
+        assert_eq!(socks.forward_spec().unwrap(), "1080");
+        assert_eq!((&socks.target_host, socks.target_port), (&None, None));
+        assert_eq!(socks.bind_address, None);
+        assert!(save(TunnelKind::Dynamic, 1023, "", 0).is_err());
+        assert!(save(TunnelKind::Dynamic, 0, "", 0).is_err());
     }
 }

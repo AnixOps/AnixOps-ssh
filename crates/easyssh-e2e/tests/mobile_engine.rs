@@ -12,10 +12,13 @@ use easyssh_e2e::{
 use easyssh_engine::prompts::Prompts;
 use easyssh_engine::{Engine, ShellSink, Target};
 use easyssh_ssh::{MemoryIdentity, MemoryKnownHosts};
+use easyssh_store::{SecretFlags, StoredSecrets};
+use easyssh_vault::{SecretSource, VaultError};
 use serde_json::Value;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
-use tokio::net::TcpStream;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
 enum Event {
@@ -442,5 +445,193 @@ async fn a_host_behind_a_jump_host_opens_through_it_with_its_own_questions() {
     let (sftp_id, home) = engine.open_files(&behind).await.expect("files");
     assert_eq!(home, "/home/keyuser");
     engine.files().close(&sftp_id).await;
+    engine.shutdown().await;
+}
+
+/// A vault that holds only a password, for every host.
+struct PasswordVault(&'static str);
+
+impl SecretSource for PasswordVault {
+    fn host_secrets(&self, _: &str) -> Result<StoredSecrets, VaultError> {
+        Ok(StoredSecrets {
+            password: Some(easyssh_crypto::SecretText::new(self.0)),
+            private_key: None,
+            passphrase: None,
+        })
+    }
+    fn secret_flags(&self, _: &str) -> Result<SecretFlags, VaultError> {
+        Ok(SecretFlags {
+            password: true,
+            private_key: false,
+            passphrase: false,
+        })
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_jump_host_uses_its_own_saved_password_and_nobody_is_asked() {
+    let e2e = E2e::new();
+    let key = std::fs::read_to_string(&e2e.key).expect("the test key");
+    let vault: Arc<dyn SecretSource> = Arc::new(PasswordVault(PW_PASSWORD));
+    // The bastion is a saved host that logs in with a password (pwuser); the
+    // host behind it uses a key (keyuser, a bare address with nothing saved).
+    // with_saved_login must hand the bastion its saved password.
+    let bastion = Target {
+        host_id: "bastion".into(),
+        label: "bastion".into(),
+        host: "127.0.0.1".into(),
+        port: BASTION_PORT,
+        user: PW_USER.into(),
+        identity: None,
+        jump: Vec::new(),
+        saved_password: None,
+    };
+    let behind = Target {
+        host_id: "inner".into(),
+        label: "inner".into(),
+        host: "target".into(),
+        port: 22,
+        user: "keyuser".into(),
+        identity: Some(MemoryIdentity::new("inner key", key, None)),
+        jump: vec![bastion],
+        saved_password: None,
+    };
+    let mut behind = easyssh_engine::with_saved_login(&vault, behind).expect("saved login");
+    assert!(behind.jump[0].saved_password.is_some());
+    // Keep the inner host's own (vault) password out of it: it logs in by key.
+    behind.saved_password = None;
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    // Were a question asked, it would be answered wrongly and the login fail.
+    let engine = engine("not-the-password", asked.clone());
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+    let id = engine
+        .open_shell(behind, 80, 24, Arc::new(Channelled(sender)))
+        .await
+        .expect("open through the jump host with its saved password");
+    engine.write(&id, b"hostname; exit\r").unwrap();
+    let mut output = String::new();
+    while let Event::Data(text) = next(&mut receiver).await {
+        output.push_str(&text);
+    }
+    assert!(output.contains("target"), "{output:?}");
+    let asked = asked.lock().unwrap().clone();
+    assert!(!asked.iter().any(|n| n == "askpass.prompt"), "{asked:?}");
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_dynamic_and_a_remote_forward_run_on_the_shared_connection() {
+    let events: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+    let engine = engine_with_events(PW_PASSWORD, Arc::default(), events.clone());
+    let target = target();
+
+    // -D: a SOCKS5 proxy on the phone that reaches the echo service as the
+    // server sees it.
+    let socks = Tunnel {
+        id: "e2e-socks".into(),
+        name: "socks".into(),
+        host_id: target.host_id.clone(),
+        kind: TunnelKind::Dynamic,
+        bind_address: None,
+        bind_port: 0,
+        target_host: None,
+        target_port: None,
+    };
+    let port = within("socks", engine.start_tunnel(&socks, &target))
+        .await
+        .expect("start the SOCKS proxy");
+    assert_ne!(port, 0);
+    wait_for_port_open(port, Duration::from_secs(10)).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    within("socks5", async {
+        stream.write_all(&[5, 1, 0]).await.unwrap();
+        let mut reply = [0u8; 2];
+        stream.read_exact(&mut reply).await.unwrap();
+        assert_eq!(reply, [5, 0]);
+        let mut request = vec![5, 1, 0, 1, 127, 0, 0, 1];
+        request.extend_from_slice(&ECHO_PORT.to_be_bytes());
+        stream.write_all(&request).await.unwrap();
+        let mut reply = [0u8; 10];
+        stream.read_exact(&mut reply).await.unwrap();
+        assert_eq!(reply[..2], [5, 0], "{reply:?}");
+    })
+    .await;
+    echo_roundtrip(&mut stream, "socks-on-the-phone").await;
+    drop(stream);
+
+    // -R: the server listens and calls back to a service on the phone.
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local_port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                if reader.read_line(&mut line).await.is_ok() {
+                    let _ = reader
+                        .get_mut()
+                        .write_all(format!("phone-pong:{line}").as_bytes())
+                        .await;
+                }
+            });
+        }
+    });
+    let remote = Tunnel {
+        id: "e2e-remote".into(),
+        name: "remote".into(),
+        host_id: target.host_id.clone(),
+        kind: TunnelKind::Remote,
+        bind_address: Some("127.0.0.1".into()),
+        bind_port: 17102,
+        target_host: Some("127.0.0.1".into()),
+        target_port: Some(local_port),
+    };
+    let server_port = within("remote", engine.start_tunnel(&remote, &target))
+        .await
+        .expect("start the remote forward");
+    assert_eq!(server_port, 17102);
+    let lease = engine.lease(&target).await.expect("the shared connection");
+    let ask = "timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/17102; echo ping >&3; head -n1 <&3'";
+    let answer = within("remote answers", async {
+        loop {
+            let output = lease.session().exec(ask).await.expect("exec");
+            let text = output.stdout_text();
+            if text.contains("phone-pong") {
+                return text;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    })
+    .await;
+    assert_eq!(answer, "phone-pong:ping\n");
+    drop(lease);
+
+    // A forward to a port that is taken fails with a reason, not silence.
+    let busy = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let clash = Tunnel {
+        id: "e2e-clash".into(),
+        bind_port: busy.local_addr().unwrap().port(),
+        kind: TunnelKind::Local,
+        target_host: Some("127.0.0.1".into()),
+        target_port: Some(ECHO_PORT),
+        ..socks.clone()
+    };
+    assert!(engine.start_tunnel(&clash, &target).await.is_err());
+    let report = engine.tunnels().list();
+    let row = report["tunnels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "e2e-clash")
+        .expect("the failed forward is listed");
+    assert_eq!(row["state"], "failed");
+    assert!(row["error"].as_str().is_some_and(|e| !e.is_empty()));
+
+    assert_eq!(engine.connections().await["opened"], 1);
+    engine.stop_tunnel("e2e-socks").await;
+    engine.stop_tunnel("e2e-remote").await;
+    wait_for_port_shut(port, Duration::from_secs(10)).await;
     engine.shutdown().await;
 }
