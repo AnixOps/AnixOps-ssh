@@ -74,6 +74,15 @@ pub struct UnlockMethodView {
     name: String,
     available: bool,
     enabled: bool,
+    items: Vec<UnlockItemView>,
+}
+
+/// One security key added to the vault.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlockItemView {
+    id: String,
+    label: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -100,6 +109,18 @@ fn status_view(value: &Value) -> VaultStatusView {
                         name: m["name"].as_str().unwrap_or_default().to_owned(),
                         available: m["available"].as_bool().unwrap_or(false),
                         enabled: m["enabled"].as_bool().unwrap_or(false),
+                        items: m["items"]
+                            .as_array()
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .map(|i| UnlockItemView {
+                                        id: i["id"].as_str().unwrap_or_default().to_owned(),
+                                        label: i["label"].as_str().unwrap_or_default().to_owned(),
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
                     })
                     .collect()
             })
@@ -130,6 +151,14 @@ fn local_status(vault: &Vault) -> VaultStatusView {
                 name: m.name.to_owned(),
                 available: m.available,
                 enabled: m.enabled,
+                items: m
+                    .items
+                    .iter()
+                    .map(|i| UnlockItemView {
+                        id: i.id.clone(),
+                        label: i.label.clone(),
+                    })
+                    .collect(),
             })
             .collect(),
     }
@@ -232,6 +261,57 @@ pub async fn vault_enable_unlock(
     blocking(move || {
         let vault = app_vault();
         vault.enable_unlock(&method, &passphrase)?;
+        Ok(local_status(&vault))
+    })
+    .await
+}
+
+/// Adds a security key to the vault: needs the vault passphrase once, then
+/// the key asks for a touch (and its PIN). Several keys can be added.
+#[tauri::command]
+pub async fn vault_add_unlock_item(
+    daemon: State<'_, DaemonState>,
+    method: String,
+    passphrase: String,
+    label: String,
+) -> Result<VaultStatusView, String> {
+    let passphrase = Zeroizing::new(passphrase);
+    if let Some(value) = via_daemon(
+        &daemon,
+        "vault.add_unlock_item",
+        json!({"method": &method, "passphrase": &*passphrase, "label": &label}),
+    )
+    .await?
+    {
+        return Ok(status_view(&value));
+    }
+    blocking(move || {
+        let vault = app_vault();
+        vault.add_unlock_item(&method, &passphrase, &label)?;
+        Ok(local_status(&vault))
+    })
+    .await
+}
+
+/// Removes one security key from the vault.
+#[tauri::command]
+pub async fn vault_remove_unlock_item(
+    daemon: State<'_, DaemonState>,
+    method: String,
+    id: String,
+) -> Result<VaultStatusView, String> {
+    if let Some(value) = via_daemon(
+        &daemon,
+        "vault.remove_unlock_item",
+        json!({"method": &method, "id": &id}),
+    )
+    .await?
+    {
+        return Ok(status_view(&value));
+    }
+    blocking(move || {
+        let vault = app_vault();
+        vault.remove_unlock_item(&method, &id)?;
         Ok(local_status(&vault))
     })
     .await

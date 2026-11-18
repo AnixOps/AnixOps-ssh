@@ -131,6 +131,8 @@ fn desktop_run() {
             vault::vault_lock,
             vault::vault_unlock_with,
             vault::vault_enable_unlock,
+            vault::vault_add_unlock_item,
+            vault::vault_remove_unlock_item,
             vault::vault_disable_unlock,
             vault::vault_set_passphrase,
             vault::vault_remove_passphrase,

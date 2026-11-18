@@ -22,6 +22,7 @@ import {
   previewSecretsSet,
   previewSecretsStatus,
   previewVault,
+  type UnlockItem,
   type UnlockMethod,
   type VaultStatus,
 } from "./previewVault";
@@ -525,7 +526,7 @@ export async function unlockForAskpass(id: number, passphrase: string): Promise<
   if (isTauri) await invoke("askpass_unlock", { id, passphrase });
 }
 
-export type { UnlockMethod, VaultStatus };
+export type { UnlockItem, UnlockMethod, VaultStatus };
 
 /** Which secrets a host has saved. The values never come back to the UI. */
 export interface SecretsStatus {
@@ -560,6 +561,20 @@ export async function vaultEnableUnlock(method: string, passphrase: string): Pro
   return isTauri
     ? invoke<VaultStatus>("vault_enable_unlock", { method, passphrase })
     : previewVault.enableUnlock(method, passphrase);
+}
+
+/** Adds a security key to the vault: the passphrase confirms, then the key asks for a touch (twice) and its PIN. */
+export async function vaultAddUnlockItem(method: string, passphrase: string, label: string): Promise<VaultStatus> {
+  return isTauri
+    ? invoke<VaultStatus>("vault_add_unlock_item", { method, passphrase, label })
+    : previewVault.addUnlockItem(method, passphrase, label);
+}
+
+/** Removes one security key from the vault. */
+export async function vaultRemoveUnlockItem(method: string, id: string): Promise<VaultStatus> {
+  return isTauri
+    ? invoke<VaultStatus>("vault_remove_unlock_item", { method, id })
+    : previewVault.removeUnlockItem(method, id);
 }
 
 export async function vaultDisableUnlock(method: string): Promise<VaultStatus> {

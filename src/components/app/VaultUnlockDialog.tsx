@@ -1,4 +1,4 @@
-import { Fingerprint, LockKeyhole } from "lucide-react";
+import { Fingerprint, LockKeyhole, Usb } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -101,7 +101,7 @@ export function VaultUnlockDialog() {
                   disabled={busy}
                   onClick={() => void unlockWith(method.name)}
                 >
-                  <Fingerprint />
+                  {method.name === "security_key" ? <Usb /> : <Fingerprint />}
                   {unlockWithLabel(method.name)}
                 </Button>
               ))}

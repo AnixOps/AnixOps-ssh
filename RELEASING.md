@@ -53,6 +53,7 @@ Install the build from the CI run or release, then:
 - [ ] Ctrl+Shift+K finds a host and opens it.
 - [ ] Quitting the app leaves no `ssh` or `sftp` processes behind.
 - [ ] Windows or macOS: with a passphrase set, enable Windows Hello or Touch ID in Settings, Vault; lock, then unlock with it, and cancel the prompt once (the passphrase still works).
+- [ ] Linux, macOS or Windows 11 with a FIDO2 key that has hmac-secret (YubiKey 5, Nitrokey 3, SoloKeys): Settings, Vault, "Add security key" (passphrase, two touches, PIN if set); lock, unlock with the key; add a second key and remove the first; unplug the key and see the "no security key" message; a key without hmac-secret (for example a U2F-only key) is refused with an explanation and nothing is stored.
 - [ ] With a USB serial adapter (or a loopback), a saved serial host opens from the new-tab menu, types and echoes; on Linux a port without access shows the `dialout` hint.
 
 ## Mobile
