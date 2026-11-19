@@ -10,9 +10,12 @@
 
 use crate::daemon::DaemonState;
 use crate::hosts::{daemon_down, open_store};
+use crate::vault::app_vault;
+use easyssh_services::{settings as service_settings, Service, ServiceForm};
 use easyssh_store::import::{
     import_apply, import_preview, read_import_file, ApplyRequest, PreviewRequest,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use tauri::State;
@@ -106,6 +109,105 @@ pub async fn import_apply_hosts(
     }
     let outcome = import_apply(&open_store()?, &request).map_err(|error| error.to_string())?;
     serde_json::to_value(outcome).map_err(|error| error.to_string())
+}
+
+/// What the "import from a service" form sends. `secret` is only set when the
+/// user typed a new credential; the saved one is used otherwise.
+#[derive(Debug, Deserialize)]
+pub struct ServiceRequest {
+    service: String,
+    form: ServiceForm,
+    #[serde(default)]
+    secret: Option<String>,
+    /// The user cleared the saved credential.
+    #[serde(default)]
+    clear_secret: bool,
+}
+
+fn service_of(id: &str) -> Result<Service, String> {
+    Service::from_id(id).ok_or_else(|| format!("unknown service {id}"))
+}
+
+/// The form values saved by the last import from `service`, and whether a
+/// credential is saved. The credential itself never leaves the vault.
+#[tauri::command]
+pub fn service_remembered(service: String) -> Result<service_settings::Remembered, String> {
+    Ok(service_settings::remembered(
+        &open_store()?,
+        service_of(&service)?,
+    ))
+}
+
+/// Applies the form's credential choice: clears the saved one when asked and
+/// returns the credential to use now (the typed one, else the saved one).
+fn credential(
+    store: &easyssh_store::Store,
+    service: Service,
+    request: &ServiceRequest,
+) -> Result<zeroize::Zeroizing<String>, String> {
+    let vault = app_vault();
+    if request.clear_secret {
+        service_settings::set_secret(store, &vault, service, None).map_err(|e| e.to_string())?;
+    }
+    easyssh_services::credential(store, &vault, service, request.secret.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// After a request that worked: remembers the form and a newly typed
+/// credential (sealed by the vault).
+fn remember(
+    store: &easyssh_store::Store,
+    service: Service,
+    request: &ServiceRequest,
+    secret: &str,
+) -> Result<(), String> {
+    service_settings::save_form(store, service, &request.form).map_err(|e| e.to_string())?;
+    if request
+        .secret
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        service_settings::set_secret(store, &app_vault(), service, Some(secret))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Tests the address and credential with one small request. Returns how many
+/// hosts the service lists. A credential that worked is saved.
+#[tauri::command]
+pub async fn service_test(request: ServiceRequest) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let service = service_of(&request.service)?;
+        let store = open_store()?;
+        let secret = credential(&store, service, &request)?;
+        let total = easyssh_services::test(service, &request.form, &secret)
+            .map_err(|error| error.to_string())?;
+        remember(&store, service, &request, &secret)?;
+        Ok(total)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Reads the hosts of a service the user named and previews them like a file:
+/// marks the stored ones and lists what the service no longer has. Writes
+/// nothing but the remembered form and credential. The merge is
+/// `import_apply_hosts`, the same as for a file.
+#[tauri::command]
+pub async fn service_preview(request: ServiceRequest) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let service = service_of(&request.service)?;
+        let store = open_store()?;
+        let secret = credential(&store, service, &request)?;
+        let fetched = easyssh_services::fetch(service, &request.form, &secret)
+            .map_err(|error| error.to_string())?;
+        remember(&store, service, &request, &secret)?;
+        let preview = fetched.preview(&store).map_err(|error| error.to_string())?;
+        serde_json::to_value(preview).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]

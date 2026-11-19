@@ -33,6 +33,7 @@ tokio.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 easyssh-ai = { path = "../crates/easyssh-ai" }
+easyssh-services = { path = "../crates/easyssh-services" }
 easyssh-crypto = { path = "../crates/easyssh-crypto" }
 easyssh-sessionlog = { path = "../crates/easyssh-sessionlog" }
 easyssh-telemetry = { path = "../crates/easyssh-telemetry" }

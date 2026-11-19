@@ -117,12 +117,61 @@ impl Sftp {
         Ok(self.session.rename(from, to).await?)
     }
 
+    /// Sets the permission bits (`0o644` style) and nothing else.
+    pub async fn set_permissions(&self, path: &str, mode: u32) -> Result<()> {
+        let metadata = russh_sftp::client::fs::Metadata {
+            permissions: Some(mode & 0o7777),
+            ..Default::default()
+        };
+        Ok(self.session.set_metadata(path, metadata).await?)
+    }
+
     pub async fn remove_file(&self, path: &str) -> Result<()> {
         Ok(self.session.remove_file(path).await?)
     }
 
     pub async fn remove_dir(&self, path: &str) -> Result<()> {
         Ok(self.session.remove_dir(path).await?)
+    }
+
+    /// Removes `path` and, if it is a folder, everything in it, deepest
+    /// first. Links are removed themselves and never followed, so what a
+    /// link inside points to is left alone.
+    pub async fn remove_dir_all(&self, path: &str) -> Result<()> {
+        if self.lstat(path).await?.kind != EntryKind::Dir {
+            return self.remove_file(path).await;
+        }
+        // (folder, emptied): a folder is removed when it comes up again
+        // after everything in it.
+        let mut pending = vec![(path.to_owned(), false)];
+        while let Some((dir, emptied)) = pending.pop() {
+            if emptied {
+                self.remove_dir(&dir).await?;
+                continue;
+            }
+            pending.push((dir.clone(), true));
+            for entry in self.list(&dir).await? {
+                if entry.name.is_empty() || entry.name.contains('/') {
+                    return Err(Error::Sftp(format!(
+                        "{dir} lists an entry that cannot be removed: {:?}",
+                        entry.name
+                    )));
+                }
+                let child = if dir.ends_with('/') {
+                    format!("{dir}{}", entry.name)
+                } else {
+                    format!("{dir}/{}", entry.name)
+                };
+                // Listings report links as links (lstat), not what they
+                // point to.
+                if entry.stat.kind == EntryKind::Dir {
+                    pending.push((child, false));
+                } else {
+                    self.remove_file(&child).await?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Opens an existing file for reading.
