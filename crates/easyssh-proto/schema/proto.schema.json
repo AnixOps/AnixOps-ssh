@@ -1136,6 +1136,17 @@
         "notes": {
           "type": "string"
         },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tags to put on the host (service imports bring the service's own)."
+        },
+        "source": {
+          "type": "string",
+          "description": "Stable key of the host at its origin (service imports, for example `control:https://panel.example.com#12`). A later import of the same key updates the host it created, even when its address changed."
+        },
         "exists": {
           "type": "boolean",
           "description": "Preview only: a stored host has the same hostname, port and user. Ignored by hosts.import_apply."
@@ -1231,6 +1242,13 @@
           "type": "integer",
           "minimum": 0,
           "description": "Records recognised but not importable."
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Service imports: names of stored hosts an earlier import created that the service no longer lists. Nothing is removed."
         }
       },
       "required": [

@@ -838,6 +838,9 @@ pub struct HostsImportPreviewResult {
     pub format: ::std::option::Option<ImportFormat>,
     pub groups: ::std::vec::Vec<::std::vec::Vec<::std::string::String>>,
     pub hosts: ::std::vec::Vec<ImportHost>,
+    ///Service imports: names of stored hosts an earlier import created that the service no longer lists. Nothing is removed.
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub removed: ::std::vec::Vec<::std::string::String>,
     ///Records recognised but not importable.
     pub skipped: u64,
     pub warnings: ::std::vec::Vec<::std::string::String>,
@@ -1118,6 +1121,12 @@ pub struct ImportHost {
     ///Preview only: why the host cannot be imported. Ignored by hosts.import_apply.
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub problem: ::std::option::Option<::std::string::String>,
+    ///Stable key of the host at its origin (service imports, for example `control:https://panel.example.com#12`). A later import of the same key updates the host it created, even when its address changed.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub source: ::std::option::Option<::std::string::String>,
+    ///Tags to put on the host (service imports bring the service's own).
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub tags: ::std::vec::Vec<::std::string::String>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub username: ::std::option::Option<::std::string::String>,
 }

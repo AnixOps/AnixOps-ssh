@@ -562,6 +562,14 @@ export interface ImportHost {
   openssh_only?: string[];
   notes?: string;
   /**
+   * Tags to put on the host (service imports bring the service's own).
+   */
+  tags?: string[];
+  /**
+   * Stable key of the host at its origin (service imports, for example `control:https://panel.example.com#12`). A later import of the same key updates the host it created, even when its address changed.
+   */
+  source?: string;
+  /**
    * Preview only: a stored host has the same hostname, port and user. Ignored by hosts.import_apply.
    */
   exists?: boolean;
@@ -618,6 +626,10 @@ export interface HostsImportPreviewResult {
    * Records recognised but not importable.
    */
   skipped: number;
+  /**
+   * Service imports: names of stored hosts an earlier import created that the service no longer lists. Nothing is removed.
+   */
+  removed?: string[];
 }
 /**
  * Command `hosts.import_apply` payload. Reply: HostsImportApplyResult. Adds and updates only; nothing stored is ever removed. Broadcasts `hosts.changed` when something changed.

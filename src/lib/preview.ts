@@ -10,6 +10,10 @@ import type {
   ImportHost,
   KnownHost,
   KnownHostsImport,
+  ServiceForm,
+  ServiceId,
+  ServiceRemembered,
+  ServiceRequest,
 } from "./backend";
 
 /** Mirrors `display_target` and `display_command` in src-tauri/src/hosts.rs. */
@@ -231,6 +235,75 @@ export function previewImport(kind: "file" | "ssh_config", format: ImportFormat 
         ? ["Include ~/.ssh/config.d/*.conf: 2 files read", "legacy-switch: Match blocks are not evaluated"]
         : [],
     skipped: kind === "ssh_config" ? 1 : 0,
+  };
+}
+
+/** Settings the service form remembers in the browser preview (not the token). */
+const rememberedServices = new Map<ServiceId, ServiceRemembered>();
+
+export function previewServiceRemembered(service: ServiceId): ServiceRemembered {
+  return structuredClone(
+    rememberedServices.get(service) ?? {
+      form: { url: "", default_user: "root", identity_file: null } satisfies ServiceForm,
+      has_secret: false,
+    },
+  );
+}
+
+function checkServiceRequest(request: ServiceRequest): void {
+  if (!request.form.url.trim()) throw new Error("Enter the address of the service.");
+  if (!/^https:\/\/|^http:\/\/(localhost|127\.0\.0\.1)/.test(request.form.url.trim()))
+    throw new Error("The address must start with https:// (http:// is accepted for localhost only).");
+  const saved = rememberedServices.get(request.service)?.has_secret && !request.clear_secret;
+  if (!request.secret?.trim() && !saved) throw new Error("Enter an admin API token.");
+  if (request.secret && !request.secret.startsWith("anixadm_"))
+    throw new Error("An admin API token starts with anixadm_. Create one in the panel under API tokens.");
+}
+
+function rememberService(request: ServiceRequest): void {
+  rememberedServices.set(request.service, {
+    form: structuredClone(request.form),
+    has_secret: Boolean(request.secret?.trim()) || (rememberedServices.get(request.service)?.has_secret && !request.clear_secret) || false,
+  });
+}
+
+export function previewServiceTest(request: ServiceRequest): number {
+  checkServiceRequest(request);
+  rememberService(request);
+  return 5;
+}
+
+/** A canned preview of an AnixOps Control import; the second node is stored already. */
+export function previewServicePreview(request: ServiceRequest): HostsImportPreviewResult {
+  checkServiceRequest(request);
+  rememberService(request);
+  const panel = new URL(request.form.url.trim()).hostname;
+  const user = request.form.default_user.trim() || null;
+  const node = (id: number, label: string, hostname: string, group: string, tags: string[], exists = false): ImportHost => ({
+    label,
+    hostname,
+    port: 22,
+    username: user,
+    group_path: [panel, group],
+    tags,
+    source: `control:${new URL(request.form.url.trim()).origin}#${id}`,
+    exists,
+  });
+  const hosts = [
+    node(1, "edge-hk-01", "hk1.example.com", "Edge", ["prod", "hk"]),
+    node(2, "prod-web-01", "10.0.1.11", "Web", ["prod"], true),
+    node(3, "edge-sg-01", "192.0.2.31", "Edge", ["prod", "sg"]),
+    node(4, "relay-us-01", "relay-us.example.com", "AnixOps Control", []),
+    node(5, "relay-eu-01", "198.51.100.7", "AnixOps Control", ["staging"]),
+  ];
+  return {
+    format: null,
+    detected: null,
+    hosts,
+    groups: [[panel], [panel, "Edge"], [panel, "Web"], [panel, "AnixOps Control"]],
+    warnings: ["2 node(s) are not approved in the panel (pending or rejected) and were skipped."],
+    skipped: 2,
+    removed: ["old-sg-02"],
   };
 }
 
