@@ -13,6 +13,9 @@ import {
   previewRemoveKnownHost,
   previewSaveHost,
   previewSerialPorts,
+  previewServiceRemembered,
+  previewServiceTest,
+  previewServicePreview,
   previewSetFavorite,
   previewSnapshot,
 } from "./preview";
@@ -192,7 +195,42 @@ export type {
 } from "./proto.gen";
 
 /** What an import reads: a file the user picked, or `~/.ssh/config` on their command. */
-export type ImportSource = { kind: "file"; path: string } | { kind: "ssh_config" };
+export type ImportSource = { kind: "file"; path: string } | { kind: "ssh_config" } | { kind: "service"; request: ServiceRequest };
+
+/** The services hosts can be imported from. */
+export type ServiceId = "control";
+
+/** The plain settings of a service import (what the form remembers). */
+export interface ServiceForm {
+  url: string;
+  default_user: string;
+  identity_file: string | null;
+}
+
+/** What the form opens with: the saved settings, and whether a credential is saved in the vault. */
+export interface ServiceRemembered {
+  form: ServiceForm;
+  has_secret: boolean;
+}
+
+/** `secret` is only set when the user typed a new credential; the saved one is used otherwise. */
+export interface ServiceRequest {
+  service: ServiceId;
+  form: ServiceForm;
+  secret: string | null;
+  clear_secret: boolean;
+}
+
+export async function serviceRemembered(service: ServiceId): Promise<ServiceRemembered> {
+  if (!isTauri) return previewServiceRemembered(service);
+  return invoke<ServiceRemembered>("service_remembered", { service });
+}
+
+/** Tests the address and credential; resolves to the number of hosts the service lists. */
+export async function testService(request: ServiceRequest): Promise<number> {
+  if (!isTauri) return previewServiceTest(request);
+  return invoke<number>("service_test", { request });
+}
 
 /** Asks for a host list file. Returns null if cancelled. */
 export async function pickImportFile(): Promise<string | null> {
@@ -207,6 +245,10 @@ export async function previewImportHosts(
   source: ImportSource,
   format: ImportFormat | null,
 ): Promise<HostsImportPreviewResult> {
+  if (source.kind === "service") {
+    if (!isTauri) return previewServicePreview(source.request);
+    return invoke<HostsImportPreviewResult>("service_preview", { request: source.request });
+  }
   if (!isTauri) return previewImport(source.kind, format);
   return source.kind === "ssh_config"
     ? invoke<HostsImportPreviewResult>("import_preview_ssh_config", { format })
