@@ -110,7 +110,7 @@ export function FilesPane({
   const cwdRef = useRef("");
 
   const navigate = useCallback(
-    async (files: FilesHandle, path: string, typed = false) => {
+    async (files: FilesHandle, path: string, typed = false, notFolder?: () => void) => {
       setLoading(true);
       setActionError(null);
       try {
@@ -124,8 +124,10 @@ export function FilesPane({
         setReveal(found.select);
         setEditing(null);
       } catch (reason) {
-        setActionError(String(reason));
         setPathInput(cwdRef.current);
+        // A symbolic link that cannot be listed most likely points at a file.
+        if (notFolder) notFolder();
+        else setActionError(String(reason));
       } finally {
         setLoading(false);
       }
@@ -243,8 +245,10 @@ export function FilesPane({
 
   const open = (entry: RemoteFile) => {
     if (!handle) return;
-    if (entry.kind === "directory" || entry.kind === "symlink") void navigate(handle, joinPath(cwd, entry.name));
-    else void transfer(false, joinPath(cwd, entry.name), undefined, entry.size);
+    const path = joinPath(cwd, entry.name);
+    if (entry.kind === "directory") void navigate(handle, path);
+    else if (entry.kind === "symlink") void navigate(handle, path, false, () => void transfer(false, path, undefined, null));
+    else void transfer(false, path, undefined, entry.size);
   };
 
   const submitEdit = () => {
