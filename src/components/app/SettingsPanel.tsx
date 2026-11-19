@@ -125,6 +125,42 @@ export function SettingsPanel({
               ))}
             </Select>
           </SettingsRow>
+          <SettingsRow
+            label={t.rightClick}
+            hint={current.terminalRightClick === "paste" ? t.rightClickPasteHint : undefined}
+          >
+            <Segmented
+              size="sm"
+              value={current.terminalRightClick}
+              onChange={(terminalRightClick) => update({ terminalRightClick })}
+              label={t.rightClick}
+              options={[
+                { value: "menu", label: t.rightClickMenu },
+                { value: "paste", label: t.rightClickPaste },
+              ]}
+            />
+          </SettingsRow>
+          <SettingsRow label={t.copyOnSelect}>
+            <Switch
+              on={current.terminalCopyOnSelect}
+              label={t.copyOnSelect}
+              onClick={() => update({ terminalCopyOnSelect: !current.terminalCopyOnSelect })}
+            />
+          </SettingsRow>
+          <SettingsRow label={t.warnMultilinePaste} hint={t.warnMultilinePasteHint}>
+            <Switch
+              on={current.terminalWarnMultilinePaste}
+              label={t.warnMultilinePaste}
+              onClick={() => update({ terminalWarnMultilinePaste: !current.terminalWarnMultilinePaste })}
+            />
+          </SettingsRow>
+          <SettingsRow label={t.osc52} hint={t.osc52Hint}>
+            <Switch
+              on={current.terminalOsc52}
+              label={t.osc52}
+              onClick={() => update({ terminalOsc52: !current.terminalOsc52 })}
+            />
+          </SettingsRow>
         </SettingsGroup>
 
         <SettingsGroup title={t.completion}>

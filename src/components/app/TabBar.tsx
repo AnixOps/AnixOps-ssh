@@ -1,4 +1,4 @@
-import { Cable, Columns2, FolderOpen, LoaderCircle, Plus, Radio, RadioTower, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
+import { Bell, Cable, Columns2, FolderOpen, LoaderCircle, Plus, Radio, RadioTower, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
 import type { KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Menu, type MenuEntry } from "@/components/ui/menu";
@@ -98,7 +98,15 @@ export function TabBar({
                 className="relative flex h-full min-w-0 items-center gap-2 pl-3 text-callout"
               >
                 <TabIcon tab={tab} />
-                <span className="truncate" title={tab.title}>{tab.title}</span>
+                <span
+                  className="truncate"
+                  title={tab.status.remoteTitle ? `${tab.title} — ${tab.status.remoteTitle}` : tab.title}
+                >
+                  {tab.title}
+                </span>
+                {tab.status.bell && !active && (
+                  <Bell className="size-3.5 shrink-0 text-warning" strokeWidth={1.5} aria-label={t.bell} />
+                )}
                 {tab.hostId !== null && tab.status.state === "connected" && tab.status.engine && (
                   <EngineBadge engine={tab.status.engine.engine} reason={tab.status.engine.reason} />
                 )}
