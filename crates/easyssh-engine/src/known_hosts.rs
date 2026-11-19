@@ -1,12 +1,20 @@
 //! The daemon's known hosts: the store's `known_hosts` table first (it syncs
-//! with the vault), the user's `~/.ssh/known_hosts` as a read-only fallback.
+//! with the vault), OpenSSH's files as read-only fallbacks: the user's
+//! `~/.ssh/known_hosts` and `known_hosts2`, and the system-wide
+//! `/etc/ssh/ssh_known_hosts` and `ssh_known_hosts2` ([`openssh_files`],
+//! [`system_known_hosts`]).
 //!
 //! - New and replaced keys are only ever written to the store.
-//! - A host the store does not know but the OpenSSH file does is trusted
+//! - A key `@revoked` in any of the files is refused, whatever the store
+//!   says.
+//! - A host the store does not know but an OpenSSH file does is trusted
 //!   on that record, and the record is imported into the store, so the
 //!   host stays trusted if the OpenSSH file changes later.
-//! - A key that differs from what either source records is `Changed`; it is
-//!   never accepted automatically (the engine only accepts an explicit
+//! - A key the store records as changed but an OpenSSH file trusts is
+//!   trusted, and replaces the store's record: the user removed the old key
+//!   (`ssh-keygen -R`) and accepted the new one with `ssh`.
+//! - Otherwise a key that differs from what the sources record is `Changed`;
+//!   it is never accepted automatically (the engine only accepts an explicit
 //!   replacement). The store wins when both know the host.
 //! - The file the engine used before the store existed is imported once
 //!   ([`migrate_app_file`]) and then renamed.
@@ -14,7 +22,7 @@
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 use easyssh_ssh::known_hosts::{
-    evaluate, recorded_algorithms_in, remove_host, KnownHostStatus, KnownHosts, KnownHostsFile,
+    check_text, recorded_algorithms_in, remove_host, KnownHostStatus, KnownHosts, KnownHostsFile,
 };
 use easyssh_ssh::{Error, Result};
 use easyssh_store::{KnownHost, Store};
@@ -83,7 +91,7 @@ impl StoreKnownHosts {
 
 impl KnownHosts for StoreKnownHosts {
     fn check(&self, host: &str, port: u16, key: &PublicKey) -> Result<KnownHostStatus> {
-        Ok(evaluate(&self.text()?, host, port, key))
+        check_text(&self.text()?, host, port, key)
     }
 
     fn add(&self, host: &str, port: u16, key: &PublicKey) -> Result<()> {
@@ -146,10 +154,37 @@ pub fn migrate_app_file(store: &Store, file: &Path) -> std::io::Result<usize> {
     Ok(report.imported)
 }
 
+/// The OpenSSH files that go with the user's `known_hosts` (`user`): that
+/// file and `known_hosts2` beside it, then `system` (see
+/// [`system_known_hosts`]).
+pub fn openssh_files(user: Option<&Path>, system: &[PathBuf]) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Some(user) = user {
+        files.push(user.to_path_buf());
+        let mut second = user.as_os_str().to_owned();
+        second.push("2");
+        files.push(PathBuf::from(second));
+    }
+    files.extend(system.iter().cloned());
+    files
+}
+
+/// The system-wide `ssh_known_hosts` and `ssh_known_hosts2` (in `/etc/ssh`,
+/// or `%PROGRAMDATA%\ssh` on Windows).
+pub fn system_known_hosts() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    let system = std::env::var_os("PROGRAMDATA").map(|dir| PathBuf::from(dir).join("ssh"));
+    #[cfg(not(windows))]
+    let system = Some(PathBuf::from("/etc/ssh"));
+    system
+        .map(|dir| vec![dir.join("ssh_known_hosts"), dir.join("ssh_known_hosts2")])
+        .unwrap_or_default()
+}
+
 /// See the module documentation.
 pub struct LayeredKnownHosts {
     primary: Arc<dyn KnownHosts>,
-    fallback: Option<KnownHostsFile>,
+    fallbacks: Vec<KnownHostsFile>,
 }
 
 impl LayeredKnownHosts {
@@ -159,30 +194,79 @@ impl LayeredKnownHosts {
         Self::with_primary(Arc::new(KnownHostsFile::new(primary)), fallback)
     }
 
+    /// `primary` with one read-only fallback file.
     pub fn with_primary(primary: Arc<dyn KnownHosts>, fallback: Option<PathBuf>) -> Self {
+        Self::with_fallbacks(primary, fallback.into_iter().collect())
+    }
+
+    /// `primary` with read-only fallback files, in the order they are read
+    /// (see [`openssh_files`]).
+    pub fn with_fallbacks(primary: Arc<dyn KnownHosts>, fallbacks: Vec<PathBuf>) -> Self {
         LayeredKnownHosts {
             primary,
-            fallback: fallback.map(KnownHostsFile::new),
+            fallbacks: fallbacks.into_iter().map(KnownHostsFile::new).collect(),
         }
+    }
+}
+
+/// How much a fallback's answer says, for picking one among several files.
+fn weight(status: &KnownHostStatus) -> u8 {
+    match status {
+        KnownHostStatus::Unknown => 0,
+        KnownHostStatus::OtherTypes { .. } => 1,
+        KnownHostStatus::Changed { .. } => 2,
+        KnownHostStatus::Trusted => 3,
+        KnownHostStatus::Revoked => 4,
     }
 }
 
 impl KnownHosts for LayeredKnownHosts {
     fn check(&self, host: &str, port: u16, key: &PublicKey) -> Result<KnownHostStatus> {
+        // Every OpenSSH file is read: a revocation in any of them wins. A
+        // file that cannot be read counts as empty (the system-wide ones may
+        // not be readable); a certificate authority sends the host to
+        // OpenSSH unless the key is trusted anyway.
+        let mut fallback = KnownHostStatus::Unknown;
+        let mut deferred: Option<Error> = None;
+        for file in &self.fallbacks {
+            match file.check(host, port, key) {
+                Ok(status) => {
+                    if weight(&status) > weight(&fallback) {
+                        fallback = status;
+                    }
+                }
+                Err(error @ Error::Unsupported(_)) => {
+                    deferred.get_or_insert(error);
+                }
+                Err(_) => {}
+            }
+        }
+        if fallback == KnownHostStatus::Revoked {
+            return Ok(fallback);
+        }
         let own = self.primary.check(host, port, key)?;
-        if own != KnownHostStatus::Unknown {
-            return Ok(own);
+        match own {
+            KnownHostStatus::Trusted | KnownHostStatus::Revoked => return Ok(own),
+            _ if fallback == KnownHostStatus::Trusted => {
+                // Import it, replacing a changed record. A failure to write
+                // only means the next check asks the fallback again.
+                let _ = match own {
+                    KnownHostStatus::Changed { .. } => self.primary.replace(host, port, key),
+                    _ => self.primary.add(host, port, key),
+                };
+                return Ok(KnownHostStatus::Trusted);
+            }
+            _ => {}
         }
-        let Some(fallback) = &self.fallback else {
-            return Ok(own);
-        };
-        let status = fallback.check(host, port, key)?;
-        if status == KnownHostStatus::Trusted {
-            // Import it. A failure to write only means the next check asks
-            // the fallback again.
-            let _ = self.primary.add(host, port, key);
+        if let Some(error) = deferred {
+            return Err(error);
         }
-        Ok(status)
+        // The stronger answer: a change anywhere outweighs a new key type.
+        Ok(if weight(&fallback) > weight(&own) {
+            fallback
+        } else {
+            own
+        })
     }
 
     fn add(&self, host: &str, port: u16, key: &PublicKey) -> Result<()> {
@@ -195,9 +279,11 @@ impl KnownHosts for LayeredKnownHosts {
 
     fn recorded_algorithms(&self, host: &str, port: u16) -> Result<Vec<Algorithm>> {
         let mut algorithms = self.primary.recorded_algorithms(host, port)?;
-        if algorithms.is_empty() {
-            if let Some(fallback) = &self.fallback {
-                algorithms = fallback.recorded_algorithms(host, port)?;
+        for file in &self.fallbacks {
+            for algorithm in file.recorded_algorithms(host, port).unwrap_or_default() {
+                if !algorithms.contains(&algorithm) {
+                    algorithms.push(algorithm);
+                }
             }
         }
         Ok(algorithms)
@@ -515,6 +601,175 @@ mod tests {
             layered.check("h", 22, &key(3)).unwrap(),
             KnownHostStatus::Changed { .. }
         ));
+    }
+
+    // ---- every OpenSSH file ------------------------------------------------
+
+    /// The store, and user, user2 and system files in a temporary directory.
+    struct Files {
+        dir: tempfile::TempDir,
+        _db: tempfile::TempDir,
+        store: Arc<Mutex<Store>>,
+        layered: LayeredKnownHosts,
+        user: KnownHostsFile,
+    }
+
+    fn layered_files() -> Files {
+        let dir = tempfile::tempdir().unwrap();
+        let (db, store) = store();
+        let user = dir.path().join("known_hosts");
+        let system = vec![dir.path().join("ssh_known_hosts")];
+        let files = openssh_files(Some(&user), &system);
+        assert_eq!(
+            files,
+            vec![
+                user.clone(),
+                dir.path().join("known_hosts2"),
+                dir.path().join("ssh_known_hosts")
+            ]
+        );
+        let layered =
+            LayeredKnownHosts::with_fallbacks(Arc::new(StoreKnownHosts::new(store.clone())), files);
+        Files {
+            dir,
+            _db: db,
+            store,
+            layered,
+            user: KnownHostsFile::new(user),
+        }
+    }
+
+    #[test]
+    fn known_hosts2_and_the_system_file_are_read_too() {
+        let f = layered_files();
+        let (dir, store, layered, user) = (&f.dir, &f.store, &f.layered, &f.user);
+        let _ = (dir, store, layered, user);
+        KnownHostsFile::new(dir.path().join("known_hosts2"))
+            .add("two", 22, &key(1))
+            .unwrap();
+        KnownHostsFile::new(dir.path().join("ssh_known_hosts"))
+            .add("sys", 22, &key(2))
+            .unwrap();
+        assert_eq!(
+            layered.check("two", 22, &key(1)).unwrap(),
+            KnownHostStatus::Trusted
+        );
+        assert_eq!(
+            layered.check("sys", 22, &key(2)).unwrap(),
+            KnownHostStatus::Trusted
+        );
+        assert!(matches!(
+            layered.check("sys", 22, &key(3)).unwrap(),
+            KnownHostStatus::Changed { .. }
+        ));
+        // Imported, and none of the files was written.
+        assert_eq!(in_store(store).len(), 2);
+        assert!(!dir.path().join("known_hosts").exists());
+    }
+
+    #[test]
+    fn a_revocation_in_any_file_wins_over_the_store() {
+        let f = layered_files();
+        let (dir, store, layered, user) = (&f.dir, &f.store, &f.layered, &f.user);
+        let _ = (dir, store, layered, user);
+        layered.add("h", 22, &key(1)).unwrap();
+        let line = format!("@revoked h {}\n", key(1).to_openssh().unwrap());
+        std::fs::write(dir.path().join("ssh_known_hosts"), line).unwrap();
+        assert_eq!(
+            layered.check("h", 22, &key(1)).unwrap(),
+            KnownHostStatus::Revoked
+        );
+    }
+
+    #[test]
+    fn a_key_the_user_accepted_with_ssh_replaces_the_changed_record() {
+        let f = layered_files();
+        let (dir, store, layered, user) = (&f.dir, &f.store, &f.layered, &f.user);
+        let _ = (dir, store, layered, user);
+        layered.add("h", 22, &key(1)).unwrap();
+        // `ssh-keygen -R h`, then `ssh h` accepted the server's new key.
+        user.add("h", 22, &key(2)).unwrap();
+        assert_eq!(
+            layered.check("h", 22, &key(2)).unwrap(),
+            KnownHostStatus::Trusted
+        );
+        // The store now holds the new key only.
+        std::fs::remove_file(user.path()).unwrap();
+        assert_eq!(
+            layered.check("h", 22, &key(2)).unwrap(),
+            KnownHostStatus::Trusted
+        );
+        assert!(matches!(
+            layered.check("h", 22, &key(1)).unwrap(),
+            KnownHostStatus::Changed { .. }
+        ));
+        assert_eq!(in_store(store).len(), 1);
+    }
+
+    #[test]
+    fn an_unreadable_file_counts_as_empty() {
+        let f = layered_files();
+        let (dir, store, layered, user) = (&f.dir, &f.store, &f.layered, &f.user);
+        let _ = (dir, store, layered, user);
+        // A directory where a file is expected cannot be read.
+        std::fs::create_dir(dir.path().join("known_hosts2")).unwrap();
+        assert_eq!(
+            layered.check("h", 22, &key(1)).unwrap(),
+            KnownHostStatus::Unknown
+        );
+    }
+
+    #[test]
+    fn a_certificate_authority_sends_the_host_to_openssh() {
+        let f = layered_files();
+        let (dir, store, layered, user) = (&f.dir, &f.store, &f.layered, &f.user);
+        let _ = (dir, store, layered, user);
+        let line = format!("@cert-authority *.corp {}\n", key(9).to_openssh().unwrap());
+        std::fs::write(dir.path().join("ssh_known_hosts"), line).unwrap();
+        let error = layered.check("a.corp", 22, &key(1)).unwrap_err();
+        assert!(matches!(error, Error::Unsupported(_)), "{error:?}");
+        // Other hosts are not affected; a key on record is still trusted.
+        assert_eq!(
+            layered.check("a.example", 22, &key(1)).unwrap(),
+            KnownHostStatus::Unknown
+        );
+        layered.add("a.corp", 22, &key(1)).unwrap();
+        assert_eq!(
+            layered.check("a.corp", 22, &key(1)).unwrap(),
+            KnownHostStatus::Trusted
+        );
+    }
+
+    #[test]
+    fn a_new_key_type_is_asked_about_and_added_beside_the_old_one() {
+        let f = layered_files();
+        let (dir, store, layered, user) = (&f.dir, &f.store, &f.layered, &f.user);
+        let _ = (dir, store, layered, user);
+        let ecdsa = PublicKey::from_openssh(
+            "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBGraOqigrA2J6S48cVOGbRXlRQ3KRsSMnWw3Td9jEP9QjIXLCOqVgMjQEVU7poDOolrgePDITb5Y4c5yppo7Z0Q=",
+        )
+        .unwrap();
+        layered.add("h", 22, &ecdsa).unwrap();
+        match layered.check("h", 22, &key(1)).unwrap() {
+            KnownHostStatus::OtherTypes { known } => {
+                assert_eq!(known.len(), 1);
+                assert!(
+                    known[0].starts_with("ecdsa-sha2-nistp256 SHA256:"),
+                    "{known:?}"
+                );
+            }
+            other => panic!("expected OtherTypes, got {other:?}"),
+        }
+        layered.add("h", 22, &key(1)).unwrap();
+        assert_eq!(
+            layered.check("h", 22, &ecdsa).unwrap(),
+            KnownHostStatus::Trusted
+        );
+        assert_eq!(
+            layered.check("h", 22, &key(1)).unwrap(),
+            KnownHostStatus::Trusted
+        );
+        assert_eq!(in_store(store).len(), 2);
     }
 
     #[test]

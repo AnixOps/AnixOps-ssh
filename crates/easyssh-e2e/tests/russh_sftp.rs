@@ -2,7 +2,7 @@
 
 use easyssh_e2e::russh_support::{within, Scripted};
 use easyssh_e2e::{sample_bytes, unique_name, E2e};
-use easyssh_ssh::{EntryKind, Error, Session, Sftp};
+use easyssh_ssh::{EntryKind, Error, ExitStatus, Session, Sftp};
 
 async fn open(e2e: &E2e) -> (Session, Sftp) {
     let session = within(
@@ -134,6 +134,49 @@ async fn sftp_and_exec_share_the_connection() {
         let output = session.exec(&format!("cat {remote}")).await.unwrap();
         assert_eq!(output.stdout_text(), "seen by exec");
         sftp.remove_file(&remote).await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn removing_a_folder_removes_everything_in_it_but_not_what_links_point_to() {
+    let e2e = E2e::new();
+    let (session, sftp) = open(&e2e).await;
+    let dir = format!("/home/keyuser/{}", unique_name("e2e-tree"));
+    let outside = format!("/home/keyuser/{}", unique_name("e2e-outside"));
+    within("tree", async {
+        let made = session
+            .exec(&format!(
+                "set -e; mkdir -p '{dir}/a/b' '{outside}'; printf keep > '{outside}/keep.txt'; \
+                 printf x > '{dir}/.hidden'; printf y > '{dir}/a/b/deep.txt'; \
+                 mkdir '{dir}/a/empty'; ln -s '{outside}' '{dir}/a/link'; \
+                 ln -s '{outside}/keep.txt' '{dir}/file-link'"
+            ))
+            .await
+            .unwrap();
+        assert_eq!(made.exit, ExitStatus::Code(0), "{:?}", made.stderr_text());
+
+        sftp.remove_dir_all(&dir).await.expect("remove the folder");
+        assert!(!sftp.exists(&dir).await.unwrap());
+        assert_eq!(
+            sftp.read_file(&format!("{outside}/keep.txt"))
+                .await
+                .unwrap(),
+            b"keep"
+        );
+
+        // A file and a missing path.
+        sftp.write_file(&format!("{outside}/one.txt"), b"1")
+            .await
+            .unwrap();
+        sftp.remove_dir_all(&format!("{outside}/one.txt"))
+            .await
+            .unwrap();
+        let error = sftp.remove_dir_all(&dir).await.unwrap_err();
+        assert!(matches!(error, Error::NotFound(_)), "{error:?}");
+
+        sftp.remove_dir_all(&outside).await.unwrap();
     })
     .await;
 }

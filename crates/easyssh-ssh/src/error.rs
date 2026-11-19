@@ -91,6 +91,12 @@ pub enum Error {
     #[error("channel error: {0}")]
     Channel(String),
 
+    /// The server refused to open a session channel. OpenSSH does this when
+    /// the connection already carries `MaxSessions` sessions; another
+    /// connection to the same host can take more.
+    #[error("the server refused to open a channel: {0}")]
+    ChannelRefused(String),
+
     /// The peer violated the protocol or negotiation failed.
     #[error("protocol error: {0}")]
     Protocol(String),
