@@ -20,18 +20,42 @@ pub enum Unsupported {
     RemoteCommand,
     /// `-L`, `-R` or `-D` stored with the host or in the ssh config.
     InlineForward,
+    /// `ForwardAgent`.
+    AgentForwarding,
+    /// `ForwardX11`.
+    X11Forwarding,
+    /// `SendEnv` (beyond the locale) or `SetEnv`.
+    Environment,
+    /// `HostKeyAlias`.
+    HostKeyAlias,
+    /// A `UserKnownHostsFile` or `GlobalKnownHostsFile` other than the
+    /// default files.
+    KnownHostsFile,
+    /// `StrictHostKeyChecking no`.
+    HostKeyChecking,
+    /// A key exchange, cipher, MAC or host key algorithm the user enabled
+    /// that only OpenSSH speaks (`diffie-hellman-group1-sha1`, `aes128-cbc`,
+    /// `ssh-dss`...).
+    LegacyAlgorithm,
 }
 
 impl Unsupported {
     pub fn describe(self) -> &'static str {
         match self {
             Unsupported::ProxyCommand => "ProxyCommand",
-            Unsupported::Match => "a Match block in the ssh config",
+            Unsupported::Match => "a Match exec, canonical or final block in the ssh config",
             Unsupported::LocalCommand => "LocalCommand",
             Unsupported::Certificate => "certificate authentication",
             Unsupported::SecurityKey => "a FIDO2 security key (sk-*)",
             Unsupported::RemoteCommand => "a remote command",
             Unsupported::InlineForward => "port forwards stored with the host",
+            Unsupported::AgentForwarding => "agent forwarding (ForwardAgent)",
+            Unsupported::X11Forwarding => "X11 forwarding (ForwardX11)",
+            Unsupported::Environment => "SendEnv or SetEnv",
+            Unsupported::HostKeyAlias => "HostKeyAlias",
+            Unsupported::KnownHostsFile => "a custom known_hosts file",
+            Unsupported::HostKeyChecking => "StrictHostKeyChecking no",
+            Unsupported::LegacyAlgorithm => "a legacy algorithm enabled in the ssh config",
         }
     }
 }
@@ -171,6 +195,13 @@ mod tests {
             Unsupported::SecurityKey,
             Unsupported::RemoteCommand,
             Unsupported::InlineForward,
+            Unsupported::AgentForwarding,
+            Unsupported::X11Forwarding,
+            Unsupported::Environment,
+            Unsupported::HostKeyAlias,
+            Unsupported::KnownHostsFile,
+            Unsupported::HostKeyChecking,
+            Unsupported::LegacyAlgorithm,
         ] {
             for preference in [P::Auto, P::Russh] {
                 let c = choose_engine(G::Russh, preference, &[item]);
@@ -193,7 +224,8 @@ mod tests {
         );
         assert_eq!(
             c.reason,
-            "OpenSSH runs this host because it uses ProxyCommand, a Match block in the ssh config"
+            "OpenSSH runs this host because it uses ProxyCommand, \
+             a Match exec, canonical or final block in the ssh config"
         );
     }
 

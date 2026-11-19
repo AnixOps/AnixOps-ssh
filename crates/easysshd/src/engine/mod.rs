@@ -9,6 +9,7 @@
 
 pub mod choice;
 pub mod interact;
+pub mod options;
 /// Host keys in the store, the connection registry, the file sessions and the
 /// tunnels live in `easyssh-engine`: the in-process engine of the mobile app
 /// runs the same code.
@@ -159,9 +160,12 @@ impl Engine {
             )),
             None => Arc::new(LayeredKnownHosts::new(paths.app, paths.user)),
         };
+        let known = options::with_policy(known, spec.host_key_policy);
         let mut params =
             ConnectParams::new(spec.host.clone(), spec.port, spec.user.clone()).known_hosts(known);
-        params.agent = match (spec.agent, agent) {
+        // `IdentityAgent` in the ssh config wins over the client's agent, as
+        // it does over `SSH_AUTH_SOCK` for OpenSSH.
+        params.agent = match (spec.agent, spec.agent_path.as_ref().or(agent)) {
             (false, _) => AgentSource::Disabled,
             (true, Some(path)) => AgentSource::Path(path.clone()),
             (true, None) => AgentSource::Environment,
