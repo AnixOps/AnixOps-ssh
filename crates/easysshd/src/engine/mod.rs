@@ -15,6 +15,10 @@ pub mod interact;
 pub use easyssh_engine::{files, known_hosts, registry, tunnels};
 pub mod plan;
 
+/// The most extra connections to one host for sessions the server refused
+/// on the others (`MaxSessions`).
+const MAX_SHARD: u32 = 3;
+
 use crate::askpass::Hub;
 use easyssh_engine::prompts::HostKeyPrompts;
 use easyssh_ssh::{
@@ -43,8 +47,12 @@ pub struct KnownHostsPaths {
     /// store. Entries in it are imported once and the file is renamed. It
     /// is also where keys go when the engine has no store (tests).
     pub app: PathBuf,
-    /// The user's OpenSSH file, read only. `None` to ignore it.
+    /// The user's OpenSSH file, read only (with `known_hosts2` beside it).
+    /// `None` to ignore it.
     pub user: Option<PathBuf>,
+    /// The system-wide OpenSSH files, read only
+    /// ([`known_hosts::system_known_hosts`]); empty in tests.
+    pub system: Vec<PathBuf>,
 }
 
 pub use easyssh_engine::error_code;
@@ -152,13 +160,13 @@ impl Engine {
 
     fn params(&self, spec: &HostSpec, agent: Option<&PathBuf>) -> ConnectParams {
         let paths = lock(&self.paths).clone();
-        let known: Arc<dyn easyssh_ssh::KnownHosts> = match lock(&self.store).clone() {
-            Some(store) => Arc::new(LayeredKnownHosts::with_primary(
-                Arc::new(StoreKnownHosts::new(store)),
-                paths.user,
-            )),
-            None => Arc::new(LayeredKnownHosts::new(paths.app, paths.user)),
+        let fallbacks = known_hosts::openssh_files(paths.user.as_deref(), &paths.system);
+        let primary: Arc<dyn easyssh_ssh::KnownHosts> = match lock(&self.store).clone() {
+            Some(store) => Arc::new(StoreKnownHosts::new(store)),
+            None => Arc::new(easyssh_ssh::KnownHostsFile::new(paths.app)),
         };
+        let known: Arc<dyn easyssh_ssh::KnownHosts> =
+            Arc::new(LayeredKnownHosts::with_fallbacks(primary, fallbacks));
         let mut params =
             ConnectParams::new(spec.host.clone(), spec.port, spec.user.clone()).known_hosts(known);
         params.agent = match (spec.agent, agent) {
@@ -175,6 +183,9 @@ impl Engine {
         }
         if spec.keepalive.is_some() {
             params.keepalive = spec.keepalive;
+        }
+        if let Some(count) = spec.keepalive_max {
+            params.keepalive_max = count;
         }
         params
     }
@@ -225,8 +236,19 @@ impl Engine {
         plan: &RusshPlan,
         agent: Option<PathBuf>,
     ) -> Result<Lease, SharedError> {
+        self.lease_shard(plan, agent.as_ref(), 0).await
+    }
+
+    /// A lease on the host's extra connection number `shard` (0 is the
+    /// usual one).
+    async fn lease_shard(
+        &self,
+        plan: &RusshPlan,
+        agent: Option<&PathBuf>,
+        shard: u32,
+    ) -> Result<Lease, SharedError> {
         self.registry
-            .acquire(plan.key.clone(), || self.connect(plan, agent.as_ref()))
+            .acquire(plan.key.shard(shard), || self.connect(plan, agent))
             .await
     }
 
@@ -234,6 +256,11 @@ impl Engine {
     /// connection up for as long as the shell lives. `language` is the app's
     /// (`zh`, `en`; `None` to follow the system), for `LANG` when this
     /// process has no UTF-8 locale; see [`easyssh_ssh::shell_env`].
+    ///
+    /// When the server refuses the session (OpenSSH's `MaxSessions`, 10 by
+    /// default), the shell opens on another connection to the same host.
+    /// When the channel does not open in time, the connection is presumed
+    /// dead: it is closed and the shell opens on a new one.
     pub async fn open_shell(
         &self,
         plan: &RusshPlan,
@@ -242,18 +269,28 @@ impl Engine {
         rows: u16,
         language: Option<&str>,
     ) -> Result<(ShellHandle, Lease), SharedError> {
-        let lease = self.lease(plan, agent).await?;
-        let shell = lease
-            .shell(ShellOptions {
-                term: "xterm-256color".into(),
-                cols: u32::from(cols.max(1)),
-                rows: u32::from(rows.max(1)),
-                env: easyssh_ssh::local_shell_env(language, &plan.target.set_env),
-                ..ShellOptions::default()
-            })
-            .await
-            .map_err(Arc::new)?;
-        Ok((shell, lease))
+        let options = ShellOptions {
+            term: "xterm-256color".into(),
+            cols: u32::from(cols.max(1)),
+            rows: u32::from(rows.max(1)),
+            env: easyssh_ssh::local_shell_env(language, &plan.target.set_env),
+            ..ShellOptions::default()
+        };
+        let mut shard = 0;
+        let mut retried_timeout = false;
+        loop {
+            let lease = self.lease_shard(plan, agent.as_ref(), shard).await?;
+            match lease.shell(options.clone()).await {
+                Ok(shell) => return Ok((shell, lease)),
+                Err(SshError::ChannelRefused(_)) if shard < MAX_SHARD => shard += 1,
+                Err(SshError::Timeout(_)) if !retried_timeout => {
+                    retried_timeout = true;
+                    drop(lease);
+                    self.registry.evict(&plan.key.shard(shard)).await;
+                }
+                Err(error) => return Err(Arc::new(error)),
+            }
+        }
     }
 
     /// `engine.connections`.

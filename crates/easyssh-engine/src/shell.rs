@@ -61,6 +61,7 @@ impl Target {
             host_id: self.host_id.clone(),
             target: self.account(),
             jump: self.jump.iter().map(Target::account).collect(),
+            shard: 0,
         }
     }
 }
@@ -70,8 +71,16 @@ impl Target {
 pub trait ShellSink: Send + Sync + 'static {
     /// Terminal output as text; a character is never split across calls.
     fn data(&self, text: String);
-    /// The shell ended (or the connection dropped). Called once.
+    /// The shell ended (or the connection dropped), with its exit code if
+    /// it reported one. Called once, by the default [`ShellSink::ended`].
     fn exit(&self, code: Option<u32>);
+    /// The shell ended: with a status (`Code`), killed by a signal
+    /// (`Signal`), or without a status because the connection dropped or the
+    /// channel closed (`Unknown`). The engine calls this; sinks that only
+    /// need the code keep the default, which calls [`ShellSink::exit`].
+    fn ended(&self, status: ExitStatus) {
+        self.exit(status.code());
+    }
 }
 
 /// A connect failure with a stable code for the UI (`auth_failed`,
@@ -422,7 +431,7 @@ async fn pump(
                     // The connection lingers for a moment (the file browser
                     // may still want it) and closes when nobody leased it.
                     drop(lease);
-                    sink.exit(None);
+                    sink.ended(ExitStatus::Unknown);
                     return;
                 }
             },
@@ -430,10 +439,7 @@ async fn pump(
     }
     let status = shell.wait_exit().await;
     drop(lease);
-    sink.exit(match status {
-        ExitStatus::Code(code) => Some(code),
-        _ => None,
-    });
+    sink.ended(status);
 }
 
 #[cfg(test)]

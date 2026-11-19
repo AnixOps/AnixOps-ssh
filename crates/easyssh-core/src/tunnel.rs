@@ -74,6 +74,12 @@ impl Tunnel {
     }
 }
 
+/// Keepalives of a tunnel's `ssh -N`: the built-in engine's defaults
+/// (`easyssh_ssh::DEFAULT_KEEPALIVE` and `DEFAULT_KEEPALIVE_MAX`), so a dead
+/// connection is noticed after the same three minutes on either engine.
+pub const KEEPALIVE_INTERVAL_SECS: u64 = 60;
+pub const KEEPALIVE_COUNT_MAX: u32 = 3;
+
 /// The `ssh` arguments that run `tunnel` through `connection`.
 pub fn tunnel_args(connection: &Connection, tunnel: &Tunnel) -> Result<Vec<String>, OpenSshError> {
     validate_connection(connection)?;
@@ -82,17 +88,15 @@ pub fn tunnel_args(connection: &Connection, tunnel: &Tunnel) -> Result<Vec<Strin
         TunnelKind::Remote => "-R",
         TunnelKind::Dynamic => "-D",
     };
-    let mut args: Vec<String> = [
-        "-N",
-        "-o",
-        "ExitOnForwardFailure=yes",
-        "-o",
-        "ServerAliveInterval=30",
-        "-o",
-        "ServerAliveCountMax=3",
-    ]
-    .map(str::to_owned)
-    .to_vec();
+    let mut args: Vec<String> = vec![
+        "-N".to_owned(),
+        "-o".to_owned(),
+        "ExitOnForwardFailure=yes".to_owned(),
+        "-o".to_owned(),
+        format!("ServerAliveInterval={KEEPALIVE_INTERVAL_SECS}"),
+        "-o".to_owned(),
+        format!("ServerAliveCountMax={KEEPALIVE_COUNT_MAX}"),
+    ];
     args.extend([flag.to_owned(), tunnel.forward_spec()?]);
     if let Some(jump) = &connection.proxy_jump {
         validate_alias(jump)?;
@@ -181,6 +185,9 @@ mod tests {
         let args = tunnel_args(&connection, &tunnel(TunnelKind::Local)).unwrap();
         assert_eq!(args[0], "-N");
         assert!(args.contains(&"ExitOnForwardFailure=yes".to_owned()));
+        // The same keepalives as the built-in engine.
+        assert!(args.contains(&"ServerAliveInterval=60".to_owned()));
+        assert!(args.contains(&"ServerAliveCountMax=3".to_owned()));
         assert_eq!(
             args[args.len() - 3..],
             ["-L", "15432:db.internal:5432", "prod"]

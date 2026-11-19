@@ -7,7 +7,7 @@ use easyssh_core::{ConfigStore, Connection};
 use easyssh_proto as proto;
 use easysshd::agent::{validate_agent_socket, validate_for_uid};
 use easysshd::askpass;
-use easysshd::link::{AskpassPrompt, Link, LinkHandler, SessionMsg};
+use easysshd::link::{AskpassPrompt, ExitReason, Link, LinkHandler, SessionMsg};
 use easysshd::supervisor::{Backoff, SupervisedMsg, SupervisedSink, Supervisor, SupervisorConfig};
 use easysshd::{Client, Daemon, DaemonConfig, DaemonExtras, Server};
 use serde_json::{json, Value};
@@ -131,7 +131,10 @@ fn supervised() -> (Seen, SupervisedSink) {
 }
 
 fn exited() -> SupervisedMsg {
-    SupervisedMsg::Session(SessionMsg::Exit { code: None })
+    SupervisedMsg::Session(SessionMsg::Exit {
+        code: None,
+        reason: ExitReason::Disconnected,
+    })
 }
 
 fn text(seen: &Seen) -> String {

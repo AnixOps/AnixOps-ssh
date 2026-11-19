@@ -93,3 +93,40 @@ async fn exec_after_disconnect_fails() {
     let result = within("exec", session.exec("true")).await;
     assert!(result.is_err(), "{result:?}");
 }
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn sessions_past_max_sessions_are_refused_with_their_own_error() {
+    let e2e = E2e::new();
+    let session = within(
+        "connect",
+        Session::connect(e2e.russh_target(), &Scripted::trusting()),
+    )
+    .await
+    .expect("connect");
+    // OpenSSH's default MaxSessions is 10.
+    let mut shells = Vec::new();
+    for _ in 0..10 {
+        let shell = within(
+            "shell",
+            session.shell(easyssh_ssh::ShellOptions {
+                term: "xterm".into(),
+                cols: 80,
+                rows: 24,
+                ..easyssh_ssh::ShellOptions::default()
+            }),
+        )
+        .await
+        .expect("a shell within MaxSessions");
+        shells.push(shell);
+    }
+    let error = within("one too many", session.exec("true"))
+        .await
+        .expect_err("the eleventh session is refused");
+    assert!(
+        matches!(error, easyssh_ssh::Error::ChannelRefused(_)),
+        "{error:?}"
+    );
+    // The connection itself is fine.
+    within("ping", session.ping()).await.expect("ping");
+}
