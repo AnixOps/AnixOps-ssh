@@ -61,6 +61,7 @@ impl Target {
             host_id: self.host_id.clone(),
             target: self.account(),
             jump: self.jump.iter().map(Target::account).collect(),
+            shard: 0,
         }
     }
 }
