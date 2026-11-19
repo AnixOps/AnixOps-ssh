@@ -548,12 +548,42 @@ pub fn transfer_cancel(
     Ok(())
 }
 
+/// Removes what a cancelled download was writing. A file is removed; of a
+/// folder only the file written last, the one cut off, so the files that
+/// finished before the cancel stay.
 fn remove_partial(path: &Path) {
-    let _ = if path.is_dir() {
-        std::fs::remove_dir_all(path)
+    if path.is_dir() {
+        if let Some(file) = newest_file(path) {
+            let _ = std::fs::remove_file(file);
+        }
     } else {
-        std::fs::remove_file(path)
-    };
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// The most recently modified regular file under `dir`, links not followed.
+fn newest_file(dir: &Path) -> Option<PathBuf> {
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+    let mut pending = vec![dir.to_owned()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else if metadata.is_file() {
+                let modified = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
+                if newest.as_ref().is_none_or(|(time, _)| modified >= *time) {
+                    newest = Some((modified, entry.path()));
+                }
+            }
+        }
+    }
+    newest.map(|(_, path)| path)
 }
 
 /// Remote names come from the server, so they must not be able to point
@@ -603,7 +633,9 @@ fn unique_download_path(name: &str) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{mode_string, remote_file, safe_file_name, RemoteFileKind};
+    use super::{
+        mode_string, newest_file, remote_file, remove_partial, safe_file_name, RemoteFileKind,
+    };
 
     #[test]
     fn daemon_entries_look_like_ls_listings() {
@@ -630,5 +662,31 @@ mod tests {
         assert_eq!(safe_file_name(".."), "download");
         assert_eq!(safe_file_name("C:evil"), "C_evil");
         assert_eq!(safe_file_name("report 2026.pdf"), "report 2026.pdf");
+    }
+
+    #[test]
+    fn a_cancelled_folder_download_keeps_the_files_that_finished() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("logs");
+        std::fs::create_dir_all(root.join("old")).unwrap();
+        std::fs::write(root.join("old/a.log"), "done").unwrap();
+        std::fs::write(root.join("b.log"), "done").unwrap();
+        let cut = root.join("old/c.log");
+        std::fs::write(&cut, "cut o").unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&cut)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert_eq!(newest_file(&root).as_deref(), Some(cut.as_path()));
+        remove_partial(&root);
+        assert!(!cut.exists());
+        assert!(root.join("old/a.log").exists());
+        assert!(root.join("b.log").exists());
+        // A single file is removed.
+        remove_partial(&root.join("b.log"));
+        assert!(!root.join("b.log").exists());
     }
 }

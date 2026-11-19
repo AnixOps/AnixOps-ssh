@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RemoteFile } from "./backend";
-import { baseName, locate, normalizePath, parentPath, resolvePath } from "./remotePath";
+import { baseName, localName, locate, normalizePath, parentPath, resolvePath, uploadConflicts } from "./remotePath";
 
 const entry = (name: string, kind: RemoteFile["kind"]): RemoteFile => ({
   name,
@@ -100,5 +100,32 @@ describe("locate", () => {
 
   it("reports a missing path", async () => {
     await expect(locate(list, "/data/tools/nope")).rejects.toThrow("not found: /data/tools/nope");
+  });
+});
+
+describe("uploadConflicts", () => {
+  const listing = [entry("notes.txt", "file"), entry("site", "directory"), entry("a:b.log", "file")];
+
+  it("names the uploads that already exist in the folder", () => {
+    expect(uploadConflicts(["/home/me/notes.txt", "/home/me/new.txt"], listing)).toEqual(["notes.txt"]);
+    expect(uploadConflicts(["C:\\Users\\me\\site\\", "/tmp/a:b.log"], listing)).toEqual(["site", "a:b.log"]);
+  });
+
+  it("is empty when nothing would be replaced, and lists each name once", () => {
+    expect(uploadConflicts(["/x/other.txt"], listing)).toEqual([]);
+    expect(uploadConflicts([], listing)).toEqual([]);
+    expect(uploadConflicts(["/a/notes.txt", "/b/notes.txt"], listing)).toEqual(["notes.txt"]);
+  });
+
+  it("matches names exactly", () => {
+    expect(uploadConflicts(["/x/Notes.txt"], listing)).toEqual([]);
+  });
+});
+
+describe("localName", () => {
+  it("takes the last part of POSIX and Windows paths", () => {
+    expect(localName("/home/me/report.pdf")).toBe("report.pdf");
+    expect(localName("C:\\Users\\me\\report.pdf")).toBe("report.pdf");
+    expect(localName("/home/me/folder/")).toBe("folder");
   });
 });
