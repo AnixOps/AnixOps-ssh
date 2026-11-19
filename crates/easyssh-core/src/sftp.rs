@@ -287,9 +287,38 @@ impl SftpSession {
         self.run(&format!("mkdir {}", quote(path)?)).map(drop)
     }
 
+    /// Removes a file, or a folder with everything in it, deepest first.
+    /// Links inside are removed themselves and never followed.
     pub fn remove(&mut self, path: &str, directory: bool) -> Result<(), OpenSshError> {
-        let command = if directory { "rmdir" } else { "rm" };
-        self.run(&format!("{command} {}", quote(path)?)).map(drop)
+        if !directory {
+            return self.run(&format!("rm {}", quote(path)?)).map(drop);
+        }
+        // (folder, emptied): a folder is removed when it comes up again
+        // after everything in it.
+        let mut pending = vec![(path.to_owned(), false)];
+        while let Some((dir, emptied)) = pending.pop() {
+            if emptied {
+                self.run(&format!("rmdir {}", quote(&dir)?))?;
+                continue;
+            }
+            pending.push((dir.clone(), true));
+            for file in self.list(&dir)? {
+                if file.name.contains('/') {
+                    return Err(OpenSshError::Failed(format!(
+                        "{dir} lists an entry that cannot be removed: {:?}",
+                        file.name
+                    )));
+                }
+                let child = join_remote(&dir, &file.name);
+                // `ls -l` shows a link as a link, not what it points to.
+                if file.kind == RemoteFileKind::Directory {
+                    pending.push((child, false));
+                } else {
+                    self.run(&format!("rm {}", quote(&child)?))?;
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn rename(&mut self, from: &str, to: &str) -> Result<(), OpenSshError> {
