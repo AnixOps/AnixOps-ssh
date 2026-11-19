@@ -41,6 +41,14 @@ pub struct ImportHost {
     pub openssh_only: Vec<String>,
     #[serde(default)]
     pub notes: String,
+    /// Tags to put on the host (a service import brings the service's own).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Stable key of the host at its origin, set by service imports (for
+    /// example `control:https://panel.example.com#12`). A later import of the
+    /// same key finds the host it created, even when its address changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     /// Preview only: a stored host has the same hostname, port and user.
     /// Ignored by `import_apply`, which looks again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,6 +73,8 @@ impl ImportHost {
             jump: host.jump.clone(),
             openssh_only: host.openssh_only.clone(),
             notes: host.notes.clone(),
+            tags: Vec::new(),
+            source: None,
             exists: None,
             problem: None,
         }
@@ -98,6 +108,12 @@ impl ImportHost {
             .into_iter()
             .next()
             .ok_or("no host")?;
+        for tag in &self.tags {
+            let tag = tag.trim();
+            if !tag.is_empty() && !connection.tags.iter().any(|have| have == tag) {
+                connection.tags.push(tag.to_owned());
+            }
+        }
         validate_connection(&connection).map_err(|error| error.to_string())?;
         let mut dropped = None;
         if let Some(jump) = connection.proxy_jump.clone() {
@@ -163,6 +179,10 @@ pub struct ImportPreview {
     pub groups: Vec<Vec<String>>,
     pub warnings: Vec<String>,
     pub skipped: usize,
+    /// Service imports: stored hosts an earlier import of the same service
+    /// created that the service no longer lists (names). Nothing is removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<String>,
 }
 
 fn invalid(message: impl Into<String>) -> StoreError {
@@ -219,29 +239,130 @@ pub fn import_preview(store: &Store, request: &PreviewRequest) -> Result<ImportP
         )));
     }
 
+    let mut preview = mark_hosts(
+        store,
+        report.hosts.iter().map(ImportHost::from_imported).collect(),
+        None,
+    )?;
+    preview.format = format.map(|format| format.id().to_owned());
+    preview.detected = detected.map(|format| format.id().to_owned());
+    preview.groups = report.groups.clone();
+    preview.warnings = report.warnings.iter().map(ToString::to_string).collect();
+    preview.skipped = report.skipped;
+    Ok(preview)
+}
+
+/// Previews hosts that did not come from a file (a service import): marks the
+/// ones stored already, by source key first and by hostname, port and user
+/// otherwise, and lists the stored hosts of the same `scope` (the key prefix
+/// of the service, for example `control:https://panel.example.com#`) that the
+/// service no longer lists. Writes nothing.
+pub fn import_preview_hosts(
+    store: &Store,
+    hosts: Vec<ImportHost>,
+    scope: &str,
+    warnings: Vec<String>,
+    skipped: usize,
+) -> Result<ImportPreview> {
+    if hosts.len() > MAX_IMPORT_HOSTS {
+        return Err(invalid(format!(
+            "the service lists {} hosts; at most {MAX_IMPORT_HOSTS} can be imported at once",
+            hosts.len()
+        )));
+    }
+    let mut preview = mark_hosts(store, hosts, Some(scope))?;
+    let mut groups: BTreeSet<Vec<String>> = BTreeSet::new();
+    for host in &preview.hosts {
+        for end in 1..=host.group_path.len() {
+            groups.insert(host.group_path[..end].to_vec());
+        }
+    }
+    preview.groups = groups.into_iter().collect();
+    preview.warnings = warnings;
+    preview.skipped = skipped;
+    Ok(preview)
+}
+
+fn mark_hosts(store: &Store, hosts: Vec<ImportHost>, scope: Option<&str>) -> Result<ImportPreview> {
     let stored: BTreeSet<Key> = store
         .list_hosts()?
         .iter()
         .filter_map(|record| key_of(&record.item.connection.target))
         .collect();
-    let hosts = report
-        .hosts
-        .iter()
-        .map(|imported| {
-            let mut host = ImportHost::from_imported(imported);
-            host.exists = Some(stored.contains(&key_of_host(&host)));
-            host.problem = host.connection().err();
-            host
-        })
-        .collect();
+    let bindings = Bindings::load(store);
+    let mut by_id: HashMap<String, String> = HashMap::new();
+    for record in store.list_hosts()? {
+        by_id.insert(
+            record.item.connection.id.clone(),
+            record.item.connection.name,
+        );
+    }
+    let mut hosts: Vec<ImportHost> = hosts;
+    for host in &mut hosts {
+        let bound = host
+            .source
+            .as_deref()
+            .and_then(|source| bindings.get(source))
+            .is_some_and(|id| by_id.contains_key(id));
+        host.exists = Some(bound || stored.contains(&key_of_host(host)));
+        host.problem = host.connection().err();
+    }
+    let removed = match scope {
+        Some(scope) => {
+            let listed: BTreeSet<&str> = hosts.iter().filter_map(|h| h.source.as_deref()).collect();
+            let mut names: Vec<String> = bindings
+                .scoped(scope)
+                .filter(|(source, _)| !listed.contains(source.as_str()))
+                .filter_map(|(_, id)| by_id.get(id).cloned())
+                .collect();
+            names.sort();
+            names
+        }
+        None => Vec::new(),
+    };
     Ok(ImportPreview {
-        format: format.map(|format| format.id().to_owned()),
-        detected: detected.map(|format| format.id().to_owned()),
+        format: None,
+        detected: None,
         hosts,
-        groups: report.groups.clone(),
-        warnings: report.warnings.iter().map(ToString::to_string).collect(),
-        skipped: report.skipped,
+        groups: Vec::new(),
+        warnings: Vec::new(),
+        skipped: 0,
+        removed,
     })
+}
+
+/// Which stored host each service source key created: `source key -> host id`,
+/// kept in the settings table so that a later import of the same service
+/// updates the host instead of adding another.
+#[derive(Debug, Default)]
+struct Bindings(BTreeMap<String, String>);
+
+const BINDINGS_KEY: &str = "import.sources";
+
+impl Bindings {
+    fn load(store: &Store) -> Self {
+        Self(
+            store
+                .get_setting_as::<BTreeMap<String, String>>(BINDINGS_KEY)
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+        )
+    }
+
+    fn get(&self, source: &str) -> Option<&String> {
+        self.0.get(source)
+    }
+
+    fn scoped<'a>(&'a self, scope: &'a str) -> impl Iterator<Item = (&'a String, &'a String)> {
+        self.0
+            .iter()
+            .filter(move |(source, _)| source.starts_with(scope))
+    }
+
+    fn save(&self, store: &Store) -> Result<()> {
+        store.set_setting_as(BINDINGS_KEY, &self.0)
+    }
 }
 
 /// What to do with an imported host that matches a stored one.
@@ -337,6 +458,8 @@ pub fn import_apply(store: &Store, request: &ApplyRequest) -> Result<ApplyOutcom
         _ => None,
     };
 
+    let mut bindings = Bindings::load(store);
+    let mut bindings_changed = false;
     let mut outcome = ApplyOutcome::default();
     let known_groups = groups.len();
     let mut touched: BTreeSet<String> = BTreeSet::new();
@@ -364,16 +487,46 @@ pub fn import_apply(store: &Store, request: &ApplyRequest) -> Result<ApplyOutcom
             GroupMode::Existing => target.clone(),
         };
         let key = key_of_host(host);
+        // A host this service import created earlier is found by its source
+        // key, so a changed address updates it instead of adding another.
+        let by_source = host
+            .source
+            .as_deref()
+            .and_then(|source| bindings.get(source))
+            .filter(|id| stored.contains_key(*id))
+            .cloned();
+        let from_source = by_source.is_some();
         let existing = match request.duplicates {
             DuplicatePolicy::KeepBoth => None,
-            _ => by_key.get(&key).cloned(),
+            _ => by_source.or_else(|| by_key.get(&key).cloned()),
         };
+        if let (Some(id), Some(source)) = (&existing, &host.source) {
+            if bindings.get(source) != Some(id) {
+                bindings.0.insert(source.clone(), id.clone());
+                bindings_changed = true;
+            }
+        }
         match (existing, request.duplicates) {
             (Some(_), DuplicatePolicy::Skip) => outcome.unchanged += 1,
             (Some(id), _) => {
                 let current = stored.get_mut(&id).expect("indexed hosts are stored");
                 let before = current.clone();
                 current.name = connection.name;
+                if from_source {
+                    if let ConnectionTarget::Endpoint {
+                        hostname: new_host,
+                        port: new_port,
+                        ..
+                    } = &connection.target
+                    {
+                        if let ConnectionTarget::Endpoint { hostname, port, .. } =
+                            &mut current.target
+                        {
+                            hostname.clone_from(new_host);
+                            *port = *new_port;
+                        }
+                    }
+                }
                 if request.group_mode != GroupMode::None {
                     current.group_id = group_id;
                 }
@@ -405,6 +558,10 @@ pub fn import_apply(store: &Store, request: &ApplyRequest) -> Result<ApplyOutcom
                         by_key.entry(key).or_insert_with(|| connection.id.clone());
                     }
                 }
+                if let Some(source) = &host.source {
+                    bindings.0.insert(source.clone(), connection.id.clone());
+                    bindings_changed = true;
+                }
                 stored.insert(connection.id.clone(), connection.clone());
                 created.push(connection);
                 outcome.created += 1;
@@ -423,6 +580,9 @@ pub fn import_apply(store: &Store, request: &ApplyRequest) -> Result<ApplyOutcom
     // Only what changed is written, and `upsert_records` removes nothing; the
     // groups are all listed so that references to them survive.
     store.upsert_records(&config)?;
+    if bindings_changed {
+        bindings.save(store)?;
+    }
     Ok(outcome)
 }
 
