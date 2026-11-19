@@ -103,8 +103,19 @@ pub fn parse_ssh_g(text: &str) -> Option<HostFacts> {
 }
 
 fn expand_home(path: &str) -> PathBuf {
-    match path.strip_prefix("~/") {
-        Some(rest) => dirs::home_dir().map_or_else(|| PathBuf::from(path), |home| home.join(rest)),
+    expand_home_in(path, dirs::home_dir().as_deref())
+}
+
+/// `~`, `~/…` and (as written on Windows) `~\…` start at `home`.
+fn expand_home_in(path: &str, home: Option<&Path>) -> PathBuf {
+    let Some(home) = home else {
+        return PathBuf::from(path);
+    };
+    if path == "~" {
+        return home.to_path_buf();
+    }
+    match path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+        Some(rest) => home.join(rest),
         None => PathBuf::from(path),
     }
 }
@@ -235,10 +246,12 @@ fn uses_match(path: &Path, ssh_dir: &Path, depth: usize) -> bool {
 /// Files an `Include` pattern names: `~`-relative or relative to `~/.ssh`,
 /// with `*` allowed in the file name.
 fn expand_include(pattern: &str, ssh_dir: &Path) -> Vec<PathBuf> {
-    let path = match pattern.strip_prefix("~/") {
-        Some(rest) => dirs::home_dir().map(|h| h.join(rest)).unwrap_or_default(),
-        None if Path::new(pattern).is_absolute() => PathBuf::from(pattern),
-        None => ssh_dir.join(pattern),
+    let path = if pattern == "~" || pattern.starts_with("~/") || pattern.starts_with("~\\") {
+        expand_home(pattern)
+    } else if Path::new(pattern).is_absolute() {
+        PathBuf::from(pattern)
+    } else {
+        ssh_dir.join(pattern)
     };
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
         return Vec::new();
@@ -464,6 +477,21 @@ fn whoami() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn home_relative_paths_expand_in_every_spelling() {
+        use super::expand_home_in;
+        use std::path::{Path, PathBuf};
+        let home = Path::new("/home/me");
+        let at = |p: &str| expand_home_in(p, Some(home));
+        assert_eq!(at("~"), PathBuf::from("/home/me"));
+        assert_eq!(at("~/.ssh/id_ed25519"), home.join(".ssh/id_ed25519"));
+        assert_eq!(at("~\\.ssh\\id_ed25519"), home.join(".ssh\\id_ed25519"));
+        assert_eq!(at("/etc/ssh/key"), PathBuf::from("/etc/ssh/key"));
+        // `~user` is another user's home, which is not looked up.
+        assert_eq!(at("~bob/key"), PathBuf::from("~bob/key"));
+        assert_eq!(expand_home_in("~/k", None), PathBuf::from("~/k"));
+    }
+
     use super::*;
 
     const SAMPLE: &str = "\
