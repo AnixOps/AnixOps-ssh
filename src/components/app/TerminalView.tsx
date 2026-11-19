@@ -42,6 +42,7 @@ import { duration, ease, enter, leave } from "@/lib/motion";
 import { onSettings, settings } from "@/lib/settings";
 import { appShortcut } from "@/lib/shortcuts";
 import { registerTerminal, terminalFor } from "@/lib/terminals";
+import { exitTitle, RESIZE_DEBOUNCE_MS, TERMINAL_RESET, trailingDebounce, type SessionEnd } from "@/lib/terminalSession";
 import { terminalFont, terminalTheme } from "@/lib/terminalTheme";
 
 /** The SSH engine a session runs on, and why. */
@@ -55,7 +56,7 @@ export type SessionStatus =
   | { state: "connected"; engine?: EngineInfo }
   /** The connection to the background daemon dropped; the session is re-attached when it is back. */
   | { state: "reconnecting" }
-  | { state: "exited"; code: number | null; error?: string };
+  | ({ state: "exited"; error?: string } & SessionEnd);
 
 export function TerminalView({
   tabKey,
@@ -87,6 +88,8 @@ export function TerminalView({
   const sessionRef = useRef<SessionHandle | null>(null);
   const startRef = useRef<() => void>(() => {});
   const [status, setStatus] = useState<SessionStatus>({ state: "connecting" });
+  /** Set while the session is over, so Enter reconnects instead of typing. */
+  const endedRef = useRef(false);
   const integrationRef = useRef<ShellIntegrationHandle | null>(null);
   const [askOpen, setAskOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
@@ -97,6 +100,7 @@ export function TerminalView({
 
   const report = useCallback(
     (next: SessionStatus) => {
+      endedRef.current = next.state === "exited";
       setStatus(next);
       onStatus(tabKey, next);
     },
@@ -241,12 +245,18 @@ export function TerminalView({
     const markTyping = () => {
       typing = true;
       window.clearTimeout(typingTimer);
+      sendResize.cancel();
       typingTimer = window.setTimeout(() => (typing = false), 0);
     };
     const typingEvents = ["keydown", "keypress", "input", "compositionend"];
     for (const type of typingEvents) container.addEventListener(type, markTyping, true);
     const receivers = () => targetsFor(tabKey, (id) => terminalFor(id)?.connected() ?? false);
     terminal.onData((data) => {
+      if (endedRef.current) {
+        // Like PuTTY-style clients: Enter on an ended session starts it again.
+        if (data === "\r") startRef.current();
+        return;
+      }
       controller.input(data);
       sessionRef.current?.write(data);
       if (typing) for (const id of receivers()) terminalFor(id)?.write(data);
@@ -271,7 +281,13 @@ export function TerminalView({
       routePaste(text);
     };
     container.addEventListener("paste", onPaste, true);
-    terminal.onResize(({ cols, rows }) => sessionRef.current?.resize(cols, rows));
+    // The view fits at once; the session hears the size once dragging
+    // settles, so the remote app redraws once instead of on every frame.
+    const sendResize = trailingDebounce(
+      (cols: number, rows: number) => sessionRef.current?.resize(cols, rows),
+      RESIZE_DEBOUNCE_MS,
+    );
+    terminal.onResize(({ cols, rows }) => sendResize(cols, rows));
 
     // Only the first start may reattach; "Reconnect" opens a fresh session.
     let reattach = sessionId;
@@ -295,11 +311,13 @@ export function TerminalView({
           if (!exited) {
             connected = true;
             report({ state: "connected", engine });
+            // The view may have been resized while the link was down.
+            sessionRef.current?.resize(terminal.cols, terminal.rows);
           }
         } else {
           exited = true;
           sessionRef.current = null;
-          report({ state: "exited", code: event.code });
+          report({ state: "exited", code: event.code, reason: event.reason, signal: event.signal });
         }
       };
       const attaching = reattach;
@@ -353,7 +371,9 @@ export function TerminalView({
       },
     });
     startRef.current = () => {
-      terminal.write("\r\n");
+      // Undo modes the old session left on (alternate screen, mouse
+      // reporting, bracketed paste) before the new one starts.
+      terminal.write(TERMINAL_RESET + "\r\n");
       start();
       terminal.focus();
     };
@@ -581,10 +601,16 @@ export function TerminalView({
             <Unplug className="size-5 shrink-0 text-label-2" strokeWidth={1.5} />
             <div className="min-w-0 flex-1">
               <p className="text-callout font-medium text-label-1">
-                {status.error ? t.sessionFailed : t.sessionEnded}
+                {status.error ? t.sessionFailed : exitTitle(status)}
               </p>
               <p className="selectable line-clamp-4 break-words text-callout text-label-2">
-                {status.error ? (isSerialPermissionError(status.error) ? t.serialPermissionDenied : status.error) : status.code === null ? "" : `${t.exitCode} ${status.code}`}
+                {status.error
+                  ? isSerialPermissionError(status.error)
+                    ? t.serialPermissionDenied
+                    : status.error
+                  : hostId
+                    ? t.enterToReconnect
+                    : t.enterToReopen}
               </p>
             </div>
             <Button variant="primary" size="sm" onClick={() => startRef.current()}>

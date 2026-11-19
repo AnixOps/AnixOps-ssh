@@ -19,7 +19,7 @@
 
 use crate::launch::connect_or_spawn_with;
 use crate::link::{
-    AskpassPrompt, Link, LinkError, LinkHandler, LinkOptions, SessionMsg, SessionSink,
+    AskpassPrompt, ExitReason, Link, LinkError, LinkHandler, LinkOptions, SessionMsg, SessionSink,
 };
 use easyssh_proto as proto;
 use serde_json::Value;
@@ -123,7 +123,9 @@ impl Tracked {
         let this = self.clone();
         Box::new(move |msg| {
             match &msg {
-                SessionMsg::Exit { code: None } if !alive.load(Ordering::SeqCst) => return true,
+                SessionMsg::Exit { code: None, .. } if !alive.load(Ordering::SeqCst) => {
+                    return true
+                }
                 SessionMsg::Data { seq, data } => {
                     this.next_seq
                         .fetch_max(seq + data.len() as u64, Ordering::SeqCst);
@@ -517,7 +519,10 @@ impl Supervisor {
                     Err(_) => {
                         // The daemon restarted (or dropped the session): the
                         // process is gone, so the tab shows it as ended.
-                        tracked.deliver(SupervisedMsg::Session(SessionMsg::Exit { code: None }));
+                        tracked.deliver(SupervisedMsg::Session(SessionMsg::Exit {
+                            code: None,
+                            reason: ExitReason::Disconnected,
+                        }));
                         lock(&self.state).tracked.remove(&sid);
                     }
                 }

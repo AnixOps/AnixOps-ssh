@@ -27,6 +27,33 @@ impl ExitStatus {
     pub fn success(&self) -> bool {
         self.code() == Some(0)
     }
+
+    /// How the end is told to the UI: `exit` (the shell reported a status),
+    /// `signal` (it was killed) or `disconnected` (no status: the
+    /// connection dropped or the channel was closed).
+    pub fn reason(&self) -> &'static str {
+        match self {
+            ExitStatus::Code(_) => "exit",
+            ExitStatus::Signal(_) => "signal",
+            ExitStatus::Unknown => "disconnected",
+        }
+    }
+
+    /// The signal's name without the `SIG` prefix (`TERM`), for `Signal`.
+    pub fn signal(&self) -> Option<&str> {
+        match self {
+            ExitStatus::Signal(name) => Some(name),
+            _ => None,
+        }
+    }
+}
+
+/// A signal's name as the SSH protocol spells it (`TERM`, not `SIGTERM`).
+fn signal_name(signal: &russh::Sig) -> String {
+    match signal {
+        russh::Sig::Custom(name) => name.trim_start_matches("SIG").to_owned(),
+        other => format!("{other:?}"),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,7 +134,7 @@ impl Session {
                     output.exit = ExitStatus::Code(exit_status)
                 }
                 Some(ChannelMsg::ExitSignal { signal_name, .. }) => {
-                    output.exit = ExitStatus::Signal(format!("{signal_name:?}"))
+                    output.exit = ExitStatus::Signal(self::signal_name(&signal_name))
                 }
                 Some(ChannelMsg::Close) | None => break,
                 Some(_) => {}
@@ -143,7 +170,7 @@ impl Session {
                         status = ExitStatus::Code(exit_status)
                     }
                     ChannelMsg::ExitSignal { signal_name, .. } => {
-                        status = ExitStatus::Signal(format!("{signal_name:?}"))
+                        status = ExitStatus::Signal(self::signal_name(&signal_name))
                     }
                     ChannelMsg::Close => break,
                     _ => {}
@@ -207,5 +234,28 @@ impl ShellHandle {
 impl Drop for ShellHandle {
     fn drop(&mut self) {
         self.task.abort();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{signal_name, ExitStatus};
+
+    #[test]
+    fn tells_an_exit_from_a_signal_from_a_lost_connection() {
+        assert_eq!(ExitStatus::Code(3).reason(), "exit");
+        assert_eq!(ExitStatus::Code(3).signal(), None);
+        let killed = ExitStatus::Signal("KILL".into());
+        assert_eq!(killed.reason(), "signal");
+        assert_eq!(killed.signal(), Some("KILL"));
+        assert_eq!(killed.code(), None);
+        assert_eq!(ExitStatus::Unknown.reason(), "disconnected");
+    }
+
+    #[test]
+    fn names_signals_without_the_sig_prefix() {
+        assert_eq!(signal_name(&russh::Sig::TERM), "TERM");
+        assert_eq!(signal_name(&russh::Sig::Custom("SIGWINCH".into())), "WINCH");
+        assert_eq!(signal_name(&russh::Sig::Custom("XCPU".into())), "XCPU");
     }
 }
