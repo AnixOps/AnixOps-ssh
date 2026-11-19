@@ -1,0 +1,24 @@
+[package]
+name = "easyssh-services"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Import hosts from services the user already runs (AnixOps Control, JumpServer): HTTP fetch, mapping to import hosts, and the sealed API credentials"
+
+[dependencies]
+base64.workspace = true
+easyssh-store = { path = "../easyssh-store" }
+easyssh-vault = { path = "../easyssh-vault" }
+hmac.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+ureq = { version = "2", default-features = false, features = ["tls"] }
+url = "2"
+zeroize = "1"
+
+[dev-dependencies]
+easyssh-core = { path = "../easyssh-core" }
+easyssh-crypto = { path = "../easyssh-crypto" }

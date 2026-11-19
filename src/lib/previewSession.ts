@@ -56,7 +56,7 @@ export function previewSession(
     if (command === "exit") {
       emit("logout" + CRLF);
       closed = true;
-      onEvent({ kind: "exit", code: 0 });
+      onEvent({ kind: "exit", code: 0, reason: "exit" });
       return;
     }
     if (command === "ls") {

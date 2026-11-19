@@ -70,3 +70,18 @@ export async function locate(list: (path: string) => Promise<RemoteFile[]>, path
   }
   return { dir: path, entries: await list(path), select: null };
 }
+
+/** The last part of a local path, which may use `\` on Windows. */
+export function localName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+/**
+ * The names an upload of `paths` into a folder would replace: those already
+ * listed there, each once, in the order of `paths`.
+ */
+export function uploadConflicts(paths: string[], entries: Pick<RemoteFile, "name">[]): string[] {
+  const listed = new Set(entries.map((entry) => entry.name));
+  const names = paths.map(localName).filter((name) => listed.has(name));
+  return [...new Set(names)];
+}

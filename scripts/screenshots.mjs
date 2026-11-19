@@ -41,6 +41,21 @@ const scenes = [
     clicks: [{ name: "添加主机" }, { name: "^导入主机", role: "menuitem", regex: true }, { name: "从 ~/.ssh/config 导入" }],
     waitText: "legacy-switch",
   },
+  {
+    name: "import-service",
+    query: "",
+    clicks: [{ name: "添加主机" }, { name: "^导入主机", role: "menuitem", regex: true }, { name: "AnixOps Control" }],
+    fills: [{ placeholder: "https://panel.example.com", value: "https://panel.example.com" }, { placeholder: "anixadm_…", value: "anixadm_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG" }],
+    waitText: "测试连接",
+  },
+  {
+    name: "import-service-preview",
+    query: "lang=en",
+    clicks: [{ name: "Add host" }, { name: "^Import hosts", role: "menuitem", regex: true }, { name: "AnixOps Control" }],
+    fills: [{ placeholder: "https://panel.example.com", value: "https://panel.example.com" }, { placeholder: "anixadm_…", value: "anixadm_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG" }],
+    clicksAfter: [{ name: "Preview" }],
+    waitText: "old-sg-02",
+  },
   { name: "terminal-en", query: "lang=en", open: ["prod-web-01", "home-nas"] },
 ];
 
@@ -126,6 +141,9 @@ for (const colorScheme of ["light", "dark"]) {
       await page.keyboard.type(scene.typeText ?? "");
     }
     for (const step of scene.clicks ?? [])
+      await page.getByRole(step.role ?? "button", { name: step.regex ? new RegExp(step.name) : step.name, exact: step.regex ? undefined : (step.exact ?? true) }).first().click();
+    for (const field of scene.fills ?? []) await page.getByPlaceholder(field.placeholder).fill(field.value);
+    for (const step of scene.clicksAfter ?? [])
       await page.getByRole(step.role ?? "button", { name: step.regex ? new RegExp(step.name) : step.name, exact: step.regex ? undefined : (step.exact ?? true) }).first().click();
     if (scene.waitText) await page.getByText(scene.waitText).first().waitFor();
     if (scene.click) await page.getByRole("button", { name: scene.click, exact: true }).first().click();

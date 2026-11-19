@@ -1,7 +1,8 @@
-import { ChevronRight, FileText, LoaderCircle, ShieldCheck } from "lucide-react";
+import { ChevronRight, FileText, LoaderCircle, RefreshCw, Server, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge, Field, Notice } from "@/components/ui/form";
+import { ServiceImportForm } from "@/components/app/ServiceImportForm";
 import { Overlay } from "@/components/ui/overlay";
 import { Select } from "@/components/ui/select";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -15,6 +16,8 @@ import {
   type ImportDuplicatePolicy,
   type ImportFormat,
   type ImportSource,
+  type ServiceId,
+  type ServiceRequest,
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import {
@@ -48,8 +51,17 @@ const FORMATS: { id: ImportFormat; name: string }[] = [
 
 const formatName = (id: ImportFormat | null) => FORMATS.find((format) => format.id === id)?.name ?? "";
 
+const SERVICES: { id: ServiceId; name: string }[] = [{ id: "control", name: t.importServiceControl }];
+
+/** The host part of a service address, for the header of its preview. */
+const serviceHost = (url: string) => url.trim().replace(/^[a-z]+:\/\//i, "").replace(/\/.*$/, "");
+
 const sourceName = (source: ImportSource) =>
-  source.kind === "ssh_config" ? "~/.ssh/config" : (source.path.split(/[\\/]/).pop() ?? source.path);
+  source.kind === "ssh_config"
+    ? "~/.ssh/config"
+    : source.kind === "service"
+      ? `${SERVICES.find((service) => service.id === source.request.service)?.name ?? ""} · ${serviceHost(source.request.form.url)}`
+      : (source.path.split(/[\\/]/).pop() ?? source.path);
 
 /** Imports hosts from another SSH client: pick a source, review the hosts
  *  found, choose where they go and what happens to duplicates, then merge.
@@ -75,17 +87,25 @@ export function ImportDialog({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<HostsImportApplyResult | null>(null);
   const [warningsOpen, setWarningsOpen] = useState(false);
+  const [serviceForm, setServiceForm] = useState<ServiceId | null>(null);
   const firstRef = useRef<HTMLButtonElement>(null);
+  const serviceFirstRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => firstRef.current?.focus(), []);
+  useEffect(() => {
+    if (serviceForm) serviceFirstRef.current?.focus();
+  }, [serviceForm]);
 
   const load = async (next: ImportSource, format: ImportFormat | null) => {
     setBusy("reading");
     setError(null);
     try {
       const found = await previewImportHosts(next, format);
-      setSource(next);
+      // The credential is saved by the backend; it is not kept here.
+      setSource(next.kind === "service" ? { kind: "service", request: { ...next.request, secret: null, clear_secret: false } } : next);
       setOverride(format);
+      // Importing again from a service is a sync: update what was imported.
+      if (next.kind === "service" && next.request.form.url !== "") setPolicy((current) => (current === "skip" ? "update" : current));
       setPreview(found);
       setSelected(defaultSelection(found.hosts));
       setWarningsOpen(false);
@@ -95,6 +115,8 @@ export function ImportDialog({
       setBusy(null);
     }
   };
+
+  const previewService = (request: ServiceRequest) => void load({ kind: "service", request }, null);
 
   const chooseFile = async () => {
     setError(null);
@@ -129,6 +151,8 @@ export function ImportDialog({
     setSource(null);
     setPreview(null);
     setOverride(null);
+    setServiceForm(null);
+    setPolicy("skip");
     setError(null);
   };
 
@@ -141,6 +165,17 @@ export function ImportDialog({
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 pt-4 pb-2">
         {result ? (
           <Summary result={result} />
+        ) : !preview && serviceForm ? (
+          <ServiceImportForm
+            service={serviceForm}
+            busy={busy !== null}
+            onPreview={previewService}
+            onBack={() => {
+              setServiceForm(null);
+              setError(null);
+            }}
+            firstRef={serviceFirstRef}
+          />
         ) : !preview ? (
           <>
             <p className="text-callout font-normal text-label-2">{t.importIntro}</p>
@@ -155,19 +190,43 @@ export function ImportDialog({
               </Button>
             </div>
             <p className="text-callout text-label-3">{t.importSshConfigHint}</p>
+            <div className="space-y-2 border-t border-separator pt-4">
+              <h3 className="text-callout font-medium text-label-1">{t.importFromService}</h3>
+              <p className="text-callout text-label-3">{t.importFromServiceHint}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                {SERVICES.map((service) => (
+                  <Button key={service.id} variant="secondary" disabled={busy !== null} onClick={() => setServiceForm(service.id)}>
+                    <Server />
+                    {service.name}
+                  </Button>
+                ))}
+              </div>
+            </div>
           </>
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               <span className="flex min-w-0 items-center gap-2 text-callout text-label-1">
-                <FileText className="size-4 shrink-0 text-label-2" strokeWidth={1.5} />
+                {source?.kind === "service" ? (
+                  <Server className="size-4 shrink-0 text-label-2" strokeWidth={1.5} />
+                ) : (
+                  <FileText className="size-4 shrink-0 text-label-2" strokeWidth={1.5} />
+                )}
                 <span className="selectable truncate font-mono">{source ? sourceName(source) : ""}</span>
               </span>
               <span className="text-callout text-label-2">
-                {preview.format
-                  ? `${t.importDetected}: ${formatName(preview.detected)} · ${hosts.length} ${t.importFound}`
-                  : t.importNotDetected}
+                {source?.kind === "service"
+                  ? `${hosts.length} ${t.importServiceFound}`
+                  : preview.format
+                    ? `${t.importDetected}: ${formatName(preview.detected)} · ${hosts.length} ${t.importFound}`
+                    : t.importNotDetected}
               </span>
+              {source?.kind === "service" ? (
+                <Button variant="quiet" className="ml-auto" disabled={busy !== null} onClick={() => void load(source, null)}>
+                  {busy === "reading" ? <LoaderCircle className="animate-spin motion-reduce:animate-none" /> : <RefreshCw />}
+                  {t.importSyncAgain}
+                </Button>
+              ) : (
               <label className="ml-auto flex items-center gap-2 text-callout text-label-2">
                 {t.importFormat}
                 <Select
@@ -185,10 +244,18 @@ export function ImportDialog({
                   ))}
                 </Select>
               </label>
+              )}
             </div>
 
             <HostTable hosts={hosts} selected={selected} onChange={setSelected} />
             {hosts.length === 0 && <p className="text-callout text-label-2">{t.importNothing}</p>}
+
+            {(preview.removed?.length ?? 0) > 0 && (
+              <Notice tone="warning">
+                <span className="font-medium">{t.importRemoved}</span> ({preview.removed?.length}). {t.importRemovedHint}{" "}
+                <span className="font-mono">{preview.removed?.join(", ")}</span>
+              </Notice>
+            )}
 
             {(preview.warnings.length > 0 || preview.skipped > 0) && (
               <div>
