@@ -13,6 +13,7 @@ use russh::keys::PublicKeyOrCertificate;
 use russh::{Channel, ChannelOpenFailure, Preferred};
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
@@ -272,7 +273,7 @@ impl Session {
             .unwrap_or_default();
         let config = client::Config {
             keepalive_interval: params.keepalive,
-            keepalive_max: 3,
+            keepalive_max: params.keepalive_max.max(1),
             nodelay: true,
             preferred: Preferred {
                 key: host_key_preference(&recorded),
@@ -361,25 +362,43 @@ impl Session {
         Ok(())
     }
 
+    /// A session channel (shell, exec, SFTP). A server that does not answer
+    /// within [`CHANNEL_OPEN_TIMEOUT`] (a connection that died without
+    /// noticing) is a timeout rather than a wait of minutes; a refusal is
+    /// [`Error::ChannelRefused`].
     pub(crate) async fn open_session_channel(&self) -> Result<Channel<Msg>> {
-        Ok(self.inner.handle.channel_open_session().await?)
+        let open = self.inner.handle.channel_open_session();
+        match tokio::time::timeout(CHANNEL_OPEN_TIMEOUT, open).await {
+            Ok(Ok(channel)) => Ok(channel),
+            Ok(Err(russh::Error::ChannelOpenFailure(reason))) => {
+                Err(Error::ChannelRefused(refusal(reason)))
+            }
+            Ok(Err(e)) => Err(e.into()),
+            Err(_) => Err(Error::Timeout(format!(
+                "the server did not open a channel within {} s",
+                CHANNEL_OPEN_TIMEOUT.as_secs()
+            ))),
+        }
     }
 
+    /// A `direct-tcpip` channel, with the same time limit as
+    /// [`Session::open_session_channel`] (a timeout is
+    /// `russh::Error::ConnectionTimeout`).
     pub(crate) async fn open_direct_tcpip(
         &self,
         host: &str,
         port: u16,
         origin: std::net::SocketAddr,
     ) -> std::result::Result<Channel<Msg>, russh::Error> {
-        self.inner
-            .handle
-            .channel_open_direct_tcpip(
-                host.to_owned(),
-                u32::from(port),
-                origin.ip().to_string(),
-                u32::from(origin.port()),
-            )
+        let open = self.inner.handle.channel_open_direct_tcpip(
+            host.to_owned(),
+            u32::from(port),
+            origin.ip().to_string(),
+            u32::from(origin.port()),
+        );
+        tokio::time::timeout(CHANNEL_OPEN_TIMEOUT, open)
             .await
+            .unwrap_or(Err(russh::Error::ConnectionTimeout))
     }
 
     pub(crate) async fn request_remote_forward(&self, bind: &str, port: u16) -> Result<u32> {
@@ -412,6 +431,24 @@ impl Session {
 
     pub(crate) fn remote_forwards(&self) -> &Arc<RemoteForwards> {
         &self.inner.forwards
+    }
+}
+
+/// How long opening a channel may take before the connection is presumed
+/// dead (keepalives would take minutes to notice).
+pub const CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// A channel-open failure reason in words.
+fn refusal(reason: ChannelOpenFailure) -> String {
+    match reason {
+        ChannelOpenFailure::AdministrativelyProhibited => {
+            "administratively prohibited (too many sessions on this connection?)".to_owned()
+        }
+        ChannelOpenFailure::ConnectFailed => "connect failed".to_owned(),
+        ChannelOpenFailure::UnknownChannelType => "unknown channel type".to_owned(),
+        ChannelOpenFailure::ResourceShortage => "resource shortage".to_owned(),
+        ChannelOpenFailure::Other { code, reason } if reason.is_empty() => format!("code {code}"),
+        ChannelOpenFailure::Other { reason, .. } => reason,
     }
 }
 

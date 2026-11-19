@@ -15,6 +15,10 @@ pub mod interact;
 pub use easyssh_engine::{files, known_hosts, registry, tunnels};
 pub mod plan;
 
+/// The most extra connections to one host for sessions the server refused
+/// on the others (`MaxSessions`).
+const MAX_SHARD: u32 = 3;
+
 use crate::askpass::Hub;
 use easyssh_engine::prompts::HostKeyPrompts;
 use easyssh_ssh::{
@@ -176,6 +180,9 @@ impl Engine {
         if spec.keepalive.is_some() {
             params.keepalive = spec.keepalive;
         }
+        if let Some(count) = spec.keepalive_max {
+            params.keepalive_max = count;
+        }
         params
     }
 
@@ -225,13 +232,29 @@ impl Engine {
         plan: &RusshPlan,
         agent: Option<PathBuf>,
     ) -> Result<Lease, SharedError> {
+        self.lease_shard(plan, agent.as_ref(), 0).await
+    }
+
+    /// A lease on the host's extra connection number `shard` (0 is the
+    /// usual one).
+    async fn lease_shard(
+        &self,
+        plan: &RusshPlan,
+        agent: Option<&PathBuf>,
+        shard: u32,
+    ) -> Result<Lease, SharedError> {
         self.registry
-            .acquire(plan.key.clone(), || self.connect(plan, agent.as_ref()))
+            .acquire(plan.key.shard(shard), || self.connect(plan, agent))
             .await
     }
 
     /// A shell on the host's shared connection. The lease keeps the
     /// connection up for as long as the shell lives.
+    ///
+    /// When the server refuses the session (OpenSSH's `MaxSessions`, 10 by
+    /// default), the shell opens on another connection to the same host.
+    /// When the channel does not open in time, the connection is presumed
+    /// dead: it is closed and the shell opens on a new one.
     pub async fn open_shell(
         &self,
         plan: &RusshPlan,
@@ -239,16 +262,26 @@ impl Engine {
         cols: u16,
         rows: u16,
     ) -> Result<(ShellHandle, Lease), SharedError> {
-        let lease = self.lease(plan, agent).await?;
-        let shell = lease
-            .shell(ShellOptions {
-                term: "xterm-256color".into(),
-                cols: u32::from(cols.max(1)),
-                rows: u32::from(rows.max(1)),
-            })
-            .await
-            .map_err(Arc::new)?;
-        Ok((shell, lease))
+        let options = ShellOptions {
+            term: "xterm-256color".into(),
+            cols: u32::from(cols.max(1)),
+            rows: u32::from(rows.max(1)),
+        };
+        let mut shard = 0;
+        let mut retried_timeout = false;
+        loop {
+            let lease = self.lease_shard(plan, agent.as_ref(), shard).await?;
+            match lease.shell(options.clone()).await {
+                Ok(shell) => return Ok((shell, lease)),
+                Err(SshError::ChannelRefused(_)) if shard < MAX_SHARD => shard += 1,
+                Err(SshError::Timeout(_)) if !retried_timeout => {
+                    retried_timeout = true;
+                    drop(lease);
+                    self.registry.evict(&plan.key.shard(shard)).await;
+                }
+                Err(error) => return Err(Arc::new(error)),
+            }
+        }
     }
 
     /// `engine.connections`.
