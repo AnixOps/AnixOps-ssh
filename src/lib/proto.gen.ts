@@ -38,6 +38,13 @@ export type ConnectionTarget =
       flow_control: "none" | "software" | "hardware";
     };
 /**
+ * Rust: domain::ProxyKind. SOCKS5 (RFC 1928, with RFC 1929 username/password) or HTTP CONNECT (with basic authentication).
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "ProxyKind".
+ */
+export type ProxyKind = "socks5" | "http";
+/**
  * Rust: tunnel::TunnelKind (-L, -R, -D).
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -223,6 +230,19 @@ export interface Connection {
    * Absent means auto.
    */
   engine?: "auto" | "russh" | "openssh";
+  proxy?: ProxySettings;
+}
+/**
+ * An outbound proxy for the first hop. Absent means a direct connection. The proxy password is a saved secret, not part of the record.
+ */
+export interface ProxySettings {
+  kind: ProxyKind;
+  host: string;
+  port: number;
+  /**
+   * The proxy login; absent means no authentication. Its password is the saved secret `proxy_password`.
+   */
+  username?: string;
 }
 /**
  * Rust: domain::Group. `parent_id` has serde(default), so it is optional.
@@ -1207,6 +1227,10 @@ export interface SecretsStatusResult {
   password: boolean;
   private_key: boolean;
   passphrase: boolean;
+  /**
+   * The password of the host's outbound proxy. Absent from older daemons.
+   */
+  proxy_password?: boolean;
 }
 /**
  * Command `secrets.set` payload. Reply: SecretsStatusResult. Fails with `vault_locked` when a passphrase vault is locked.
@@ -1228,6 +1252,10 @@ export interface SecretsSetParams {
    * Key passphrase. Absent keeps; empty clears.
    */
   passphrase?: string;
+  /**
+   * Password of the host's outbound proxy. Absent keeps; empty clears.
+   */
+  proxy_password?: string;
 }
 /**
  * Command `askpass.unlock` payload: unlock the vault and answer prompt `id` from it. Reply: null. Fails with `wrong_passphrase`.
@@ -1622,6 +1650,21 @@ export interface HostsVaultsResult {
   host_vaults: {
     [k: string]: string;
   };
+}
+/**
+ * Rust: domain::ProxySettings. Where the outbound proxy of a host is.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "ProxySettings".
+ */
+export interface ProxySettings1 {
+  kind: ProxyKind;
+  host: string;
+  port: number;
+  /**
+   * The proxy login; absent means no authentication. Its password is the saved secret `proxy_password`.
+   */
+  username?: string;
 }
 /**
  * Event `hostkey.prompt` payload: the engine needs a decision about a host key. Answer with `hostkey.reply`.

@@ -62,8 +62,22 @@ export interface HostFields {
   engine?: EnginePreference | null;
   /** Opt-in: send the shell integration script after login. */
   shellIntegration: boolean;
+  /** An outbound proxy for the first hop; null or absent connects directly. Its password is a saved secret. */
+  proxy?: ProxyFields | null;
   /** Set for a serial port; the SSH fields are then unused. */
   serial?: SerialFields | null;
+}
+
+/** SOCKS5 (RFC 1928, with username and password) or HTTP CONNECT (with basic authentication). */
+export type ProxyKind = "socks5" | "http";
+
+/** Where a host's outbound proxy is. Mirrors `ProxySettings` in easyssh-core; the password is a saved secret. */
+export interface ProxyFields {
+  kind: ProxyKind;
+  host: string;
+  port: number;
+  /** The login; null or empty means no authentication. */
+  username?: string | null;
 }
 
 export type SerialParity = "none" | "odd" | "even";
@@ -533,6 +547,8 @@ export interface SecretsStatus {
   password: boolean;
   privateKey: boolean;
   passphrase: boolean;
+  /** The password of the host's outbound proxy. */
+  proxyPassword: boolean;
 }
 
 /** A field left out keeps the saved value; an empty string clears it. */
@@ -540,6 +556,7 @@ export interface SecretsInput {
   password?: string;
   privateKey?: string;
   passphrase?: string;
+  proxyPassword?: string;
 }
 
 /** The vault's state for Settings → Security. */
@@ -652,6 +669,7 @@ export async function secretsSet(hostId: string, input: SecretsInput): Promise<S
         password: input.password ?? null,
         privateKey: input.privateKey ?? null,
         passphrase: input.passphrase ?? null,
+        proxyPassword: input.proxyPassword ?? null,
       })
     : previewSecretsSet(hostId, input);
 }

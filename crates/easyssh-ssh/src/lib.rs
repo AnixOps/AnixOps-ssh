@@ -18,6 +18,7 @@ mod forward;
 mod interaction;
 pub mod known_hosts;
 mod params;
+pub mod proxy;
 mod security_key;
 #[cfg(all(
     feature = "hardware-key",
@@ -44,6 +45,7 @@ pub use forward::{Forward, ForwardKind};
 pub use interaction::{Decision, DenyAll, HostKeyDetails, Interaction, KbdPrompt};
 pub use known_hosts::{KnownHostStatus, KnownHosts, KnownHostsFile, MemoryKnownHosts};
 pub use params::{AgentSource, ConnectParams, MemoryIdentity};
+pub use proxy::{Proxy, ProxyError, ProxyFailure, ProxyKind};
 pub use security_key::{
     default_security_key, hardware_backend_available, sign_with_security_key, HidSecurityKey,
     SecurityKey, SkAlgorithm, SkAssertion, SkError, SkKeyInfo, SkSignRequest, WebAuthnSecurityKey,

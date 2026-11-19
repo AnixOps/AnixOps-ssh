@@ -1,6 +1,7 @@
 //! Connection parameters.
 
 use crate::known_hosts::{KnownHosts, MemoryKnownHosts};
+use crate::proxy::Proxy;
 use crate::security_key::SecurityKey;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -92,6 +93,10 @@ pub struct ConnectParams {
     /// The authenticator for `sk-*` keys. `None` uses the build's own
     /// ([`crate::default_security_key`]).
     pub security_key: Option<Arc<dyn SecurityKey>>,
+    /// An outbound proxy to reach this host through. Only the first hop of a
+    /// chain uses it (the later hops go through the SSH connection before
+    /// them), so a caller sets it on the first of `hops` and `target`.
+    pub proxy: Option<Proxy>,
 }
 
 impl ConnectParams {
@@ -114,7 +119,14 @@ impl ConnectParams {
             password_attempts: 3,
             known_hosts: Arc::new(MemoryKnownHosts::new()),
             security_key: None,
+            proxy: None,
         }
+    }
+
+    /// Reaches this host through `proxy` (the first hop of a chain only).
+    pub fn proxy(mut self, proxy: Option<Proxy>) -> Self {
+        self.proxy = proxy;
+        self
     }
 
     /// Signs for `sk-*` keys with `security_key` instead of the build's
@@ -160,6 +172,7 @@ impl std::fmt::Debug for ConnectParams {
             .field("agent", &self.agent)
             .field("identity_files", &self.identity_files)
             .field("memory_identities", &self.memory_identities)
+            .field("proxy", &self.proxy)
             .finish_non_exhaustive()
     }
 }

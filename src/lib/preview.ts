@@ -70,7 +70,12 @@ const store: HostsSnapshot =
           makeHost("1", "prod-web-01", endpoint("deploy@10.0.1.11"), "prod", { favorite: true, color: "chart-1" }),
           makeHost("2", "prod-web-02", endpoint("deploy@10.0.1.12"), "prod"),
           makeHost("3", "prod-db", endpoint("postgres@10.0.2.20"), "prod", { favorite: true, color: "chart-5" }),
-          makeHost("4", "staging-api", endpoint("ubuntu@staging.internal:2222"), "staging"),
+          makeHost(
+            "4",
+            "staging-api",
+            { ...endpoint("ubuntu@staging.internal:2222"), proxy: { kind: "socks5", host: "127.0.0.1", port: 7890, username: null } },
+            "staging",
+          ),
           makeHost("5", "home-nas", endpoint("admin@192.168.1.10"), "home", { favorite: true }),
           makeHost("6", "raspberry-pi", endpoint("pi@192.168.1.42"), "home", { color: "chart-7" }),
           makeHost(

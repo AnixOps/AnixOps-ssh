@@ -321,6 +321,7 @@ mod tests {
                     password: Some(SecretText::new(format!("pw-of-{id}"))),
                     private_key: None,
                     passphrase: None,
+                    ..Default::default()
                 })
             }
             fn secret_flags(&self, _: &str) -> Result<SecretFlags, VaultError> {
@@ -328,6 +329,7 @@ mod tests {
                     password: true,
                     private_key: false,
                     passphrase: false,
+                    ..Default::default()
                 })
             }
         }

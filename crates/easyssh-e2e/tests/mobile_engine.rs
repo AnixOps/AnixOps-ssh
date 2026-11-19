@@ -84,6 +84,7 @@ fn target() -> Target {
         identity: None,
         jump: Vec::new(),
         saved_password: None,
+        proxy: None,
     }
 }
 
@@ -409,6 +410,7 @@ async fn a_host_behind_a_jump_host_opens_through_it_with_its_own_questions() {
         identity: identity("bastion key"),
         jump: Vec::new(),
         saved_password: None,
+        proxy: None,
     };
     let behind = Target {
         host_id: "inner".into(),
@@ -419,6 +421,7 @@ async fn a_host_behind_a_jump_host_opens_through_it_with_its_own_questions() {
         identity: identity("inner key"),
         jump: vec![bastion],
         saved_password: None,
+        proxy: None,
     };
     let asked = Arc::new(Mutex::new(Vec::new()));
     let engine = engine(PW_PASSWORD, asked.clone());
@@ -457,6 +460,7 @@ impl SecretSource for PasswordVault {
             password: Some(easyssh_crypto::SecretText::new(self.0)),
             private_key: None,
             passphrase: None,
+            ..Default::default()
         })
     }
     fn secret_flags(&self, _: &str) -> Result<SecretFlags, VaultError> {
@@ -464,6 +468,7 @@ impl SecretSource for PasswordVault {
             password: true,
             private_key: false,
             passphrase: false,
+            ..Default::default()
         })
     }
 }
@@ -486,6 +491,7 @@ async fn a_jump_host_uses_its_own_saved_password_and_nobody_is_asked() {
         identity: None,
         jump: Vec::new(),
         saved_password: None,
+        proxy: None,
     };
     let behind = Target {
         host_id: "inner".into(),
@@ -496,6 +502,7 @@ async fn a_jump_host_uses_its_own_saved_password_and_nobody_is_asked() {
         identity: None,
         jump: vec![bastion],
         saved_password: None,
+        proxy: None,
     };
     let mut behind = easyssh_engine::with_saved_login(&vault, behind).expect("saved login");
     assert!(behind.jump[0].saved_password.is_some());

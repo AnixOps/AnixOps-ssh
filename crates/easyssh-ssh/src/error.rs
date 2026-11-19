@@ -87,6 +87,11 @@ pub enum Error {
         fingerprint: String,
     },
 
+    /// The outbound proxy of the host failed or refused; the message says
+    /// which side said no.
+    #[error("{0}")]
+    Proxy(#[from] crate::proxy::ProxyError),
+
     /// A channel could not be opened or broke.
     #[error("channel error: {0}")]
     Channel(String),

@@ -47,6 +47,9 @@ pub struct Target {
     pub jump: Vec<Target>,
     /// The saved password, offered once at the password prompt.
     pub saved_password: Option<Arc<SavedPassword>>,
+    /// The outbound proxy the first hop (the first jump host, or this host)
+    /// is reached through. [`crate::with_saved_login`] adds its password.
+    pub proxy: Option<easyssh_ssh::Proxy>,
 }
 
 impl Target {
@@ -61,6 +64,7 @@ impl Target {
             host_id: self.host_id.clone(),
             target: self.account(),
             jump: self.jump.iter().map(Target::account).collect(),
+            via: self.proxy.as_ref().map(|proxy| proxy.display()),
         }
     }
 }
@@ -100,6 +104,7 @@ pub fn error_code(error: &SshError) -> &'static str {
         SshError::HostKeyMismatch { .. } => "hostkey_changed",
         SshError::HostKeyRevoked { .. } => "hostkey_revoked",
         SshError::Network(_) | SshError::Timeout(_) | SshError::Disconnected => "network",
+        SshError::Proxy(_) => "proxy_error",
         SshError::NotFound(_) => "not_found",
         _ => "ssh_error",
     }
@@ -202,7 +207,14 @@ impl Engine {
     }
 
     async fn connect(&self, target: &Target) -> Result<Session, SharedError> {
-        let hops: Vec<ConnectParams> = target.jump.iter().map(|hop| self.params(hop)).collect();
+        let mut hops: Vec<ConnectParams> = target.jump.iter().map(|hop| self.params(hop)).collect();
+        let mut params = self.params(target);
+        // Only the first hop is reached over the network; the others go
+        // through the SSH connection before them.
+        match hops.first_mut() {
+            Some(first) => first.proxy = target.proxy.clone(),
+            None => params.proxy = target.proxy.clone(),
+        }
         let interaction = PromptInteraction {
             prompts: self.prompts.clone(),
             label: target.label.clone(),
@@ -213,7 +225,7 @@ impl Engine {
                 .filter_map(|t| t.saved_password.clone())
                 .collect(),
         };
-        Session::connect_via(&hops, self.params(target), &interaction)
+        Session::connect_via(&hops, params, &interaction)
             .await
             .map_err(Arc::new)
     }
@@ -446,6 +458,7 @@ mod tests {
             identity: None,
             jump,
             saved_password: None,
+            proxy: None,
         }
     }
 

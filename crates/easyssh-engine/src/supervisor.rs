@@ -605,6 +605,7 @@ mod tests {
             identity: None,
             jump: Vec::new(),
             saved_password: None,
+            proxy: None,
         }
     }
 

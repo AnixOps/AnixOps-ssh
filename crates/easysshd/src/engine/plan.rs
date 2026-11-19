@@ -353,6 +353,8 @@ pub struct RusshPlan {
     pub key: Key,
     pub hops: Vec<HostSpec>,
     pub target: HostSpec,
+    /// The host's outbound proxy, for the first hop.
+    pub proxy: Option<easyssh_core::ProxySettings>,
 }
 
 /// The decision for a host, with the plan when it is russh.
@@ -462,10 +464,16 @@ pub fn resolve(connection: &Connection, global: SshEngine) -> Resolution {
         host_id: connection.id.clone(),
         target: target.address(),
         jump: hops.iter().map(HostSpec::address).collect(),
+        via: connection.proxy.as_ref().map(|proxy| proxy.display()),
     };
     Resolution {
         choice,
-        plan: Some(RusshPlan { key, hops, target }),
+        plan: Some(RusshPlan {
+            key,
+            hops,
+            target,
+            proxy: connection.proxy.clone(),
+        }),
     }
 }
 

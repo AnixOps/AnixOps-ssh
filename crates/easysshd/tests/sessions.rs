@@ -478,6 +478,62 @@ async fn hosts_roundtrip_through_the_config_store() {
 }
 
 #[tokio::test]
+async fn a_host_with_a_proxy_is_stored_and_never_silently_run_on_openssh() {
+    use easyssh_core::{EnginePreference, ProxyKind, ProxySettings};
+    let s = start().await;
+    let mut c = Tc::connect(&s.runtime()).await;
+
+    let mut connection = Connection::alias("Behind the proxy", "prod");
+    connection.proxy = Some(ProxySettings {
+        kind: ProxyKind::Socks5,
+        host: "127.0.0.1".into(),
+        port: 7890,
+        username: None,
+    });
+    connection.engine = Some(EnginePreference::Openssh);
+    c.call(
+        "hosts.save",
+        json!({"connection": serde_json::to_value(&connection).unwrap()}),
+    )
+    .await
+    .unwrap();
+    let list = c.call("hosts.list", json!({})).await.unwrap();
+    proto::validate("HostsListResult", &list).unwrap();
+    assert_eq!(
+        list["connections"][0]["proxy"],
+        json!({"kind": "socks5", "host": "127.0.0.1", "port": 7890})
+    );
+
+    // OpenSSH has no safe proxy of its own here: refuse instead of
+    // connecting directly.
+    let e = c
+        .call(
+            "session.open",
+            json!({"host_id": connection.id, "cols": 80, "rows": 24}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e["code"], "proxy_needs_builtin_engine");
+    assert!(e["message"]
+        .as_str()
+        .unwrap()
+        .contains("socks5://127.0.0.1:7890"));
+
+    // A proxy that cannot work is refused when the host is saved.
+    let mut bad = serde_json::to_value(&connection).unwrap();
+    bad["proxy"]["port"] = json!(0);
+    let e = c
+        .call("hosts.save", json!({"connection": bad}))
+        .await
+        .unwrap_err();
+    assert!(
+        e["code"] == "invalid_host" || e["code"] == "invalid_command",
+        "{e}"
+    );
+    s.stop().await;
+}
+
+#[tokio::test]
 async fn askpass_prompts_reach_clients_and_answers_return() {
     let s = start().await;
     let mut c = Tc::connect(&s.runtime()).await;
