@@ -220,6 +220,8 @@ const zh = {
   hostEngine: "连接引擎",
   hostKeyNewTitle: "确认主机密钥",
   hostKeyNewBody: "第一次连接这台主机。请核对指纹后再信任。",
+  hostKeyNewTypeBody: "这台主机出示了一种尚未记录的密钥类型。它已记录的其他类型密钥如下；信任后新密钥会与它们一起保存。请核对指纹后再信任。",
+  hostKeyOtherRecorded: "已记录的其他密钥",
   hostKeyChangedTitle: "主机密钥已改变",
   hostKeyChangedBody: "这台主机出示的密钥与记录的不同。可能是服务器重装了，也可能有人在冒充它。除非你确认过，否则不要继续。",
   hostKeyAlgorithm: "算法",
@@ -1090,6 +1092,9 @@ const en: typeof zh = {
   hostEngine: "Engine",
   hostKeyNewTitle: "Verify host key",
   hostKeyNewBody: "This is the first connection to this host. Check the fingerprint before you trust it.",
+  hostKeyNewTypeBody:
+    "This host presents a key of a type that is not on record yet. Its recorded keys of other types are listed below; trusting the new key keeps them. Check the fingerprint before you trust it.",
+  hostKeyOtherRecorded: "Other recorded key",
   hostKeyChangedTitle: "The host key has changed",
   hostKeyChangedBody: "This host presents a different key than the one on record. The server may have been reinstalled, or someone may be impersonating it. Do not continue unless you have confirmed it.",
   hostKeyAlgorithm: "Algorithm",

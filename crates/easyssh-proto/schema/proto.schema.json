@@ -3149,7 +3149,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Fingerprints on record when the key changed."
+          "description": "Fingerprints on record: of the changed key, or of the other key types when the key is of a new type."
         }
       },
       "required": [

@@ -122,7 +122,9 @@ async fn verify_host_key(
             port,
             fingerprint: print,
         }),
-        status @ KnownHostStatus::Unknown => {
+        // A key of a type not recorded yet is asked about like a new host;
+        // saving it keeps the other types' keys.
+        status @ (KnownHostStatus::Unknown | KnownHostStatus::OtherTypes { .. }) => {
             match interaction
                 .verify_host_key_details(&details(host, port, key, &print, status))
                 .await

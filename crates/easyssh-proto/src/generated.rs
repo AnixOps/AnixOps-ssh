@@ -721,7 +721,7 @@ impl ::std::convert::TryFrom<::std::string::String> for HostKeyStatus {
 #[serde(deny_unknown_fields)]
 pub struct HostkeyPromptEvent {
     pub algorithm: ::std::string::String,
-    ///Fingerprints on record when the key changed.
+    ///Fingerprints on record: of the changed key, or of the other key types when the key is of a new type.
     #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
     pub expected: ::std::vec::Vec<::std::string::String>,
     pub fingerprint: ::std::string::String,

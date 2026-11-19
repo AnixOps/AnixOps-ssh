@@ -1649,7 +1649,7 @@ export interface HostkeyPromptEvent {
   fingerprint: string;
   status: HostKeyStatus;
   /**
-   * Fingerprints on record when the key changed.
+   * Fingerprints on record: of the changed key, or of the other key types when the key is of a new type.
    */
   expected?: string[];
 }
