@@ -1,4 +1,4 @@
-import type { Tunnel, TunnelInput, TunnelKind } from "./backend";
+import type { Tunnel, TunnelInput, TunnelKind, TunnelStatus } from "./backend";
 
 /** Pure logic of the phone's port-forward form. Three kinds, all on the host's
  *  one shared connection:
@@ -6,7 +6,8 @@ import type { Tunnel, TunnelInput, TunnelKind } from "./backend";
  *  - remote (`ssh -R`): a port on the host that reaches a target as the phone sees it;
  *  - dynamic (`ssh -D`): a SOCKS5 proxy on the phone, no target.
  *  Android and iOS apps cannot listen on a port below 1024, so a port that
- *  listens on the phone (local, dynamic) must be 1024 or more. */
+ *  listens on the phone (local, dynamic) must be 1024 or more, or 0 for any
+ *  free port (the system picks one; the list shows it while it runs). */
 
 export interface ForwardDraft {
   kind: TunnelKind;
@@ -39,10 +40,19 @@ export function draftOf(tunnel: Tunnel): ForwardDraft {
   };
 }
 
-function port(text: string): number | null {
+function port(text: string, allowZero = false): number | null {
   if (!/^\d{1,5}$/.test(text.trim())) return null;
   const value = Number(text);
-  return value >= 1 && value <= 65535 ? value : null;
+  return value >= (allowZero ? 0 : 1) && value <= 65535 ? value : null;
+}
+
+/** The port a forward listens on: the one it got while it runs when it was
+ *  saved with 0 (any free port). */
+export function listeningPort(forward: { bindPort: number; status?: TunnelStatus }): number {
+  if (forward.bindPort === 0 && forward.status?.state === "running" && forward.status.port) {
+    return forward.status.port;
+  }
+  return forward.bindPort;
 }
 
 /** `8080 → db:5432`: what a forward does, in a few characters. Forwards made
@@ -52,10 +62,12 @@ export function describe(forward: {
   bindPort: number;
   targetHost: string | null;
   targetPort: number | null;
+  status?: TunnelStatus;
 }): string {
-  if (forward.kind === "dynamic") return `${forward.bindPort} SOCKS`;
-  if (forward.kind === "remote") return `${forward.bindPort} ← ${forward.targetHost}:${forward.targetPort}`;
-  return `${forward.bindPort} → ${forward.targetHost}:${forward.targetPort}`;
+  const bind = listeningPort(forward);
+  if (forward.kind === "dynamic") return `${bind} SOCKS`;
+  if (forward.kind === "remote") return `${bind} ← ${forward.targetHost}:${forward.targetPort}`;
+  return `${bind} → ${forward.targetHost}:${forward.targetPort}`;
 }
 
 /** The first thing wrong with a draft, or the input to save. A forward without
@@ -64,9 +76,11 @@ export function checkDraft(
   draft: ForwardDraft,
 ): { ok: true; input: Omit<TunnelInput, "id"> } | { ok: false; problem: ForwardProblem } {
   if (!draft.hostId) return { ok: false, problem: "host" };
-  const bindPort = port(draft.bindPort);
+  const bindPort = port(draft.bindPort, true);
   if (bindPort === null) return { ok: false, problem: "bindPort" };
-  if (draft.kind !== "remote" && bindPort < FIRST_PHONE_PORT) return { ok: false, problem: "privilegedPort" };
+  if (draft.kind !== "remote" && bindPort !== 0 && bindPort < FIRST_PHONE_PORT) {
+    return { ok: false, problem: "privilegedPort" };
+  }
   let targetHost: string | null = null;
   let targetPort: number | null = null;
   if (draft.kind !== "dynamic") {

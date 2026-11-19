@@ -40,6 +40,10 @@ export function TunnelEditor({
   };
 
   const submit = async () => {
+    if (bindPort.trim() === "") {
+      setError(t.tunnelPortRequired);
+      return;
+    }
     try {
       await saveTunnel(input);
       onDone();
@@ -95,7 +99,7 @@ export function TunnelEditor({
             <Input value={bindAddress} onChange={(event) => setBindAddress(event.target.value)} placeholder="127.0.0.1" className="font-mono" />
           </Field>
           <Field label={kind === "remote" ? t.tunnelServerPort : t.tunnelLocalPort}>
-            <Input type="number" min={1} max={65535} value={bindPort} onChange={(event) => setBindPort(event.target.value)} placeholder="15432" className="font-mono" />
+            <Input type="number" min={0} max={65535} title={t.tunnelAnyPortHint} value={bindPort} onChange={(event) => setBindPort(event.target.value)} placeholder="15432" className="font-mono" />
           </Field>
         </div>
 
@@ -110,7 +114,7 @@ export function TunnelEditor({
           </div>
         )}
 
-        {input.bindPort > 0 && (
+        {bindPort.trim() !== "" && (
           <p className="rounded-sm bg-fill-1 px-3 py-2 font-mono text-callout text-label-2">
             {describeTunnel(input)}
           </p>
@@ -120,7 +124,7 @@ export function TunnelEditor({
           <p role="alert" className="flex items-start gap-2 rounded-sm bg-danger-soft px-3 py-2 text-callout text-danger">
             <CircleAlert className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
             <span>
-              {t.saveFailed}: {error}
+              {error === t.tunnelPortRequired ? error : `${t.saveFailed}: ${error}`}
             </span>
           </p>
         )}

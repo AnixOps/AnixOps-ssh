@@ -77,7 +77,7 @@ impl client::Handler for ClientHandler {
         tracing::debug!(
             "forwarded-tcpip {connected_address}:{connected_port} from {originator_address}:{originator_port}"
         );
-        match self.forwards.get(connected_port) {
+        match self.forwards.get(connected_address, connected_port) {
             Some(target) => {
                 tokio::spawn(target.serve(channel, reply));
             }
