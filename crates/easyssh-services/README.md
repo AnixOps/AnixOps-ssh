@@ -60,3 +60,45 @@ suffices; the panel refuses a token in a URL and audits it). Reply
 
 Pages are read until the panel's `total` is reached, the list runs out, or 50
 pages (5,000 nodes) have been read.
+
+## JumpServer
+
+`GET {url}/api/v1/assets/hosts/?limit=100&offset=N`, the request AnixOps'
+fleet tool (`scripts/jms.py` in anixops-ansible) makes. Every request is
+signed with an access key: HTTP Signature (draft-cavage),
+`Authorization: Signature keyId="<key id>",algorithm="hmac-sha256",headers="(request-target) accept date",signature="<base64>"`,
+where the signature is HMAC-SHA256 (key = the access key secret) over
+
+```
+(request-target): get /api/v1/assets/hosts/?limit=100&offset=0
+accept: application/json
+date: Thu, 01 Jan 2026 00:00:00 GMT
+```
+
+plus the `Date` header and `X-JMS-ORG` (default organization
+`00000000-0000-0000-0000-000000000002`). A test pins a vector computed with
+python3 reproducing `SignatureAuth`. The reply is `{"count","next","results"}`
+or a bare list.
+
+| asset field | host |
+|---|---|
+| `name`, else `address` | name |
+| `is_active: false` | skipped (disabled in JumpServer) |
+| `protocols` with `ssh` (port from it) | SSH port; protocols without SSH (RDP, VNC, databases): skipped with a warning; no `protocols` at all: 22, unless the platform is Windows |
+| `nodes_display[0]` without its root node (`/Default/Prod/Web` is `Prod/Web`) | group, under a top group named after the JumpServer host |
+| asset `id` | source key `jumpserver:<origin>#<org>#<id>` |
+
+**Gateway (default on).** Every host is `<jms user>@<gateway host>:<port>`
+(gateway host defaults to the JumpServer's host, port 2222) and the asset is
+picked in KoKo's menu (`/` and part of the name, Enter); the asset's name and
+address are in the host's notes. The JumpServer password and MFA code are not
+stored: KoKo asks for them as keyboard-interactive prompts, which the app's
+prompt dialog shows. All hosts of one gateway share host, port and user, so
+they are told apart by their source key only (`import_apply` never matches a
+service host by address against a host another source created). With the
+gateway off, each host connects to the asset's address with the default user.
+
+JumpServer also documents a direct form where the SSH user name carries the
+asset (`JMSUSER@ACCOUNT@ASSET`). Its syntax differs between releases and could
+not be verified, so it is not used; the one place to add it is
+`jumpserver::gateway_login`.

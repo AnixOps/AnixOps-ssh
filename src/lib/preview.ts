@@ -239,7 +239,17 @@ const rememberedServices = new Map<ServiceId, ServiceRemembered>();
 export function previewServiceRemembered(service: ServiceId): ServiceRemembered {
   return structuredClone(
     rememberedServices.get(service) ?? {
-      form: { url: "", default_user: "root", identity_file: null } satisfies ServiceForm,
+      form: {
+        url: "",
+        default_user: "root",
+        identity_file: null,
+        access_key_id: "",
+        org_id: "",
+        gateway: true,
+        gateway_host: "",
+        gateway_port: 2222,
+        gateway_user: "",
+      } satisfies ServiceForm,
       has_secret: false,
     },
   );
@@ -251,8 +261,12 @@ function checkServiceRequest(request: ServiceRequest): void {
     throw new Error("The address must start with https:// (http:// is accepted for localhost only).");
   const saved = rememberedServices.get(request.service)?.has_secret && !request.clear_secret;
   if (!request.secret?.trim() && !saved) throw new Error("Enter an admin API token.");
-  if (request.secret && !request.secret.startsWith("anixadm_"))
+  if (request.service === "control" && request.secret && !request.secret.startsWith("anixadm_"))
     throw new Error("An admin API token starts with anixadm_. Create one in the panel under API tokens.");
+  if (request.service === "jumpserver" && !request.form.access_key_id.trim())
+    throw new Error("Enter the access key id (create an access key under Profile, API key in JumpServer).");
+  if (request.service === "jumpserver" && request.form.gateway && !request.form.gateway_user.trim())
+    throw new Error("Enter your JumpServer user name: it is the SSH user name at the gateway.");
 }
 
 function rememberService(request: ServiceRequest): void {
@@ -265,13 +279,14 @@ function rememberService(request: ServiceRequest): void {
 export function previewServiceTest(request: ServiceRequest): number {
   checkServiceRequest(request);
   rememberService(request);
-  return 5;
+  return request.service === "jumpserver" ? 7 : 5;
 }
 
 /** A canned preview of an AnixOps Control import; the second node is stored already. */
 export function previewServicePreview(request: ServiceRequest): HostsImportPreviewResult {
   checkServiceRequest(request);
   rememberService(request);
+  if (request.service === "jumpserver") return previewJumpServer(request);
   const panel = new URL(request.form.url.trim()).hostname;
   const user = request.form.default_user.trim() || null;
   const node = (id: number, label: string, hostname: string, group: string, tags: string[], exists = false): ImportHost => ({
@@ -299,6 +314,41 @@ export function previewServicePreview(request: ServiceRequest): HostsImportPrevi
     warnings: ["2 node(s) are not approved in the panel (pending or rejected) and were skipped."],
     skipped: 2,
     removed: ["old-sg-02"],
+  };
+}
+
+/** A canned preview of a JumpServer import (gateway or direct). */
+function previewJumpServer(request: ServiceRequest): HostsImportPreviewResult {
+  const url = new URL(request.form.url.trim());
+  const { form } = request;
+  const gateway = form.gateway;
+  const asset = (id: number, label: string, address: string, path: string[], port = 22): ImportHost => ({
+    label,
+    hostname: gateway ? form.gateway_host.trim() || url.hostname : address,
+    port: gateway ? form.gateway_port || 2222 : port,
+    username: (gateway ? form.gateway_user : form.default_user).trim() || null,
+    group_path: [url.hostname, ...path],
+    notes: gateway ? `JumpServer asset ${label} (${address}:${port}). Through the KoKo gateway: at the menu type /${label} and press Enter.` : "",
+    source: ["jumpserver:" + url.origin, "00000000-0000-0000-0000-000000000002", `a${id}`].join("#"),
+    exists: id === 2,
+  });
+  const hosts = [
+    asset(1, "OVH-FR-web", "198.51.100.10", ["Prod", "Web"]),
+    asset(2, "prod-web-01", "10.0.1.11", ["Prod", "Web"]),
+    asset(3, "HK-edge-01", "192.0.2.31", ["Prod", "Edge"], 2200),
+    asset(4, "build-01", "192.0.2.40", ["CI"]),
+  ];
+  return {
+    format: null,
+    detected: null,
+    hosts,
+    groups: [[url.hostname], [url.hostname, "Prod"], [url.hostname, "Prod", "Web"], [url.hostname, "Prod", "Edge"], [url.hostname, "CI"]],
+    warnings: [
+      "1 asset(s) are disabled in JumpServer and were skipped.",
+      "1 asset(s) have no SSH protocol (for example Windows over RDP) and were skipped: win-rdp-01 (Windows).",
+    ],
+    skipped: 2,
+    removed: [],
   };
 }
 

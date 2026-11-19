@@ -50,7 +50,10 @@ const FORMATS: { id: ImportFormat; name: string }[] = [
 
 const formatName = (id: ImportFormat | null) => FORMATS.find((format) => format.id === id)?.name ?? "";
 
-const SERVICES: { id: ServiceId; name: string }[] = [{ id: "control", name: t.importServiceControl }];
+const SERVICES: { id: ServiceId; name: string }[] = [
+  { id: "control", name: t.importServiceControl },
+  { id: "jumpserver", name: t.importServiceJumpServer },
+];
 
 /** The host part of a service address, for the header of its preview. */
 const serviceHost = (url: string) => url.trim().replace(/^[a-z]+:\/\//i, "").replace(/\/.*$/, "");
