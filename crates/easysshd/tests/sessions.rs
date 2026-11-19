@@ -225,13 +225,16 @@ async fn open_write_output_resize_close() {
     c.write(&id, "stty size\n").await;
     c.until_output(&id, "30 100").await;
 
+    // Output events can still arrive while `session.list` is answered, so
+    // compare with what had arrived before the call.
+    let seen = c.output(&id).len() as u64;
     let list = c.call("session.list", json!({})).await.unwrap();
     let info = &list["sessions"][0];
     assert_eq!(info["session_id"], id.as_str());
     assert_eq!(info["running"], true);
     assert_eq!(info["cols"], 100);
     assert_eq!(info["rows"], 30);
-    assert!(info["next_seq"].as_u64().unwrap() >= c.output(&id).len() as u64);
+    assert!(info["next_seq"].as_u64().unwrap() >= seen);
 
     c.call("session.close", json!({"session_id": id}))
         .await
