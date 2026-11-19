@@ -499,6 +499,8 @@ impl Supervisor {
                     }
                     st.link = Some(link);
                     st.reconnecting = false;
+                    drop(st);
+                    self.user.resumed();
                     return true;
                 }
                 todo

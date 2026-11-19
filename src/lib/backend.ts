@@ -709,7 +709,11 @@ export type TunnelKind = "local" | "remote" | "dynamic";
 export type TunnelStatus =
   | { state: "stopped" }
   | { state: "starting" }
-  | { state: "running" }
+  /** `lastError`/`errorCount`: connections the forward accepted but could
+   *  not pass on (the target refused, the server prohibits it). */
+  | { state: "running"; lastError?: string; errorCount?: number }
+  /** The connection dropped; the forward is closed while it reconnects. */
+  | { state: "reconnecting"; message?: string }
   | { state: "failed"; message: string };
 
 export interface Tunnel {
@@ -816,6 +820,17 @@ const previewTunnels: Tunnel[] = [
     targetHost: "grafana.internal",
     targetPort: 3000,
     status: { state: "failed", message: "bind [127.0.0.1]:3000: Address already in use" },
+  },
+  {
+    id: "tunnel-4",
+    name: "内网 Redis",
+    hostId: "3",
+    kind: "local",
+    bindAddress: null,
+    bindPort: 16379,
+    targetHost: "redis.internal",
+    targetPort: 6379,
+    status: { state: "running", lastError: "redis.internal:6379: connect failed", errorCount: 2 },
   },
 ];
 

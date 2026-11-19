@@ -3616,9 +3616,11 @@
       "enum": [
         "starting",
         "running",
+        "reconnecting",
         "stopped",
         "failed"
-      ]
+      ],
+      "description": "`reconnecting`: the connection dropped; the forward is closed while a new connection is made (the reason is in `error`)."
     },
     "TunnelState": {
       "type": "object",
@@ -3653,6 +3655,22 @@
               "type": "null"
             }
           ]
+        },
+        "channel_errors": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Connections the running forward accepted but could not pass on (the server refused the channel, the target is down). Optional; absent means none."
+        },
+        "last_channel_error": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the last of `channel_errors` failed, e.g. `127.0.0.1:1: connect failed`."
         }
       },
       "required": [
@@ -3707,6 +3725,22 @@
               "type": "null"
             }
           ]
+        },
+        "channel_errors": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Connections the running forward accepted but could not pass on (the server refused the channel, the target is down). Optional; absent means none."
+        },
+        "last_channel_error": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the last of `channel_errors` failed, e.g. `127.0.0.1:1: connect failed`."
         }
       },
       "required": [

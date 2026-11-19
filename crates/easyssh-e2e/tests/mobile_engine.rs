@@ -638,3 +638,151 @@ async fn a_dynamic_and_a_remote_forward_run_on_the_shared_connection() {
     wait_for_port_shut(port, Duration::from_secs(10)).await;
     engine.shutdown().await;
 }
+
+/// Waits until a `tunnel.status` event for `id` matches `wanted`; returns it.
+async fn tunnel_event(
+    events: &Mutex<Vec<(String, Value)>>,
+    id: &str,
+    what: &str,
+    wanted: impl Fn(&Value) -> bool,
+) -> Value {
+    within(what, async {
+        loop {
+            let found = events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(name, payload)| name == "tunnel.status" && payload["id"] == id)
+                .map(|(_, payload)| payload.clone())
+                .find(|payload| wanted(payload));
+            if let Some(payload) = found {
+                return payload;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_forward_frees_its_port_when_the_connection_drops_and_comes_back() {
+    let events: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+    let engine = engine_with_events(PW_PASSWORD, Arc::default(), events.clone());
+    // The first attempt waits long enough to see the port closed meanwhile.
+    engine
+        .tunnels()
+        .set_policy(easyssh_engine::supervisor::ReconnectPolicy {
+            max_attempts: 5,
+            base: Duration::from_secs(2),
+            cap: Duration::from_secs(4),
+        });
+    let target = target();
+    let tunnel = Tunnel {
+        id: "e2e-comeback".into(),
+        name: "echo".into(),
+        host_id: target.host_id.clone(),
+        kind: TunnelKind::Local,
+        bind_address: None,
+        bind_port: 0,
+        target_host: Some("127.0.0.1".into()),
+        target_port: Some(ECHO_PORT),
+    };
+    let port = within("forward", engine.start_tunnel(&tunnel, &target))
+        .await
+        .expect("start the forward");
+    wait_for_port_open(port, Duration::from_secs(10)).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    echo_roundtrip(&mut stream, "before").await;
+    drop(stream);
+
+    // The connection goes away (as after sleep or a network change).
+    engine.forget_connection(&target).await;
+    let lost = tunnel_event(&events, "e2e-comeback", "reconnecting", |p| {
+        p["state"] == "reconnecting"
+    })
+    .await;
+    assert!(
+        lost["error"].as_str().is_some_and(|e| !e.is_empty()),
+        "{lost}"
+    );
+    // Nothing listens while there is no connection behind the port.
+    assert!(
+        TcpStream::connect(("127.0.0.1", port)).await.is_err(),
+        "port {port} still accepts connections with no SSH connection"
+    );
+
+    // It comes back on a new connection, on the same port.
+    let back = within("running again", async {
+        loop {
+            let states: Vec<Value> = events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(name, p)| name == "tunnel.status" && p["id"] == "e2e-comeback")
+                .map(|(_, p)| p.clone())
+                .collect();
+            let lost_at = states.iter().position(|p| p["state"] == "reconnecting");
+            if let Some(back) =
+                lost_at.and_then(|at| states[at..].iter().find(|p| p["state"] == "running"))
+            {
+                return back.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert_eq!(back["bind_port"], port);
+    wait_for_port_open(port, Duration::from_secs(10)).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    echo_roundtrip(&mut stream, "after").await;
+    drop(stream);
+    assert_eq!(engine.connections().await["opened"], 2);
+
+    engine.stop_tunnel("e2e-comeback").await;
+    wait_for_port_shut(port, Duration::from_secs(10)).await;
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_forward_to_a_closed_port_reports_why_its_connections_fail() {
+    let events: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+    let engine = engine_with_events(PW_PASSWORD, Arc::default(), events.clone());
+    let target = target();
+    let tunnel = Tunnel {
+        id: "e2e-refused".into(),
+        name: "nothing".into(),
+        host_id: target.host_id.clone(),
+        kind: TunnelKind::Local,
+        bind_address: None,
+        bind_port: 0,
+        // Nothing listens on port 1 of the server.
+        target_host: Some("127.0.0.1".into()),
+        target_port: Some(1),
+    };
+    let port = within("forward", engine.start_tunnel(&tunnel, &target))
+        .await
+        .expect("start the forward");
+    wait_for_port_open(port, Duration::from_secs(10)).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    // The server refuses the channel, so the connection just ends.
+    let mut buffer = [0u8; 16];
+    let _ = within("refused", stream.read(&mut buffer)).await;
+    let warned = tunnel_event(&events, "e2e-refused", "the failure", |p| {
+        p["channel_errors"].as_u64().is_some_and(|n| n >= 1)
+    })
+    .await;
+    assert_eq!(warned["state"], "running", "{warned}");
+    let reason = warned["last_channel_error"].as_str().unwrap_or_default();
+    assert!(reason.starts_with("127.0.0.1:1: "), "{reason}");
+    let row = engine.tunnels().list()["tunnels"][0].clone();
+    // The probe of wait_for_port_open was refused too.
+    assert!(row["channel_errors"].as_u64() >= Some(1), "{row}");
+    assert_eq!(
+        engine.tunnels().ui_status_of("e2e-refused")["lastError"],
+        reason
+    );
+    engine.stop_tunnel("e2e-refused").await;
+    engine.shutdown().await;
+}

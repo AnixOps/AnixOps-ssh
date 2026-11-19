@@ -15,6 +15,8 @@ mod auth;
 mod channels;
 mod error;
 mod forward;
+#[cfg(test)]
+mod forward_tests;
 mod interaction;
 pub mod known_hosts;
 mod params;
@@ -40,7 +42,7 @@ pub use auth::{
 };
 pub use channels::{ExecOutput, ExitStatus, ShellHandle, ShellOptions};
 pub use error::{AuthMethod, Error, Result};
-pub use forward::{Forward, ForwardKind};
+pub use forward::{Forward, ForwardFailures, ForwardKind};
 pub use interaction::{Decision, DenyAll, HostKeyDetails, Interaction, KbdPrompt};
 pub use known_hosts::{KnownHostStatus, KnownHosts, KnownHostsFile, MemoryKnownHosts};
 pub use params::{AgentSource, ConnectParams, MemoryIdentity};

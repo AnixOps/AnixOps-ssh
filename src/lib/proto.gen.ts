@@ -168,10 +168,12 @@ export type HostKeyDecision = "reject" | "accept_once" | "accept_and_save" | "re
  */
 export type SftpEntryKind = "file" | "dir" | "symlink" | "other";
 /**
+ * `reconnecting`: the connection dropped; the forward is closed while a new connection is made (the reason is in `error`).
+ *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "TunnelStateName".
  */
-export type TunnelStateName = "starting" | "running" | "stopped" | "failed";
+export type TunnelStateName = "starting" | "running" | "reconnecting" | "stopped" | "failed";
 
 /**
  * Entities (v1 shapes), envelopes and the starting command/event set.
@@ -1886,6 +1888,14 @@ export interface TunnelState {
   state: TunnelStateName;
   bind_port?: number | null;
   error?: string | null;
+  /**
+   * Connections the running forward accepted but could not pass on (the server refused the channel, the target is down). Optional; absent means none.
+   */
+  channel_errors?: number;
+  /**
+   * Why the last of `channel_errors` failed, e.g. `127.0.0.1:1: connect failed`.
+   */
+  last_channel_error?: string | null;
 }
 /**
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -1905,4 +1915,12 @@ export interface TunnelStatusEvent {
   state: TunnelStateName;
   bind_port?: number | null;
   error?: string | null;
+  /**
+   * Connections the running forward accepted but could not pass on (the server refused the channel, the target is down). Optional; absent means none.
+   */
+  channel_errors?: number;
+  /**
+   * Why the last of `channel_errors` failed, e.g. `127.0.0.1:1: connect failed`.
+   */
+  last_channel_error?: string | null;
 }
