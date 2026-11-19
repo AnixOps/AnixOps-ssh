@@ -1576,7 +1576,13 @@ impl Daemon {
     ) {
         let opened = self
             .engine
-            .open_shell(&plan, agent_sock.clone(), p.cols, p.rows)
+            .open_shell(
+                &plan,
+                agent_sock.clone(),
+                p.cols,
+                p.rows,
+                self.app_language(),
+            )
             .await;
         let result = match opened {
             Ok((shell, lease)) => {
@@ -1639,6 +1645,16 @@ impl Daemon {
                 self.log.error(&format!("session.open failed: {}", f.code));
                 outbox.send(error_reply(req_id, f.code, &f.message)).await;
             }
+        }
+    }
+
+    /// The app's language setting (`zh`, `en`), or `None` when it follows
+    /// the system.
+    fn app_language(&self) -> Option<&'static str> {
+        match lock(&self.store).get_setting_as("locale").ok().flatten() {
+            Some(easyssh_core::Locale::ZhCn) => Some("zh"),
+            Some(easyssh_core::Locale::En) => Some("en"),
+            _ => None,
         }
     }
 

@@ -122,6 +122,9 @@ pub struct Engine {
     next: AtomicU64,
     /// SSH keepalive interval for new connections (`None` turns them off).
     keepalive: Mutex<Option<Duration>>,
+    /// The app's language (`zh`, `en`) for `LANG` in new shells when the
+    /// process has no UTF-8 locale, as on a phone. `None`: `en_US.UTF-8`.
+    language: Mutex<Option<String>>,
 }
 
 fn fail(error: &SshError) -> OpenError {
@@ -149,6 +152,7 @@ impl Engine {
             shells: Mutex::new(HashMap::new()),
             next: AtomicU64::new(1),
             keepalive: Mutex::new(Some(Duration::from_secs(60))),
+            language: Mutex::new(None),
         })
     }
 
@@ -157,6 +161,12 @@ impl Engine {
     /// so a dead path is noticed sooner; `None` turns keepalives off.
     pub fn set_keepalive(&self, interval: Option<Duration>) {
         *lock(&self.keepalive) = interval;
+    }
+
+    /// Sets the app's language for shells opened from now on; see
+    /// [`easyssh_ssh::shell_env`].
+    pub fn set_language(&self, language: Option<String>) {
+        *lock(&self.language) = language;
     }
 
     pub fn prompts(&self) -> &Arc<Prompts> {
@@ -256,12 +266,15 @@ impl Engine {
         rows: u16,
         sink: Arc<dyn ShellSink>,
     ) -> Result<String, OpenError> {
+        let env = easyssh_ssh::local_shell_env(lock(&self.language).as_deref(), &[]);
         let lease = self.lease(&target).await?;
         let shell = lease
             .shell(ShellOptions {
                 term: "xterm-256color".into(),
                 cols: u32::from(cols.max(1)),
                 rows: u32::from(rows.max(1)),
+                env,
+                ..ShellOptions::default()
             })
             .await
             .map_err(|error| fail(&error))?;

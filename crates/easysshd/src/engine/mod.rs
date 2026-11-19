@@ -231,13 +231,16 @@ impl Engine {
     }
 
     /// A shell on the host's shared connection. The lease keeps the
-    /// connection up for as long as the shell lives.
+    /// connection up for as long as the shell lives. `language` is the app's
+    /// (`zh`, `en`; `None` to follow the system), for `LANG` when this
+    /// process has no UTF-8 locale; see [`easyssh_ssh::shell_env`].
     pub async fn open_shell(
         &self,
         plan: &RusshPlan,
         agent: Option<PathBuf>,
         cols: u16,
         rows: u16,
+        language: Option<&str>,
     ) -> Result<(ShellHandle, Lease), SharedError> {
         let lease = self.lease(plan, agent).await?;
         let shell = lease
@@ -245,6 +248,8 @@ impl Engine {
                 term: "xterm-256color".into(),
                 cols: u32::from(cols.max(1)),
                 rows: u32::from(rows.max(1)),
+                env: easyssh_ssh::local_shell_env(language, &plan.target.set_env),
+                ..ShellOptions::default()
             })
             .await
             .map_err(Arc::new)?;

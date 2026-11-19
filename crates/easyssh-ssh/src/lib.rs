@@ -13,6 +13,7 @@
 
 mod auth;
 mod channels;
+mod env;
 mod error;
 mod forward;
 mod interaction;
@@ -33,17 +34,21 @@ mod security_key_windows;
 mod security_key_winhello;
 mod session;
 mod sftp;
+#[cfg(test)]
+mod shell_tests;
 pub mod socks5;
 
 pub use auth::{
     decode_identity, load_identity, plan as plan_auth, security_key_type, Stage, StageConfig,
 };
 pub use channels::{ExecOutput, ExitStatus, ShellHandle, ShellOptions};
+pub use env::{default_terminal_modes, lang_for, local_shell_env, shell_env};
 pub use error::{AuthMethod, Error, Result};
 pub use forward::{Forward, ForwardKind};
 pub use interaction::{Decision, DenyAll, HostKeyDetails, Interaction, KbdPrompt};
 pub use known_hosts::{KnownHostStatus, KnownHosts, KnownHostsFile, MemoryKnownHosts};
 pub use params::{AgentSource, ConnectParams, MemoryIdentity};
+pub use russh::Pty;
 pub use security_key::{
     default_security_key, hardware_backend_available, sign_with_security_key, HidSecurityKey,
     SecurityKey, SkAlgorithm, SkAssertion, SkError, SkKeyInfo, SkSignRequest, WebAuthnSecurityKey,

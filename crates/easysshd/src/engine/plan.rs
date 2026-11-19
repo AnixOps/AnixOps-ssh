@@ -35,6 +35,8 @@ pub struct HostFacts {
     pub password_attempts: Option<u32>,
     pub connect_timeout: Option<Duration>,
     pub keepalive: Option<Duration>,
+    /// `SetEnv NAME=value` pairs, sent to the shell.
+    pub set_env: Vec<(String, String)>,
 }
 
 fn set(value: &str) -> bool {
@@ -66,6 +68,7 @@ pub fn parse_ssh_g(text: &str) -> Option<HostFacts> {
         password_attempts: None,
         connect_timeout: None,
         keepalive: None,
+        set_env: Vec::new(),
     };
     for line in text.lines() {
         let Some((key, value)) = line.split_once(' ') else {
@@ -89,6 +92,7 @@ pub fn parse_ssh_g(text: &str) -> Option<HostFacts> {
             "kbdinteractiveauthentication" => facts.keyboard_interactive = yes(value),
             "numberofpasswordprompts" => facts.password_attempts = value.parse().ok(),
             "connecttimeout" => facts.connect_timeout = value.parse().ok().map(Duration::from_secs),
+            "setenv" => facts.set_env.extend(parse_set_env(value)),
             "serveraliveinterval" => {
                 facts.keepalive = value
                     .parse::<u64>()
@@ -100,6 +104,35 @@ pub fn parse_ssh_g(text: &str) -> Option<HostFacts> {
         }
     }
     (!facts.hostname.is_empty()).then_some(facts)
+}
+
+/// `SetEnv` as `ssh -G` prints it: `NAME=value` entries on one line,
+/// separated by spaces, a value with spaces in double quotes.
+fn parse_set_env(value: &str) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    for c in value.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !current.is_empty() {
+                    entries.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        entries.push(current);
+    }
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let (name, value) = entry.split_once('=')?;
+            (!name.is_empty()).then(|| (name.to_owned(), value.to_owned()))
+        })
+        .collect()
 }
 
 fn expand_home(path: &str) -> PathBuf {
@@ -315,6 +348,8 @@ pub struct HostSpec {
     pub keepalive: Option<Duration>,
     /// What prompts call this host.
     pub label: String,
+    /// The host's `SetEnv`, sent to its shell.
+    pub set_env: Vec<(String, String)>,
 }
 
 impl HostSpec {
@@ -338,6 +373,7 @@ impl HostSpec {
             connect_timeout: facts.connect_timeout,
             keepalive: facts.keepalive,
             label,
+            set_env: facts.set_env.clone(),
         }
     }
 
@@ -526,6 +562,23 @@ proxycommand none
         // `none` values do not count as set.
         assert!(!facts.proxy_command && !facts.local_command);
         assert!(facts.unsupported().is_empty());
+    }
+
+    #[test]
+    fn reads_set_env() {
+        let facts = parse_ssh_g(
+            "hostname h\nsetenv LANG=ja_JP.UTF-8 GREETING=\"hello world\" EMPTY= =bad\n",
+        )
+        .unwrap();
+        assert_eq!(
+            facts.set_env,
+            vec![
+                ("LANG".to_owned(), "ja_JP.UTF-8".to_owned()),
+                ("GREETING".to_owned(), "hello world".to_owned()),
+                ("EMPTY".to_owned(), String::new()),
+            ]
+        );
+        assert!(parse_ssh_g(SAMPLE).unwrap().set_env.is_empty());
     }
 
     #[test]
