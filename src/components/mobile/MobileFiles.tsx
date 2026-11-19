@@ -92,7 +92,7 @@ export function MobileFiles({
     setTransfers((current) => current.map((item) => (item.key === key ? { ...item, ...change } : item)));
   }, []);
 
-  const go = useCallback((to: string) => {
+  const go = useCallback((to: string, notFolder?: () => void) => {
     const handle = handleRef.current;
     if (!handle) return;
     const request = ++requestRef.current;
@@ -110,7 +110,11 @@ export function MobileFiles({
       })
       .catch((reason) => {
         if (request !== requestRef.current) return;
-        if (loadedRef.current) {
+        if (notFolder) {
+          // A symbolic link that cannot be listed most likely points at a file.
+          setState("ready");
+          notFolder();
+        } else if (loadedRef.current) {
           // A folder that cannot be read leaves the person where they were.
           setNotice(String(reason));
           setState("ready");
@@ -246,7 +250,9 @@ export function MobileFiles({
   };
 
   const open = (entry: RemoteFile) => {
-    if (entry.kind === "directory" || entry.kind === "symlink") go(joinPath(path, entry.name));
+    if (entry.kind === "directory") go(joinPath(path, entry.name));
+    // The link's own size is not the file's, so that download has no total.
+    else if (entry.kind === "symlink") go(joinPath(path, entry.name), () => void download({ ...entry, size: 0 }));
     else void download(entry);
   };
 
