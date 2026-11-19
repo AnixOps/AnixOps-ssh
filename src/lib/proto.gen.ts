@@ -1736,6 +1736,44 @@ export interface SftpOpenResult {
   home: string;
 }
 /**
+ * Command `monitor.sample` payload (russh engine): reads the server's load, memory, network, disks and processes on the connection the terminal already has. Never connects. Reply: MonitorSampleResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "MonitorSampleParams".
+ */
+export interface MonitorSampleParams {
+  host_id: string;
+  /**
+   * Also list every process's owner, command line and executable.
+   */
+  detail?: boolean;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "MonitorSampleResult".
+ */
+export interface MonitorSampleResult {
+  /**
+   * What the read-only sample script printed (`@section` markers, raw /proc and df text).
+   */
+  output: string;
+  /**
+   * Keepalive round trip; null when the server did not answer it.
+   */
+  latency_ms: number | null;
+}
+/**
+ * Command `monitor.signal` payload (russh engine): sends a signal to a process as the login user, on the existing connection.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "MonitorSignalParams".
+ */
+export interface MonitorSignalParams {
+  host_id: string;
+  pid: number;
+  signal: "TERM" | "KILL" | "HUP" | "INT";
+}
+/**
  * Command `sftp.list` payload. Reply: SftpListResult.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema

@@ -230,6 +230,12 @@ impl Engine {
             .await
     }
 
+    /// A lease on the shared connection for `plan` only when it is up now.
+    /// Never connects (the monitor must not start a login on its own).
+    pub fn existing(&self, plan: &RusshPlan) -> Option<Lease> {
+        self.registry.existing(&plan.key)
+    }
+
     /// A shell on the host's shared connection. The lease keeps the
     /// connection up for as long as the shell lives.
     pub async fn open_shell(
