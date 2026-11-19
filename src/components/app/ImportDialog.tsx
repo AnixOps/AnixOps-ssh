@@ -42,6 +42,7 @@ const FORMATS: { id: ImportFormat; name: string }[] = [
   { id: "xshell", name: "Xshell" },
   { id: "finalshell", name: "FinalShell" },
   { id: "termius", name: "Termius" },
+  { id: "ansible", name: "Ansible inventory" },
   { id: "csv", name: "CSV" },
 ];
 

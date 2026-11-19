@@ -43,7 +43,7 @@ current 1.x app.
 | **Snippets** | Saved commands, run in the active terminal or broadcast to all. |
 | **Tunnels** | Local, remote and SOCKS forwards, one switch each, with live status. |
 | **Command palette** | Hosts, snippets, tunnels and actions in one search box. |
-| **Import from other clients** | Bring in hosts from `~/.ssh/config` (with `Include`), PuTTY, SecureCRT, MobaXterm, Xshell, FinalShell, Termius or CSV. Review them first, choose a group and what to do with duplicates; nothing you have is removed. Passwords and keys are never imported. |
+| **Import from other clients** | Bring in hosts from `~/.ssh/config` (with `Include`), PuTTY, SecureCRT, MobaXterm, Xshell, FinalShell, Termius, Ansible inventories (YAML or INI) or CSV. Review them first, choose a group and what to do with duplicates; nothing you have is removed. Passwords and keys are never imported. |
 | **Sync and team vaults** | Keep hosts, groups, snippets, tunnels and known hosts in step across your devices through your own [easyssh-server](crates/easyssh-server/README.md), end-to-end encrypted. Share a vault with a team after comparing safety numbers. See [Sync](#sync-and-team-vaults). |
 | **Backup** | Export and import hosts, or back them up to a Git repository. Never includes passwords or keys. |
 | **Ask AI** | Off by default. Bring your own key for Anthropic, an OpenAI-compatible endpoint or local Ollama; the key lives in the vault and requests are made by the app's Rust side, so the key never reaches the web view. A side panel per terminal lets you tick what to share (last command and output, selection, last lines), shows secrets it removed and the exact request, and sends nothing until you press Send. Suggested commands can be inserted on the input line, never run. |

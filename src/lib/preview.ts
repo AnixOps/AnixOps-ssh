@@ -206,10 +206,19 @@ const fileHosts: ImportHost[] = [
   { label: "prod-web-01", hostname: "10.0.1.11", port: 22, username: "deploy", group_path: ["Prod"], exists: true },
 ];
 
+/** What an Ansible inventory import looks like: groups from `children`, jump
+ *  hosts from `ansible_ssh_common_args`, the other groups as notes. */
+const ansibleHosts: ImportHost[] = [
+  { label: "web01", hostname: "10.0.2.11", port: 22, username: "deploy", group_path: ["prod", "web"], exists: false },
+  { label: "web02", hostname: "10.0.2.12", port: 22, username: "deploy", group_path: ["prod", "web"], exists: false },
+  { label: "db01", hostname: "10.0.3.21", port: 22, username: "ops", group_path: ["prod", "db"], jump: ["bastion.example.com"], exists: false },
+];
+
 /** A canned preview of an import: `~/.ssh/config` or a picked file. */
 export function previewImport(kind: "file" | "ssh_config", format: ImportFormat | null): HostsImportPreviewResult {
   const detected: ImportFormat = kind === "ssh_config" ? "openssh" : "csv";
-  const hosts = structuredClone(kind === "ssh_config" ? sshConfigHosts : fileHosts);
+  const ansible = kind === "file" && format === "ansible";
+  const hosts = structuredClone(kind === "ssh_config" ? sshConfigHosts : ansible ? ansibleHosts : fileHosts);
   const groups = new Map<string, string[]>();
   for (const host of hosts)
     for (let end = 1; end <= (host.group_path?.length ?? 0); end++) {
@@ -224,8 +233,10 @@ export function previewImport(kind: "file" | "ssh_config", format: ImportFormat 
     warnings:
       kind === "ssh_config"
         ? ["Include ~/.ssh/config.d/*.conf: 2 files read", "legacy-switch: Match blocks are not evaluated"]
-        : [],
-    skipped: kind === "ssh_config" ? 1 : 0,
+        : ansible
+          ? ["web02: ansible_password was not imported (secrets are never imported)", "local-box: ansible_connection `local` is not SSH, host skipped"]
+          : [],
+    skipped: kind === "ssh_config" || ansible ? 1 : 0,
   };
 }
 

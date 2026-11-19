@@ -114,7 +114,7 @@ export type Reply =
  * via the `definition` "ImportFormat".
  */
 export type ImportFormat =
-  "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "csv" | "openssh";
+  "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "ansible" | "csv" | "openssh";
 /**
  * What to do with an imported host that matches a stored one (same hostname, port and user).
  *
@@ -565,7 +565,7 @@ export interface HostsImportPreviewParams {
   /**
    * Overrides detection.
    */
-  format?: "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "csv" | "openssh";
+  format?: "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "ansible" | "csv" | "openssh";
   /**
    * Directory OpenSSH `Include` paths resolve in and may not leave. Only for the user's own `~/.ssh`, on their explicit action.
    */
