@@ -37,6 +37,7 @@ easyssh-crypto = { path = "../crates/easyssh-crypto" }
 easyssh-sessionlog = { path = "../crates/easyssh-sessionlog" }
 easyssh-telemetry = { path = "../crates/easyssh-telemetry" }
 easyssh-unlock = { path = "../crates/easyssh-unlock" }
+easyssh-update = { path = "../crates/easyssh-update" }
 easyssh-vault = { path = "../crates/easyssh-vault", features = ["os-keyring"] }
 easysshd = { path = "../crates/easysshd" }
 portable-pty = "0.9"

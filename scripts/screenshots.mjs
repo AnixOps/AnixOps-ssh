@@ -30,6 +30,8 @@ const scenes = [
   { name: "tunnel-editor", query: "", nav: "端口转发", click: "新建隧道" },
   { name: "palette", query: "", open: ["prod-web-01"], keys: "Control+Shift+K", typeText: "prod" },
   { name: "settings", query: "", nav: "设置" },
+  { name: "settings-update", query: "update=found", nav: "设置", waitText: "有新版本" },
+  { name: "settings-update-off", query: "update=off", nav: "设置", waitText: "此版本没有配置更新验证密钥" },
   { name: "no-ssh", query: "ssh=missing" },
   { name: "sync-setup", query: "", nav: "设置", click: "开始设置" },
   { name: "snippets", query: "", open: ["prod-web-01"], nav: "命令片段", run: "磁盘用量" },

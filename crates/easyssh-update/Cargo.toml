@@ -1,0 +1,18 @@
+[package]
+name = "easyssh-update"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Update check for AnixOps SSH: reads and verifies the signed anixops-appcast-v1 feed (anix-kit), notifies only"
+build = "build.rs"
+
+[dependencies]
+base64.workspace = true
+chrono.workspace = true
+ed25519-dalek = "3"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+ureq = { version = "2", default-features = false, features = ["tls"] }
