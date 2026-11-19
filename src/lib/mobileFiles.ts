@@ -7,12 +7,7 @@ export function joinPath(dir: string, name: string): string {
   return dir.endsWith("/") ? `${dir}${name}` : `${dir}/${name}`;
 }
 
-/** The folder that contains `path`; the root is its own parent. */
-export function parentPath(path: string): string {
-  const trimmed = path.length > 1 ? path.replace(/\/+$/, "") : path;
-  const cut = trimmed.lastIndexOf("/");
-  return cut <= 0 ? "/" : trimmed.slice(0, cut);
-}
+export { parentPath } from "./remotePath";
 
 export interface Crumb {
   name: string;

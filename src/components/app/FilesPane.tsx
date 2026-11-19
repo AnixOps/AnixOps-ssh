@@ -40,6 +40,7 @@ import {
 import { t } from "@/lib/i18n";
 import { shortcutHint } from "@/lib/shortcutTable";
 import { appear, duration, ease } from "@/lib/motion";
+import { locate, parentPath, resolvePath } from "@/lib/remotePath";
 import { cn } from "@/lib/utils";
 
 interface TransferItem {
@@ -56,7 +57,7 @@ interface TransferItem {
 type Editing = { kind: "mkdir"; value: string } | { kind: "rename"; from: string; value: string };
 
 const joinPath = (dir: string, name: string) => (dir.endsWith("/") ? dir + name : `${dir}/${name}`);
-const parentPath = (path: string) => path.replace(/\/[^/]+\/?$/, "") || "/";
+/** A local file's name, for the transfer list (local paths may use `\\`). */
 const baseName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
 function formatSize(bytes: number): string {
@@ -99,6 +100,8 @@ export function FilesPane({
   const [loading, setLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  /** An entry to scroll to and focus once the listing renders. */
+  const [reveal, setReveal] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const confirm = useConfirm();
   const [transfers, setTransfers] = useState<TransferItem[]>([]);
@@ -107,16 +110,18 @@ export function FilesPane({
   const cwdRef = useRef("");
 
   const navigate = useCallback(
-    async (files: FilesHandle, path: string) => {
+    async (files: FilesHandle, path: string, typed = false) => {
       setLoading(true);
       setActionError(null);
       try {
-        const listing = await files.list(path);
-        setEntries(sortEntries(listing));
-        setCwd(path);
-        setPathInput(path);
-        cwdRef.current = path;
-        setSelected(null);
+        // A typed location may name a file: show its folder with it selected.
+        const found = typed ? await locate(files.list, path) : { dir: path, entries: await files.list(path), select: null };
+        setEntries(sortEntries(found.entries));
+        setCwd(found.dir);
+        setPathInput(found.dir);
+        cwdRef.current = found.dir;
+        setSelected(found.select);
+        setReveal(found.select);
         setEditing(null);
       } catch (reason) {
         setActionError(String(reason));
@@ -127,6 +132,14 @@ export function FilesPane({
     },
     [],
   );
+
+  useEffect(() => {
+    if (!reveal) return;
+    const row = paneRef.current?.querySelector<HTMLElement>(`[role="option"][data-name="${CSS.escape(reveal)}"]`);
+    row?.scrollIntoView({ block: "nearest" });
+    row?.focus({ preventScroll: true });
+    setReveal(null);
+  }, [reveal, entries]);
 
   useEffect(() => {
     let disposed = false;
@@ -300,7 +313,8 @@ export function FilesPane({
           value={pathInput}
           onChange={(event) => setPathInput(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && pathInput.trim()) void navigate(handle, pathInput.trim());
+            if (event.key === "Enter" && pathInput.trim())
+              void navigate(handle, resolvePath(pathInput, cwdRef.current, handle.home), true);
             if (event.key === "Escape") setPathInput(cwd);
           }}
           aria-label={t.path}
@@ -493,6 +507,7 @@ function EntryRow({
   return (
     <div
       role="option"
+      data-name={entry.name}
       aria-selected={selected}
       tabIndex={0}
       onClick={onSelect}
