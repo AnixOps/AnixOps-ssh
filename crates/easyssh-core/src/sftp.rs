@@ -23,6 +23,8 @@ use std::time::Duration;
 
 const MARKER: &str = "lpwd";
 const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a listing with no lines waits for `sftp` to report an error.
+const LATE_ERROR_WAIT: Duration = Duration::from_millis(500);
 /// Long enough to type a password into the prompt.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -115,10 +117,25 @@ pub fn join_remote(dir: &str, name: &str) -> String {
 
 /// Parses `ls -la` output, skipping `.` and `..`.
 pub fn parse_listing(output: &str) -> Vec<RemoteFile> {
-    output.lines().filter_map(parse_listing_line).collect()
+    parse_listing_in("", output)
 }
 
-fn parse_listing_line(line: &str) -> Option<RemoteFile> {
+/// Parses `ls -la dir` output. Newer `sftp` clients format the lines
+/// themselves and print each name with `dir/` in front; that is removed.
+fn parse_listing_in(dir: &str, output: &str) -> Vec<RemoteFile> {
+    let prefix = if dir.is_empty() || dir.ends_with('/') {
+        dir.to_owned()
+    } else {
+        format!("{dir}/")
+    };
+    output
+        .lines()
+        .filter_map(|line| parse_listing_line(line, &prefix))
+        .collect()
+}
+
+/// The eight leading fields of an `ls -l` line and the name after them.
+fn listing_fields(line: &str) -> Option<(Vec<&str>, &str)> {
     // permissions links owner group size month day time-or-year name
     let mut rest = line;
     let mut fields = Vec::with_capacity(8);
@@ -129,6 +146,33 @@ fn parse_listing_line(line: &str) -> Option<RemoteFile> {
         rest = &rest[end..];
     }
     let name = rest.strip_prefix(' ')?;
+    Some((fields, name))
+}
+
+/// Checks that `ls -la dir` listed a folder. `sftp` lists a file as itself
+/// rather than failing, and a folder always includes its own `.` entry.
+pub fn folder_listing(dir: &str, output: &str) -> Result<Vec<RemoteFile>, String> {
+    let lines: Vec<_> = output.lines().filter_map(listing_fields).collect();
+    let is_folder = lines
+        .iter()
+        .any(|(fields, name)| fields[0].starts_with('d') && (*name == "." || name.ends_with("/.")));
+    if !is_folder {
+        if let [(fields, name)] = lines.as_slice() {
+            let base = dir.trim_end_matches('/').rsplit('/').next().unwrap_or(dir);
+            if !fields[0].starts_with('d') && (*name == dir || *name == base) {
+                return Err(format!("{dir} is not a folder"));
+            }
+        }
+    }
+    Ok(parse_listing_in(dir, output))
+}
+
+fn parse_listing_line(line: &str, prefix: &str) -> Option<RemoteFile> {
+    let (fields, name) = listing_fields(line)?;
+    let name = match name.strip_prefix(prefix) {
+        Some(rest) if !prefix.is_empty() => rest,
+        _ => name,
+    };
     let permissions = fields[0];
     if permissions.len() < 10 || name.is_empty() || name == "." || name == ".." {
         return None;
@@ -214,7 +258,29 @@ impl SftpSession {
 
     pub fn list(&mut self, dir: &str) -> Result<Vec<RemoteFile>, OpenSshError> {
         let output = self.run(&format!("ls -la {}", quote(dir)?))?;
-        Ok(parse_listing(&output))
+        if output.trim().is_empty() {
+            // `ls` of a missing folder says so on standard error, which can
+            // arrive well after the reply; an empty folder still lists `.`.
+            if let Some(error) = self.late_error(LATE_ERROR_WAIT) {
+                return Err(OpenSshError::Failed(error));
+            }
+        }
+        folder_listing(dir, &output).map_err(OpenSshError::Failed)
+    }
+
+    /// A standard-error line that arrives within `wait`.
+    fn late_error(&mut self, wait: Duration) -> Option<String> {
+        let deadline = std::time::Instant::now() + wait;
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.lines.recv_timeout(left) {
+                Ok(Line::Err(line)) if !line.trim().is_empty() => {
+                    return Some(line.trim().to_owned())
+                }
+                Ok(_) => {}
+                Err(_) => return None,
+            }
+        }
     }
 
     pub fn mkdir(&mut self, path: &str) -> Result<(), OpenSshError> {
@@ -238,6 +304,9 @@ impl SftpSession {
     }
 
     fn run_for(&mut self, command: &str, timeout: Duration) -> Result<String, OpenSshError> {
+        // Anything still queued belongs to an earlier command, such as an
+        // error that arrived after its reply; it must not fail this one.
+        while self.lines.try_recv().is_ok() {}
         writeln!(self.stdin, "{command}\n{MARKER}").map_err(|_| self.ended())?;
         self.stdin.flush().map_err(|_| self.ended())?;
         let echo = format!("sftp> {command}");
@@ -271,7 +340,16 @@ impl SftpSession {
             }
         }
         // The marker's own reply ("Local working directory: ...") follows.
-        let _ = self.lines.recv_timeout(REPLY_TIMEOUT);
+        // The command's error can still arrive before it and must be kept.
+        loop {
+            match self.lines.recv_timeout(REPLY_TIMEOUT) {
+                Ok(Line::Out(_)) | Err(_) => break,
+                Ok(Line::Err(line)) => {
+                    errors.push_str(&line);
+                    errors.push('\n');
+                }
+            }
+        }
         // Give a late standard-error line from the command a moment to arrive.
         while let Ok(line) = self.lines.recv_timeout(Duration::from_millis(20)) {
             if let Line::Err(line) = line {
@@ -378,6 +456,48 @@ lrwxrwxrwx    1 deploy   deploy         11 Sep  2 11:05 current -> releases/42
         assert_eq!(files[2].kind, RemoteFileKind::Symlink);
         assert_eq!(files[3].name, " leading space");
         assert_eq!(files[3].modified, "Jan 3 2025");
+    }
+
+    #[test]
+    fn a_file_is_not_listed_as_a_folder() {
+        let folder = "\
+drwxr-xr-x    2 deploy   deploy       4096 Oct 14 09:12 .
+drwxr-xr-x    3 root     root         4096 Jan  3  2025 ..
+-rw-r--r--    1 deploy   deploy         12 Oct 13 18:40 run.py
+";
+        assert_eq!(folder_listing("/srv/tools", folder).unwrap().len(), 1);
+        // A folder holding one file of its own name is still a folder.
+        let same = folder.replace("run.py", "tools");
+        assert_eq!(folder_listing("/srv/tools", &same).unwrap().len(), 1);
+        let file = "-rw-r--r--    1 deploy   deploy         12 Oct 13 18:40 /srv/tools/run.py\n";
+        let error = folder_listing("/srv/tools/run.py", file).unwrap_err();
+        assert!(error.contains("is not a folder"), "{error}");
+        let file = "-rw-r--r--    1 deploy   deploy         12 Oct 13 18:40 run.py\n";
+        assert!(folder_listing("/srv/tools/run.py", file).is_err());
+        assert!(folder_listing("/srv/empty", "").unwrap().is_empty());
+    }
+
+    #[test]
+    fn names_lose_the_folder_newer_sftp_prints() {
+        // OpenSSH 9.x `sftp` formats long listings itself, with full paths.
+        let output = "\
+drwxr-xr-x    ? deploy   deploy       4096 Oct 14 09:12 /srv/my app/.
+drwxr-xr-x    ? root     root         4096 Jan  3  2025 /srv/my app/..
+-rw-r--r--    ? deploy   deploy         12 Oct 13 18:40 /srv/my app/run.py
+lrwxrwxrwx    ? deploy   deploy         11 Sep  2 11:05 /srv/my app/current -> releases/42
+";
+        for dir in ["/srv/my app", "/srv/my app/"] {
+            let files = folder_listing(dir, output).unwrap();
+            let names: Vec<_> = files.iter().map(|f| f.name.as_str()).collect();
+            assert_eq!(names, ["run.py", "current"], "{dir}");
+        }
+        let root = "drwxr-xr-x    ? root root 4096 Oct 14 09:12 /.\n-rw-r--r--    ? root root 1 Oct 14 09:12 /etc\n";
+        let names: Vec<_> = folder_listing("/", root)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.name)
+            .collect();
+        assert_eq!(names, ["etc"]);
     }
 
     #[test]

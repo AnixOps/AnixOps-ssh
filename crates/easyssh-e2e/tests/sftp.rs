@@ -60,19 +60,28 @@ fn browse_and_manage_files() {
 
 #[test]
 #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
-fn missing_directory_is_reported_as_not_found_or_empty() {
-    // v1 behaviour is not deterministic: `ls` of a missing directory writes
-    // "Can't ls: ... not found" to standard error, and the core only waits
-    // 20 ms for it. Depending on timing the caller gets that error or an
-    // empty listing (see "Known v1 failures" in e2e/README.md).
+fn missing_directory_and_files_are_not_listed_as_folders() {
+    // `ls` of a missing directory reports it on standard error, which can
+    // arrive after the reply; the listing waits for it instead of returning
+    // an empty folder. `ls` of a file lists the file itself.
     let e2e = E2e::new();
     let mut session = connect(&e2e, "e2e-target");
     let home = session.home().to_owned();
     let missing = join_remote(&home, &unique_name("e2e-missing"));
-    match session.list(&missing) {
-        Ok(listing) => assert!(listing.is_empty(), "{listing:?}"),
-        Err(error) => assert!(error.to_string().contains("not found"), "{error}"),
+    let error = session.list(&missing).expect_err("missing directory");
+    assert!(error.to_string().contains("not found"), "{error}");
+    let file = join_remote(&home, ".profile");
+    if session
+        .list(&home)
+        .expect("list home")
+        .iter()
+        .any(|f| f.name == ".profile")
+    {
+        let error = session.list(&file).expect_err("a file");
+        assert!(error.to_string().contains("not a folder"), "{error}");
     }
+    // The session still works after both errors.
+    session.list(&home).expect("list home afterwards");
 }
 
 fn upload(e2e: &E2e, alias: &str, local: &std::path::Path, remote: &str) {
