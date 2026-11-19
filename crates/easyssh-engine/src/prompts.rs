@@ -68,6 +68,9 @@ impl HostKeyPrompts {
         lock(&self.pending).insert(id, sender);
         let (status, expected) = match &details.status {
             KnownHostStatus::Changed { expected, .. } => ("changed", Some(expected.clone())),
+            // A new key type: asked like a new host, with the keys of the
+            // other types on record shown beside it.
+            KnownHostStatus::OtherTypes { known } => ("unknown", Some(known.clone())),
             _ => ("unknown", None),
         };
         let mut payload = json!({

@@ -23,6 +23,7 @@
 
 use crate::{Engine, OpenError, SavedPassword, ShellSink, Target};
 use async_trait::async_trait;
+use easyssh_ssh::ExitStatus;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -220,6 +221,10 @@ impl<B: ShellBackend> ShellSink for InnerSink<B> {
     }
 
     fn exit(&self, code: Option<u32>) {
+        self.ended(code.map_or(ExitStatus::Unknown, ExitStatus::Code));
+    }
+
+    fn ended(&self, status: ExitStatus) {
         let session = self.session.clone();
         let (stale, closing) = {
             let mut state = lock(&session.state);
@@ -232,16 +237,17 @@ impl<B: ShellBackend> ShellSink for InnerSink<B> {
         if stale {
             return;
         }
-        // A shell that ended (even with an error status), or one the person
-        // closed, is over. Only a dropped connection (no status) is retried.
+        // A shell that ended (even with an error status or killed by a
+        // signal), or one the person closed, is over. Only a dropped
+        // connection (no status) is retried.
         let retry = !closing
-            && code.is_none()
+            && status == ExitStatus::Unknown
             && session.options.reconnect
             && session.options.attach != Attach::None;
         if retry {
             Session::start_reconnect(&session, false);
         } else {
-            session.finish(code);
+            session.finish(status);
         }
     }
 }
@@ -282,9 +288,9 @@ impl<B: ShellBackend> Session<B> {
     }
 
     /// Tells the UI the session is over and forgets it.
-    fn finish(&self, code: Option<u32>) {
+    fn finish(&self, status: ExitStatus) {
         lock(&self.registry).remove(&self.public_id);
-        self.sink.exit(code);
+        self.sink.ended(status);
     }
 
     /// Starts the retry loop in the background. `immediate` skips the first
@@ -337,7 +343,7 @@ impl<B: ShellBackend> Session<B> {
             }
         }
         if !lock(&self.state).closing {
-            self.finish(None);
+            self.finish(ExitStatus::Unknown);
         }
     }
 }
@@ -484,7 +490,7 @@ impl<B: ShellBackend> Supervisor<B> {
             }
             None => {
                 // Reconnecting: nothing to close; the loop sees `closing`.
-                session.finish(None);
+                session.finish(ExitStatus::Unknown);
             }
         }
     }
@@ -739,6 +745,20 @@ mod tests {
         fake.sink(0).exit(Some(0));
         settle().await;
         assert_eq!(sink.log(), ["exit:Some(0)"]);
+        assert!(supervisor.open_ids().is_empty());
+        assert_eq!(fake.opens(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_shell_killed_by_a_signal_ends_without_reconnecting() {
+        let (fake, supervisor, sink) = rig();
+        supervisor
+            .open(target(), 80, 24, sink.clone(), attached())
+            .await
+            .unwrap();
+        fake.sink(0).ended(ExitStatus::Signal("KILL".into()));
+        settle().await;
+        assert_eq!(sink.log(), ["exit:None"]);
         assert!(supervisor.open_ids().is_empty());
         assert_eq!(fake.opens(), 1);
     }

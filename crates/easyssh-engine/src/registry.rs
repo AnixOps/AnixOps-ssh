@@ -11,7 +11,13 @@
 //! - A lease is a counted reference. When the last one is released the
 //!   connection lingers (30 s by default) and is closed afterwards unless
 //!   somebody leased it again.
-//! - A connection that died is replaced on the next request.
+//! - A connection that died is replaced on the next request. One that sat
+//!   idle for a while ([`DEFAULT_PROBE_AFTER`]) is pinged before it is handed
+//!   out: after sleep or a network change the socket looks open but nothing
+//!   answers, and channels opened on it would hang until keepalives give up
+//!   minutes later. One that does not answer is closed and replaced.
+//! - [`Key::shard`] tells apart extra connections to the same host, for when
+//!   the server will not open more sessions on one (`MaxSessions`).
 //! - `opened()` counts every connection ever made; the debug command
 //!   `engine.connections` reports it, which is how the end-to-end tests prove
 //!   that a terminal, the files and a tunnel share one connection.
@@ -22,21 +28,42 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+use tokio::time::Instant;
 
 /// How long a connection stays up after its last lease was released.
 pub const DEFAULT_LINGER: Duration = Duration::from_secs(30);
+/// A connection not handed out for this long is pinged before it is.
+pub const DEFAULT_PROBE_AFTER: Duration = Duration::from_secs(15);
+/// How long the ping of an idle connection may take.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What a pooled connection must offer.
 pub trait Pooled: Clone + Send + Sync + 'static {
-    /// Whether the connection can still carry channels.
+    /// Whether the connection can still carry channels, as far as it knows.
     fn is_alive(&self) -> bool;
     /// Ends the connection (called when it lingered unused, or at shutdown).
     fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+    /// Whether the far end still answers (a round trip). By default the
+    /// connection's own view, [`Pooled::is_alive`].
+    fn probe(&self) -> Pin<Box<dyn Future<Output = bool> + Send>> {
+        let alive = self.is_alive();
+        Box::pin(async move { alive })
+    }
 }
 
 impl Pooled for easyssh_ssh::Session {
     fn is_alive(&self) -> bool {
         !self.is_closed()
+    }
+
+    fn probe(&self) -> Pin<Box<dyn Future<Output = bool> + Send>> {
+        let session = self.clone();
+        Box::pin(async move {
+            matches!(
+                tokio::time::timeout(PROBE_TIMEOUT, session.ping()).await,
+                Ok(Ok(()))
+            )
+        })
     }
 
     fn close(&self) -> Pin<Box<dyn Future<Output = ()> + Send>> {
@@ -58,6 +85,19 @@ pub struct Key {
     /// The outbound proxy of the first hop (`socks5://host:port`), so a host
     /// whose proxy was edited does not reuse a connection made another way.
     pub via: Option<String>,
+    /// 0 for the host's usual connection; 1, 2, ... for extra ones opened
+    /// because the server refused more sessions on the others.
+    pub shard: u32,
+}
+
+impl Key {
+    /// The same host's extra connection number `shard`.
+    pub fn shard(&self, shard: u32) -> Key {
+        Key {
+            shard,
+            ..self.clone()
+        }
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -79,12 +119,16 @@ struct EntryState<E> {
     failure: Option<(u64, E)>,
     /// Connect attempts that have finished (successfully or not).
     attempts: u64,
+    /// When the connection was last known to work: made, handed out,
+    /// returned, or answered a probe.
+    checked: Instant,
 }
 
 struct Inner<S, E> {
     entries: Mutex<HashMap<Key, Arc<Entry<S, E>>>>,
     opened: AtomicU64,
     linger_ms: AtomicU64,
+    probe_after_ms: AtomicU64,
 }
 
 /// See the module documentation.
@@ -114,6 +158,7 @@ impl<S: Pooled, E: Clone + Send + 'static> Registry<S, E> {
                 entries: Mutex::new(HashMap::new()),
                 opened: AtomicU64::new(0),
                 linger_ms: AtomicU64::new(linger.as_millis() as u64),
+                probe_after_ms: AtomicU64::new(DEFAULT_PROBE_AFTER.as_millis() as u64),
             }),
         }
     }
@@ -126,6 +171,18 @@ impl<S: Pooled, E: Clone + Send + 'static> Registry<S, E> {
 
     pub fn linger(&self) -> Duration {
         Duration::from_millis(self.inner.linger_ms.load(Ordering::SeqCst))
+    }
+
+    /// How long a connection may sit unused before it is pinged on its next
+    /// [`Registry::acquire`].
+    pub fn set_probe_after(&self, idle: Duration) {
+        self.inner
+            .probe_after_ms
+            .store(idle.as_millis() as u64, Ordering::SeqCst);
+    }
+
+    fn probe_after(&self) -> Duration {
+        Duration::from_millis(self.inner.probe_after_ms.load(Ordering::SeqCst))
     }
 
     /// Connections opened since the registry was created.
@@ -190,19 +247,29 @@ impl<S: Pooled, E: Clone + Send + 'static> Registry<S, E> {
                         epoch: 0,
                         failure: None,
                         attempts: 0,
+                        checked: Instant::now(),
                     }),
                 })
             })
             .clone();
         let attempts_before = lock(&entry.state).attempts;
         let mut slot = entry.slot.lock().await;
-        if let Some(session) = slot.as_ref().filter(|s| s.is_alive()) {
-            let session = session.clone();
-            let mut state = lock(&entry.state);
-            state.leases += 1;
-            state.epoch += 1;
-            drop(state);
-            return Ok(self.lease(entry.clone(), session));
+        if let Some(session) = slot.as_ref().filter(|s| s.is_alive()).cloned() {
+            let idle = lock(&entry.state).checked.elapsed() >= self.probe_after();
+            if !idle || session.probe().await {
+                let mut state = lock(&entry.state);
+                state.leases += 1;
+                state.epoch += 1;
+                state.checked = Instant::now();
+                drop(state);
+                return Ok(self.lease(entry.clone(), session));
+            }
+            // It looks open but does not answer (the computer slept, the
+            // network changed): close it and connect anew. Leases still out
+            // see it closed.
+            tracing::debug!("{} did not answer a ping; reconnecting", key.target);
+            *slot = None;
+            tokio::spawn(session.close());
         }
         // Somebody else's connect finished while we waited at the gate and
         // failed: share its failure rather than asking the user again.
@@ -224,6 +291,7 @@ impl<S: Pooled, E: Clone + Send + 'static> Registry<S, E> {
                 state.leases += 1;
                 state.epoch += 1;
                 state.failure = None;
+                state.checked = Instant::now();
                 drop(state);
                 Ok(self.lease(entry.clone(), session))
             }
@@ -293,6 +361,7 @@ impl<S: Pooled, E: Clone + Send + 'static> Drop for Lease<S, E> {
         let epoch = {
             let mut state = lock(&self.entry.state);
             state.leases = state.leases.saturating_sub(1);
+            state.checked = Instant::now();
             if state.leases > 0 {
                 return;
             }
@@ -327,6 +396,9 @@ mod tests {
         alive: Arc<AtomicBool>,
         closed: Arc<AtomicU64>,
         n: u64,
+        /// Whether the far end answers a probe (a dead path looks alive).
+        answers: Arc<AtomicBool>,
+        probes: Arc<AtomicU64>,
     }
 
     impl Pooled for Fake {
@@ -338,6 +410,11 @@ mod tests {
             self.closed.fetch_add(1, Ordering::SeqCst);
             Box::pin(async {})
         }
+        fn probe(&self) -> Pin<Box<dyn Future<Output = bool> + Send>> {
+            self.probes.fetch_add(1, Ordering::SeqCst);
+            let answers = self.answers.load(Ordering::SeqCst);
+            Box::pin(async move { answers })
+        }
     }
 
     fn key(host: &str) -> Key {
@@ -346,6 +423,7 @@ mod tests {
             target: format!("u@{host}:22"),
             jump: vec![],
             via: None,
+            shard: 0,
         }
     }
 
@@ -356,6 +434,8 @@ mod tests {
             alive: Arc::new(AtomicBool::new(true)),
             closed,
             n,
+            answers: Arc::new(AtomicBool::new(true)),
+            probes: Arc::default(),
         }
     }
 
@@ -533,5 +613,79 @@ mod tests {
         reg.close_all().await;
         assert_eq!(closed.load(Ordering::SeqCst), 1);
         assert!(!lease.is_alive());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_connection_is_pinged_and_replaced_when_it_does_not_answer() {
+        let reg: Reg = Registry::new(Duration::from_secs(600));
+        let made = Arc::new(AtomicU64::new(0));
+        let closed = Arc::new(AtomicU64::new(0));
+        let first = reg
+            .acquire(key("a"), || async {
+                Ok(maker(made.clone(), closed.clone(), 0))
+            })
+            .await
+            .unwrap();
+        let fake = first.session().clone();
+        drop(first);
+
+        // Used again soon: handed out without a ping.
+        tokio::time::advance(Duration::from_secs(5)).await;
+        let again = reg
+            .acquire(key("a"), || async { Err("no connect".to_owned()) })
+            .await
+            .unwrap();
+        assert_eq!(again.n, 1);
+        assert_eq!(fake.probes.load(Ordering::SeqCst), 0);
+        drop(again);
+
+        // Idle for longer, and it still answers: pinged, then handed out.
+        tokio::time::advance(DEFAULT_PROBE_AFTER + Duration::from_secs(1)).await;
+        let again = reg
+            .acquire(key("a"), || async { Err("no connect".to_owned()) })
+            .await
+            .unwrap();
+        assert_eq!(again.n, 1);
+        assert_eq!(fake.probes.load(Ordering::SeqCst), 1);
+        drop(again);
+
+        // Idle, and the path died without the socket noticing: replaced.
+        fake.answers.store(false, Ordering::SeqCst);
+        tokio::time::advance(DEFAULT_PROBE_AFTER + Duration::from_secs(1)).await;
+        let fresh = reg
+            .acquire(key("a"), || async {
+                Ok(maker(made.clone(), closed.clone(), 0))
+            })
+            .await
+            .unwrap();
+        assert_eq!(fresh.n, 2);
+        assert_eq!(fake.probes.load(Ordering::SeqCst), 2);
+        tokio::task::yield_now().await;
+        assert_eq!(closed.load(Ordering::SeqCst), 1, "the dead one is closed");
+        assert!(!fake.is_alive());
+        assert_eq!(reg.opened(), 2);
+    }
+
+    #[tokio::test]
+    async fn shards_of_one_host_are_separate_connections() {
+        let reg: Reg = Registry::new(Duration::from_secs(30));
+        let made = Arc::new(AtomicU64::new(0));
+        let closed = Arc::new(AtomicU64::new(0));
+        let usual = reg
+            .acquire(key("a"), || async {
+                Ok(maker(made.clone(), closed.clone(), 0))
+            })
+            .await
+            .unwrap();
+        let extra = reg
+            .acquire(key("a").shard(1), || async {
+                Ok(maker(made.clone(), closed.clone(), 0))
+            })
+            .await
+            .unwrap();
+        assert_ne!(usual.n, extra.n);
+        assert_eq!(reg.connections().await.len(), 2);
+        assert_eq!(key("a").shard(1).shard, 1);
+        assert_eq!(key("a").shard(1).host_id, "a");
     }
 }

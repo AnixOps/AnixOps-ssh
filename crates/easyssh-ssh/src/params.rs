@@ -68,14 +68,22 @@ impl std::fmt::Debug for MemoryIdentity {
     }
 }
 
+/// The keepalive interval when the host's configuration sets none. The
+/// OpenSSH fallback passes the same (`easyssh_core::tunnel`).
+pub const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(60);
+/// Unanswered keepalives before a connection counts as dead.
+pub const DEFAULT_KEEPALIVE_MAX: usize = 3;
+
 #[derive(Clone)]
 pub struct ConnectParams {
     pub host: String,
     pub port: u16,
     pub username: String,
-    /// Interval of SSH keepalive messages; `None` disables them. After three
-    /// unanswered keepalives the connection is closed.
+    /// Interval of SSH keepalive messages; `None` disables them. After
+    /// `keepalive_max` unanswered keepalives the connection is closed.
     pub keepalive: Option<Duration>,
+    /// `ServerAliveCountMax`: unanswered keepalives before giving up.
+    pub keepalive_max: usize,
     /// Limit for the TCP connection (not for prompts to the user).
     pub connect_timeout: Duration,
     pub agent: AgentSource,
@@ -100,7 +108,8 @@ pub struct ConnectParams {
 }
 
 impl ConnectParams {
-    /// Defaults: keepalive 60 s, agent from the environment, no identity
+    /// Defaults: keepalive 60 s ([`DEFAULT_KEEPALIVE`]) with up to three
+    /// unanswered ([`DEFAULT_KEEPALIVE_MAX`]), agent from the environment, no identity
     /// files, keyboard-interactive and password enabled, an in-memory known
     /// hosts store (every host is new in each process; supply a file store
     /// with [`ConnectParams::known_hosts`]).
@@ -109,7 +118,8 @@ impl ConnectParams {
             host: host.into(),
             port,
             username: username.into(),
-            keepalive: Some(Duration::from_secs(60)),
+            keepalive: Some(DEFAULT_KEEPALIVE),
+            keepalive_max: DEFAULT_KEEPALIVE_MAX,
             connect_timeout: Duration::from_secs(30),
             agent: AgentSource::default(),
             identity_files: Vec::new(),
@@ -169,6 +179,7 @@ impl std::fmt::Debug for ConnectParams {
             .field("port", &self.port)
             .field("username", &self.username)
             .field("keepalive", &self.keepalive)
+            .field("keepalive_max", &self.keepalive_max)
             .field("agent", &self.agent)
             .field("identity_files", &self.identity_files)
             .field("memory_identities", &self.memory_identities)
