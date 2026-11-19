@@ -1,5 +1,6 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -42,6 +43,7 @@ import { duration, ease, enter, leave } from "@/lib/motion";
 import { onSettings, settings } from "@/lib/settings";
 import { appShortcut } from "@/lib/shortcuts";
 import { registerTerminal, terminalFor } from "@/lib/terminals";
+import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { terminalFont, terminalTheme } from "@/lib/terminalTheme";
 
 /** The SSH engine a session runs on, and why. */
@@ -108,20 +110,13 @@ export function TerminalView({
     if (!container) return;
     let disposed = false;
 
-    const terminal = new Terminal({
-      fontFamily: terminalFont(),
-      fontSize: settings().terminalFontSize,
-      lineHeight: 1.2,
-      cursorBlink: true,
-      scrollback: settings().terminalScrollback,
-      allowProposedApi: true,
-      macOptionIsMeta: true,
-      theme: terminalTheme(),
-    });
+    const terminal = new Terminal(terminalOptions(settings(), { fontFamily: terminalFont(), theme: terminalTheme() }));
     const fit = new FitAddon();
     const search = new SearchAddon();
     terminal.loadAddon(fit);
     terminal.loadAddon(search);
+    terminal.loadAddon(new Unicode11Addon());
+    terminal.unicode.activeVersion = UNICODE_VERSION;
     terminal.open(container);
     // Headless test browsers have no usable WebGL, so automation uses the DOM renderer.
     if (!navigator.webdriver) {
@@ -368,7 +363,7 @@ export function TerminalView({
     scheme.addEventListener("change", updateTheme);
     const stopSettings = onSettings((next) => {
       terminal.options.fontSize = next.terminalFontSize;
-      terminal.options.scrollback = next.terminalScrollback;
+      Object.assign(terminal.options, liveTerminalOptions(next));
       updateTheme();
       if (container.clientWidth > 0) fit.fit();
     });

@@ -1,4 +1,5 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { ChevronLeft, ChevronsDown, FolderOpen, ChevronsUp, Keyboard, KeyboardOff, RotateCw, SlidersHorizontal, Unplug } from "lucide-react";
@@ -23,6 +24,8 @@ import {
   type ModifierState,
 } from "@/lib/mobileKeys";
 import { dynamicTypeScale, haptic, hostAttach, isCjkLanguage, updateMobilePrefs, useMobilePrefs } from "@/lib/mobilePrefs";
+import { onSettings, settings } from "@/lib/settings";
+import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { terminalFont, terminalTheme } from "@/lib/terminalTheme";
 
 type Status =
@@ -125,18 +128,18 @@ export function MobileTerminal({
     scaleRef.current = scale;
     const effectiveSize = () => Math.round(prefsRef.current.fontSize * scale);
 
-    const terminal = new Terminal({
-      fontFamily: terminalFont(),
-      fontSize: effectiveSize(),
-      lineHeight: 1.2,
-      cursorBlink: true,
-      scrollback: 5000,
-      allowProposedApi: true,
-      screenReaderMode: prefsRef.current.screenReader,
-      theme: terminalTheme(),
-    });
+    const terminal = new Terminal(
+      terminalOptions(settings(), {
+        fontFamily: terminalFont(),
+        fontSize: effectiveSize(),
+        screenReaderMode: prefsRef.current.screenReader,
+        theme: terminalTheme(),
+      }),
+    );
     const fit = new FitAddon();
     terminal.loadAddon(fit);
+    terminal.loadAddon(new Unicode11Addon());
+    terminal.unicode.activeVersion = UNICODE_VERSION;
     terminal.open(surface);
     terminalRef.current = terminal;
     fitRef.current = fit;
@@ -318,6 +321,7 @@ export function MobileTerminal({
     const scheme = window.matchMedia("(prefers-color-scheme: dark)");
     const updateTheme = () => (terminal.options.theme = terminalTheme());
     scheme.addEventListener("change", updateTheme);
+    const stopSettings = onSettings((next) => Object.assign(terminal.options, liveTerminalOptions(next)));
 
     if (writesRef.current) {
       (window as unknown as { __mobileDebug?: unknown }).__mobileDebug = {
@@ -333,6 +337,7 @@ export function MobileTerminal({
       policy.dispose();
       policyRef.current = null;
       scheme.removeEventListener("change", updateTheme);
+      stopSettings();
       observer.disconnect();
       if (noticeTimer !== null) window.clearTimeout(noticeTimer);
       touch.dispose();
