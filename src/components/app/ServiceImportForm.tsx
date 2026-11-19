@@ -204,8 +204,10 @@ export function ServiceImportForm({
         </div>
       )}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {!(jumpserver && form.gateway) && (
-        <Field label={t.importDefaultUser}>
+        <Field
+          label={jumpserver && form.gateway ? t.importGatewayAccount : t.importDefaultUser}
+          hint={jumpserver && form.gateway ? t.importGatewayAccountHint : undefined}
+        >
           <Input
             value={form.default_user}
             onChange={(event) => edit({ default_user: event.target.value })}
@@ -214,7 +216,6 @@ export function ServiceImportForm({
             className="font-mono"
           />
         </Field>
-        )}
         <Field label={t.importServiceKey} hint={t.optional}>
           <Input
             value={form.identity_file ?? ""}

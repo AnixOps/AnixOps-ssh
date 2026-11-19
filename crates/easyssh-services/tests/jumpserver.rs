@@ -227,20 +227,44 @@ fn gateway_mode_points_every_host_at_koko() {
             "defaults to the JumpServer host"
         );
         assert_eq!(host.port, 2222);
-        assert_eq!(
-            host.username.as_deref(),
-            Some("alice"),
-            "the JumpServer user"
-        );
     }
-    assert!(fetched.hosts[0].notes.contains("/web-1"));
+    // ssh -p2222 alice@root@<asset address>@jms.example.com
+    let users: Vec<&str> = fetched
+        .hosts
+        .iter()
+        .map(|h| h.username.as_deref().unwrap())
+        .collect();
+    assert_eq!(
+        users,
+        ["alice@root@web1.example.com", "alice@root@198.51.100.4"]
+    );
     assert!(fetched.hosts[0].notes.contains("web1.example.com:2200"));
+    assert!(fetched.hosts[0].notes.contains("account root"));
+
+    // No account: menu mode, the plain JumpServer user.
+    let mut menu = gateway_form("https://jms.example.com");
+    menu.default_user.clear();
+    let fetched = jumpserver::map_assets(&menu, assets(fixture_assets())).unwrap();
+    assert!(fetched
+        .hosts
+        .iter()
+        .all(|h| h.username.as_deref() == Some("alice")));
+    assert!(fetched.hosts[0].notes.contains("/web-1"));
+
+    // An @ would make the login ambiguous.
+    let mut bad = gateway_form("https://jms.example.com");
+    bad.default_user = "a@b".into();
+    assert!(jumpserver::map_assets(&bad, assets(fixture_assets())).is_err());
 
     let mut f = gateway_form("https://jms.example.com");
     f.gateway_host = "koko.example.com".into();
     f.gateway_port = 22222;
     let fetched = jumpserver::map_assets(&f, assets(fixture_assets())).unwrap();
     assert_eq!(fetched.hosts[0].hostname, "koko.example.com");
+    assert_eq!(
+        fetched.hosts[0].username.as_deref(),
+        Some("alice@root@web1.example.com")
+    );
     assert_eq!(fetched.hosts[0].port, 22222);
 
     f.gateway_user = " ".into();
@@ -311,7 +335,9 @@ fn assets_behind_one_gateway_stay_separate_hosts_and_sync_again() {
     let (_vault, store) = fixture();
     let all: Vec<Value> = (1..=3).map(asset).collect();
     let fake = Fake::start(move |request| page(request, &all));
-    let f = gateway_form(&fake.url);
+    // Menu mode (no asset account): the three hosts share host, port and user.
+    let mut f = gateway_form(&fake.url);
+    f.default_user.clear();
 
     // The three hosts share host, port and user: only the source key tells
     // them apart.

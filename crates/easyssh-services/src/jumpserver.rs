@@ -12,16 +12,16 @@
 //! # Gateway mode
 //!
 //! With the gateway option (the default), every imported host points at the
-//! JumpServer KoKo SSH gateway (`host:2222`, user = the JumpServer user name)
-//! and the asset is chosen in KoKo's menu: `ssh <jms_user>@<gateway> -p 2222`,
-//! then `/` and a part of the asset name, Enter. The JumpServer password and
-//! MFA are not stored here; KoKo asks for them as keyboard-interactive
-//! prompts, which the app's prompt dialog already shows.
-//!
-//! JumpServer also documents logging in to an asset directly by putting it in
-//! the user name (`JMSUSER@ACCOUNT@ASSET`); that form is not used, because its
-//! exact syntax differs between JumpServer releases and cannot be checked from
-//! here. It would only change [`gateway_login`].
+//! JumpServer KoKo SSH gateway (`host:2222`). KoKo's direct asset login puts
+//! the asset in the SSH user name:
+//! `ssh -p2222 <jms_user>@<account>@<asset_address>@<gateway>`, so the host's
+//! user is `jms_user@account@asset_address` (the address is unambiguous; KoKo
+//! also accepts the asset name). The account is the form's "default user"
+//! (asset account) field. Very old JumpServer releases may use another form.
+//! With the account empty the user is just `jms_user` and the asset is chosen
+//! in KoKo's menu (`/` and part of the name, Enter). The JumpServer password
+//! and MFA are not stored here; KoKo asks for them as keyboard-interactive
+//! prompts, which the app's prompt dialog already shows. See [`gateway_login`].
 
 use crate::error::{Result, ServiceError};
 use crate::http::{self, BaseUrl};
@@ -296,9 +296,14 @@ fn node_path(asset: &Asset) -> Vec<String> {
     parts.into_iter().skip(1).collect()
 }
 
-/// Where the host connects when the gateway is used: host, port and the
-/// JumpServer user name. See the module docs for the login form.
-pub fn gateway_login(form: &ServiceForm, base: &BaseUrl) -> Result<(String, u16, String)> {
+/// Where the host connects when the gateway is used: host, port and the SSH
+/// user name for `asset_address`: `jms_user@account@asset_address`, or only
+/// `jms_user` (menu mode) when the account is empty.
+pub fn gateway_login(
+    form: &ServiceForm,
+    base: &BaseUrl,
+    asset_address: &str,
+) -> Result<(String, u16, String)> {
     let user = form.gateway_user.trim();
     if user.is_empty() {
         return Err(ServiceError::Invalid(
@@ -316,7 +321,18 @@ pub fn gateway_login(form: &ServiceForm, base: &BaseUrl) -> Result<(String, u16,
     } else {
         form.gateway_port
     };
-    Ok((host, port, user.to_owned()))
+    let account = form.default_user.trim();
+    if account.contains('@') || user.contains('@') {
+        return Err(ServiceError::Invalid(
+            "The JumpServer user name and the asset account must not contain @.".into(),
+        ));
+    }
+    let login = if account.is_empty() {
+        user.to_owned()
+    } else {
+        format!("{user}@{account}@{asset_address}")
+    };
+    Ok((host, port, login))
 }
 
 /// Maps the assets to import hosts. Inactive assets and assets without an SSH
@@ -327,11 +343,10 @@ pub fn map_assets(form: &ServiceForm, list: AssetList) -> Result<Fetched> {
     let origin = base.origin();
     let top = base.host();
     let org = org(form).to_owned();
-    let gateway = if form.gateway {
-        Some(gateway_login(form, &base)?)
-    } else {
-        None
-    };
+    // Fail early on a bad gateway setting, with no asset to name yet.
+    if form.gateway {
+        gateway_login(form, &base, "")?;
+    }
     let user = Some(form.default_user.trim().to_owned()).filter(|user| !user.is_empty());
     let identity = form
         .identity_file
@@ -386,16 +401,24 @@ pub fn map_assets(form: &ServiceForm, list: AssetList) -> Result<Fetched> {
             source: Some(format!("jumpserver:{origin}#{org}#{id}")),
             ..ImportHost::default()
         };
-        match &gateway {
-            Some((gateway_host, gateway_port, jms_user)) => {
-                host.hostname.clone_from(gateway_host);
-                host.port = *gateway_port;
-                host.username = Some(jms_user.clone());
-                host.notes = format!(
-                    "JumpServer asset {shown} ({address}:{asset_port}). Through the KoKo gateway: at the menu type /{shown} and press Enter."
-                );
+        match form.gateway {
+            true => {
+                let (gateway_host, gateway_port, login) = gateway_login(form, &base, address)?;
+                host.hostname = gateway_host;
+                host.port = gateway_port;
+                host.username = Some(login);
+                host.notes = if form.default_user.trim().is_empty() {
+                    format!(
+                        "JumpServer asset {shown} ({address}:{asset_port}). Through the KoKo gateway: at the menu type /{shown} and press Enter."
+                    )
+                } else {
+                    format!(
+                        "JumpServer asset {shown} ({address}:{asset_port}), account {}. Direct login through the KoKo gateway.",
+                        form.default_user.trim()
+                    )
+                };
             }
-            None => {
+            false => {
                 host.hostname = address.to_owned();
                 host.port = asset_port;
                 host.username = user.clone();

@@ -88,17 +88,21 @@ or a bare list.
 | `nodes_display[0]` without its root node (`/Default/Prod/Web` is `Prod/Web`) | group, under a top group named after the JumpServer host |
 | asset `id` | source key `jumpserver:<origin>#<org>#<id>` |
 
-**Gateway (default on).** Every host is `<jms user>@<gateway host>:<port>`
-(gateway host defaults to the JumpServer's host, port 2222) and the asset is
-picked in KoKo's menu (`/` and part of the name, Enter); the asset's name and
-address are in the host's notes. The JumpServer password and MFA code are not
+**Gateway (default on).** Every host connects to the KoKo gateway (host
+defaults to the JumpServer's host, port 2222) with KoKo's direct asset login
+in the SSH user name: `<jms user>@<account>@<asset address>`, the same as
+`ssh -p2222 admin@root@192.168.1.10@jms.example.com`. The account is the
+form's default user (asset account, `root`); the address is used because it is
+unambiguous (KoKo also accepts the asset name). This is the form JumpServer
+documents for 2.x and 3.x; very old releases may differ. With the account
+empty the user is only `<jms user>` and the asset is picked in KoKo's menu
+(`/` and part of the name, Enter). The asset's name and address are in the
+host's notes. The JumpServer password and MFA code are not
 stored: KoKo asks for them as keyboard-interactive prompts, which the app's
 prompt dialog shows. All hosts of one gateway share host, port and user, so
-they are told apart by their source key only (`import_apply` never matches a
+they are told apart by their source key (menu mode shares host, port and user) (`import_apply` never matches a
 service host by address against a host another source created). With the
 gateway off, each host connects to the asset's address with the default user.
 
-JumpServer also documents a direct form where the SSH user name carries the
-asset (`JMSUSER@ACCOUNT@ASSET`). Its syntax differs between releases and could
-not be verified, so it is not used; the one place to add it is
-`jumpserver::gateway_login`.
+The login form lives in `jumpserver::gateway_login`. An `@` in the JumpServer
+user name or the account is refused (the login would be ambiguous).

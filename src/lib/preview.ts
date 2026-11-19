@@ -326,9 +326,13 @@ function previewJumpServer(request: ServiceRequest): HostsImportPreviewResult {
     label,
     hostname: gateway ? form.gateway_host.trim() || url.hostname : address,
     port: gateway ? form.gateway_port || 2222 : port,
-    username: (gateway ? form.gateway_user : form.default_user).trim() || null,
+    username: gateway
+      ? form.default_user.trim()
+        ? `${form.gateway_user.trim()}@${form.default_user.trim()}@${address}`
+        : form.gateway_user.trim()
+      : form.default_user.trim() || null,
     group_path: [url.hostname, ...path],
-    notes: gateway ? `JumpServer asset ${label} (${address}:${port}). Through the KoKo gateway: at the menu type /${label} and press Enter.` : "",
+    notes: gateway ? `JumpServer asset ${label} (${address}:${port}), account ${form.default_user.trim()}. Direct login through the KoKo gateway.` : "",
     source: ["jumpserver:" + url.origin, "00000000-0000-0000-0000-000000000002", `a${id}`].join("#"),
     exists: id === 2,
   });
