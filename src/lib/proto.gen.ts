@@ -130,6 +130,13 @@ export type ImportDuplicatePolicy = "skip" | "update" | "keep-both";
  */
 export type ImportGroupMode = "source" | "none" | "existing";
 /**
+ * Why a session ended: the shell exited with `code`, was killed by `signal`, or ended without a status (the connection dropped).
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SessionExitReason".
+ */
+export type SessionExitReason = "exit" | "signal" | "disconnected";
+/**
  * `locked`: signed in, but the vault is locked, so the account secrets cannot be opened yet.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -950,7 +957,7 @@ export interface SessionOutputEvent {
   seq?: number;
 }
 /**
- * Event `session.exit` payload.
+ * Event `session.exit` payload. `reason` and `signal` are optional: daemons before they were added send only the code.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "SessionExitEvent".
@@ -958,6 +965,11 @@ export interface SessionOutputEvent {
 export interface SessionExitEvent {
   session_id: string;
   code: number | null;
+  reason?: SessionExitReason;
+  /**
+   * The signal's name without `SIG` (`TERM`), when `reason` is `signal`.
+   */
+  signal?: string;
 }
 /**
  * Event `askpass.prompt` payload.
@@ -1649,7 +1661,7 @@ export interface HostkeyPromptEvent {
   fingerprint: string;
   status: HostKeyStatus;
   /**
-   * Fingerprints on record when the key changed.
+   * Fingerprints on record: of the changed key, or of the other key types when the key is of a new type.
    */
   expected?: string[];
 }

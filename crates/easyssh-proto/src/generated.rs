@@ -721,7 +721,7 @@ impl ::std::convert::TryFrom<::std::string::String> for HostKeyStatus {
 #[serde(deny_unknown_fields)]
 pub struct HostkeyPromptEvent {
     pub algorithm: ::std::string::String,
-    ///Fingerprints on record when the key changed.
+    ///Fingerprints on record: of the changed key, or of the other key types when the key is of a new type.
     #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
     pub expected: ::std::vec::Vec<::std::string::String>,
     pub fingerprint: ::std::string::String,
@@ -1400,13 +1400,77 @@ pub struct SessionCloseParams {
 pub struct SessionDetachParams {
     pub session_id: ::std::string::String,
 }
-///Event `session.exit` payload.
+///Event `session.exit` payload. `reason` and `signal` are optional: daemons before they were added send only the code.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct SessionExitEvent {
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub code: ::std::option::Option<i64>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub reason: ::std::option::Option<SessionExitReason>,
     pub session_id: ::std::string::String,
+    ///The signal's name without `SIG` (`TERM`), when `reason` is `signal`.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub signal: ::std::option::Option<::std::string::String>,
+}
+///Why a session ended: the shell exited with `code`, was killed by `signal`, or ended without a status (the connection dropped).
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum SessionExitReason {
+    #[serde(rename = "exit")]
+    Exit,
+    #[serde(rename = "signal")]
+    Signal,
+    #[serde(rename = "disconnected")]
+    Disconnected,
+}
+impl ::std::fmt::Display for SessionExitReason {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Exit => f.write_str("exit"),
+            Self::Signal => f.write_str("signal"),
+            Self::Disconnected => f.write_str("disconnected"),
+        }
+    }
+}
+impl ::std::str::FromStr for SessionExitReason {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "exit" => Ok(Self::Exit),
+            "signal" => Ok(Self::Signal),
+            "disconnected" => Ok(Self::Disconnected),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for SessionExitReason {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for SessionExitReason {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
 }
 ///A session the daemon holds. Ended sessions stay listed (with their scrollback) until `session.close`.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]

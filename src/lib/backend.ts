@@ -20,6 +20,7 @@ import {
   previewSnapshot,
 } from "./preview";
 import { previewSession } from "./previewSession";
+import type { ExitReason } from "./terminalSession";
 import {
   previewForgetAll,
   previewSecretsSet,
@@ -120,7 +121,8 @@ export interface HostsSnapshot {
 
 export type SessionEvent =
   | { kind: "data"; data: string }
-  | { kind: "exit"; code: number | null }
+  /** `reason` and `signal` are missing from older backends; see terminalSession.ts. */
+  | { kind: "exit"; code: number | null; reason?: ExitReason; signal?: string }
   /** The connection to the background daemon dropped; output resumes after "resumed". */
   | { kind: "reconnecting"; attempt?: number; delay_ms?: number }
   | { kind: "resumed" };
@@ -487,7 +489,8 @@ export interface HostKeyPrompt {
   fingerprint: string;
   /** "changed" means the server presents another key than the recorded one. */
   status: "unknown" | "changed";
-  /** Fingerprints on record when the key changed. */
+  /** Fingerprints on record when the key changed; for an "unknown" key of a
+   *  new type, the host's recorded keys of other types. */
   expected: string[];
 }
 

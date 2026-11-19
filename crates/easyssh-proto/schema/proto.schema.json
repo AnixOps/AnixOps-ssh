@@ -1916,6 +1916,13 @@
               "type": "null"
             }
           ]
+        },
+        "reason": {
+          "$ref": "#/$defs/SessionExitReason"
+        },
+        "signal": {
+          "type": "string",
+          "description": "The signal's name without `SIG` (`TERM`), when `reason` is `signal`."
         }
       },
       "required": [
@@ -1923,7 +1930,16 @@
         "code"
       ],
       "additionalProperties": false,
-      "description": "Event `session.exit` payload."
+      "description": "Event `session.exit` payload. `reason` and `signal` are optional: daemons before they were added send only the code."
+    },
+    "SessionExitReason": {
+      "type": "string",
+      "enum": [
+        "exit",
+        "signal",
+        "disconnected"
+      ],
+      "description": "Why a session ended: the shell exited with `code`, was killed by `signal`, or ended without a status (the connection dropped)."
     },
     "AskpassPromptEvent": {
       "type": "object",
@@ -3151,7 +3167,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Fingerprints on record when the key changed."
+          "description": "Fingerprints on record: of the changed key, or of the other key types when the key is of a new type."
         }
       },
       "required": [

@@ -240,6 +240,7 @@ impl Daemon {
                 .map(|dir| dir.join("known_hosts"))
                 .unwrap_or_else(|| PathBuf::from("known_hosts")),
             user: dirs::home_dir().map(|home| home.join(".ssh").join("known_hosts")),
+            system: engine::known_hosts::system_known_hosts(),
         };
         let engine = Engine::new(
             askpass.clone(),
@@ -337,10 +338,15 @@ impl Daemon {
     }
 
     /// Where the built-in engine keeps and reads host keys (default: a
-    /// `known_hosts` file beside the host list, and `~/.ssh/known_hosts` as
-    /// a read-only fallback).
+    /// `known_hosts` file beside the host list, and `~/.ssh/known_hosts`,
+    /// `known_hosts2` and the system-wide files as read-only fallbacks).
+    /// Set this way, the system-wide files are not read.
     pub fn set_known_hosts(&self, app: PathBuf, user: Option<PathBuf>) {
-        self.engine.set_known_hosts(KnownHostsPaths { app, user });
+        self.engine.set_known_hosts(KnownHostsPaths {
+            app,
+            user,
+            system: Vec::new(),
+        });
     }
 
     /// How long a shared connection stays up after its last user left

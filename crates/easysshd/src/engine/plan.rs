@@ -34,7 +34,13 @@ pub struct HostFacts {
     pub keyboard_interactive: bool,
     pub password_attempts: Option<u32>,
     pub connect_timeout: Option<Duration>,
+    /// `ServerAliveInterval`. `ssh -G` prints 0 both when it is unset and
+    /// when the config turns keepalives off, so 0 cannot mean "off" here:
+    /// it is `None` and the engine keeps its default (60 s). A dead path is
+    /// what keepalives are for, and the engine must notice one.
     pub keepalive: Option<Duration>,
+    /// `ServerAliveCountMax` (3 unless the config says otherwise).
+    pub keepalive_max: Option<usize>,
 }
 
 fn set(value: &str) -> bool {
@@ -66,6 +72,7 @@ pub fn parse_ssh_g(text: &str) -> Option<HostFacts> {
         password_attempts: None,
         connect_timeout: None,
         keepalive: None,
+        keepalive_max: None,
     };
     for line in text.lines() {
         let Some((key, value)) = line.split_once(' ') else {
@@ -95,6 +102,9 @@ pub fn parse_ssh_g(text: &str) -> Option<HostFacts> {
                     .ok()
                     .filter(|seconds| *seconds > 0)
                     .map(Duration::from_secs)
+            }
+            "serveralivecountmax" => {
+                facts.keepalive_max = value.parse::<usize>().ok().filter(|count| *count > 0)
             }
             _ => {}
         }
@@ -313,6 +323,7 @@ pub struct HostSpec {
     pub password_attempts: u32,
     pub connect_timeout: Option<Duration>,
     pub keepalive: Option<Duration>,
+    pub keepalive_max: Option<usize>,
     /// What prompts call this host.
     pub label: String,
 }
@@ -337,6 +348,7 @@ impl HostSpec {
             password_attempts: facts.password_attempts.unwrap_or(3).max(1),
             connect_timeout: facts.connect_timeout,
             keepalive: facts.keepalive,
+            keepalive_max: facts.keepalive_max,
             label,
         }
     }
@@ -462,6 +474,7 @@ pub fn resolve(connection: &Connection, global: SshEngine) -> Resolution {
         host_id: connection.id.clone(),
         target: target.address(),
         jump: hops.iter().map(HostSpec::address).collect(),
+        shard: 0,
     };
     Resolution {
         choice,
@@ -523,6 +536,7 @@ proxycommand none
         assert_eq!(facts.password_attempts, Some(1));
         assert_eq!(facts.connect_timeout, Some(Duration::from_secs(20)));
         assert_eq!(facts.keepalive, None);
+        assert_eq!(facts.keepalive_max, None);
         // `none` values do not count as set.
         assert!(!facts.proxy_command && !facts.local_command);
         assert!(facts.unsupported().is_empty());
@@ -647,5 +661,25 @@ proxycommand none
         assert!(uses_match(&config, dir.path(), 0));
         std::fs::write(dir.path().join("conf.d/one.conf"), "Match all\n User y\n").unwrap();
         assert!(!uses_match(&config, dir.path(), 0));
+    }
+
+    #[test]
+    fn keepalives_follow_the_config_and_zero_keeps_the_default() {
+        let facts =
+            parse_ssh_g("hostname h\nserveraliveinterval 15\nserveralivecountmax 5\n").unwrap();
+        assert_eq!(facts.keepalive, Some(Duration::from_secs(15)));
+        assert_eq!(facts.keepalive_max, Some(5));
+        let spec = HostSpec::from_facts(&facts, "h".into());
+        assert_eq!(spec.keepalive, Some(Duration::from_secs(15)));
+        assert_eq!(spec.keepalive_max, Some(5));
+        // What `ssh -G` prints for a host with nothing configured.
+        let facts =
+            parse_ssh_g("hostname h\nserveraliveinterval 0\nserveralivecountmax 3\n").unwrap();
+        assert_eq!(facts.keepalive, None);
+        assert_eq!(facts.keepalive_max, Some(3));
+        // Nonsense is ignored.
+        let facts =
+            parse_ssh_g("hostname h\nserveralivecountmax 0\nserveraliveinterval x\n").unwrap();
+        assert_eq!((facts.keepalive, facts.keepalive_max), (None, None));
     }
 }

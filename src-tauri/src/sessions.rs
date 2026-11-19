@@ -11,7 +11,7 @@
 
 use crate::daemon::DaemonState;
 use crate::hosts;
-use easysshd::link::SessionMsg;
+use easysshd::link::{ExitReason, SessionMsg};
 use easysshd::supervisor::{SupervisedMsg, SupervisedSink};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
@@ -30,6 +30,11 @@ pub enum SessionEvent {
     },
     Exit {
         code: Option<u32>,
+        /// `exit`, `signal` or `disconnected`.
+        reason: &'static str,
+        /// The signal's name (`TERM`) when `reason` is `signal`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signal: Option<String>,
     },
     /// The connection to the daemon dropped; output resumes after `Resumed`.
     Reconnecting,
@@ -106,13 +111,21 @@ fn sink_for(events: Channel<SessionEvent>) -> SupervisedSink {
         SupervisedMsg::Session(SessionMsg::Data { data, .. }) => {
             events.send(SessionEvent::Data { data }).is_ok()
         }
-        SupervisedMsg::Session(SessionMsg::Exit { code }) => {
-            let _ = events.send(SessionEvent::Exit { code });
+        SupervisedMsg::Session(SessionMsg::Exit { code, reason }) => {
+            let _ = events.send(exit_event(code, &reason));
             false
         }
         SupervisedMsg::Reconnecting => events.send(SessionEvent::Reconnecting).is_ok(),
         SupervisedMsg::Resumed => events.send(SessionEvent::Resumed).is_ok(),
     })
+}
+
+fn exit_event(code: Option<u32>, reason: &ExitReason) -> SessionEvent {
+    SessionEvent::Exit {
+        code,
+        reason: reason.kind(),
+        signal: reason.signal().map(str::to_owned),
+    }
 }
 
 /// Whether `id` names a session owned by this process.
@@ -342,7 +355,7 @@ fn pump(
         }
     }
     let code = exit.recv_timeout(Duration::from_secs(3)).ok().flatten();
-    let _ = events.send(SessionEvent::Exit { code });
+    let _ = events.send(exit_event(code, &ExitReason::from_code(code)));
 }
 
 #[tauri::command]

@@ -2,9 +2,13 @@
 //!
 //! Supported lines: plain host lists (`host`, `[host]:port`, `*` and `?`
 //! wildcards, `!negation`), hashed entries (`|1|salt|hash`), `@revoked`.
-//! `@cert-authority` lines are ignored. A host with recorded keys that
-//! presents a different key is [`KnownHostStatus::Changed`], which is never
-//! accepted automatically.
+//! A host with recorded keys of the presented key's type that presents a
+//! different key is [`KnownHostStatus::Changed`], which is never accepted
+//! automatically. As in OpenSSH, keys of other types do not count: a key of
+//! a type not recorded yet is [`KnownHostStatus::OtherTypes`], asked about
+//! like a new host. A host with an `@cert-authority` line is left to OpenSSH
+//! ([`Error::Unsupported`] from [`check_text`]): it verifies host
+//! certificates, which the engine does not.
 
 use crate::error::{Error, Result};
 use base64::engine::general_purpose::STANDARD as B64;
@@ -32,6 +36,14 @@ pub enum KnownHostStatus {
     },
     /// The presented key is listed as `@revoked`.
     Revoked,
+    /// Keys are recorded for this host, but none of the presented key's
+    /// type (the server gained a key type, or the engine negotiated another
+    /// one than OpenSSH did). Not a change: the user is asked as for a new
+    /// host, and accepting adds the key beside the others.
+    OtherTypes {
+        /// `type SHA256:...` of each recorded key.
+        known: Vec<String>,
+    },
 }
 
 /// A store of trusted host keys.
@@ -199,6 +211,12 @@ fn same_key(a: &PublicKey, b: &PublicKey) -> bool {
     a.key_data() == b.key_data()
 }
 
+/// Whether two keys are of one type, as OpenSSH compares host keys
+/// (`ecdsa-sha2-nistp256` and `-nistp384` are two types; RSA is one).
+fn same_type(a: &PublicKey, b: &PublicKey) -> bool {
+    a.algorithm() == b.algorithm()
+}
+
 /// Looks `key` up in the text of a known_hosts file.
 pub fn evaluate(text: &str, host: &str, port: u16, key: &PublicKey) -> KnownHostStatus {
     let matching: Vec<Entry> = text
@@ -213,12 +231,27 @@ pub fn evaluate(text: &str, host: &str, port: u16, key: &PublicKey) -> KnownHost
     {
         return KnownHostStatus::Revoked;
     }
-    let recorded: Vec<&Entry> = matching
+    let all: Vec<&Entry> = matching
         .iter()
         .filter(|e| e.marker == Marker::None)
         .collect();
-    let Some(first) = recorded.first() else {
+    if all.is_empty() {
         return KnownHostStatus::Unknown;
+    }
+    let recorded: Vec<&Entry> = all
+        .iter()
+        .copied()
+        .filter(|e| same_type(&e.key, key))
+        .collect();
+    let Some(first) = recorded.first() else {
+        let mut known: Vec<String> = Vec::new();
+        for entry in all {
+            let item = format!("{} {}", entry.key.algorithm(), fingerprint(&entry.key));
+            if !known.contains(&item) {
+                known.push(item);
+            }
+        }
+        return KnownHostStatus::OtherTypes { known };
     };
     if recorded.iter().any(|e| same_key(&e.key, key)) {
         return KnownHostStatus::Trusted;
@@ -227,6 +260,31 @@ pub fn evaluate(text: &str, host: &str, port: u16, key: &PublicKey) -> KnownHost
         expected: recorded.iter().map(|e| fingerprint(&e.key)).collect(),
         line: first.line,
     }
+}
+
+/// Whether an `@cert-authority` line covers the host.
+pub fn has_cert_authority(text: &str, host: &str, port: u16) -> bool {
+    text.lines()
+        .enumerate()
+        .filter_map(|(index, raw)| parse_line(raw, index + 1))
+        .any(|e| e.marker == Marker::CertAuthority && e.hosts.matches(host, port))
+}
+
+/// [`evaluate`], and a key that is not trusted for a host that has a
+/// certificate authority is [`Error::Unsupported`]: OpenSSH, which verifies
+/// host certificates, should make that connection.
+pub fn check_text(text: &str, host: &str, port: u16, key: &PublicKey) -> Result<KnownHostStatus> {
+    let status = evaluate(text, host, port, key);
+    if matches!(status, KnownHostStatus::Trusted | KnownHostStatus::Revoked) {
+        return Ok(status);
+    }
+    if has_cert_authority(text, host, port) {
+        return Err(Error::Unsupported(format!(
+            "known_hosts names a certificate authority (@cert-authority) for {}",
+            token(host, port)
+        )));
+    }
+    Ok(status)
 }
 
 /// Algorithms of the keys recorded for the host.
@@ -389,7 +447,7 @@ impl KnownHostsFile {
 
 impl KnownHosts for KnownHostsFile {
     fn check(&self, host: &str, port: u16, key: &PublicKey) -> Result<KnownHostStatus> {
-        Ok(evaluate(&self.read()?, host, port, key))
+        check_text(&self.read()?, host, port, key)
     }
 
     fn add(&self, host: &str, port: u16, key: &PublicKey) -> Result<()> {
@@ -428,7 +486,7 @@ impl MemoryKnownHosts {
 
 impl KnownHosts for MemoryKnownHosts {
     fn check(&self, host: &str, port: u16, key: &PublicKey) -> Result<KnownHostStatus> {
-        Ok(evaluate(&self.lock(), host, port, key))
+        check_text(&self.lock(), host, port, key)
     }
 
     fn add(&self, host: &str, port: u16, key: &PublicKey) -> Result<()> {
@@ -559,15 +617,78 @@ mod tests {
     }
 
     #[test]
-    fn revoked_key_is_flagged_and_cert_authority_is_ignored() {
-        let text = format!("@revoked example.org {K1}\n@cert-authority example.org {K2}\n");
+    fn revoked_key_is_flagged_and_a_cert_authority_is_left_to_openssh() {
+        let text = format!("@revoked example.org {K1}\n@cert-authority *.org {K2}\n");
         assert_eq!(
             evaluate(&text, "example.org", 22, &key(K1)),
             KnownHostStatus::Revoked
         );
         assert_eq!(
+            check_text(&text, "example.org", 22, &key(K1)).unwrap(),
+            KnownHostStatus::Revoked
+        );
+        assert_eq!(
             evaluate(&text, "example.org", 22, &key(K2)),
             KnownHostStatus::Unknown
+        );
+        let error = check_text(&text, "example.org", 22, &key(K2)).unwrap_err();
+        assert!(matches!(error, Error::Unsupported(_)), "{error:?}");
+        // Another host is not covered by the authority.
+        assert_eq!(
+            check_text(&text, "example.com", 22, &key(K2)).unwrap(),
+            KnownHostStatus::Unknown
+        );
+        // A plain key on record still wins over the authority.
+        let trusted = format!("{text}example.org {K2}\n");
+        assert_eq!(
+            check_text(&trusted, "example.org", 22, &key(K2)).unwrap(),
+            KnownHostStatus::Trusted
+        );
+        let file = MemoryKnownHosts::new();
+        *file.lock() = text;
+        assert!(matches!(
+            file.check("example.org", 22, &key(K2)),
+            Err(Error::Unsupported(_))
+        ));
+    }
+
+    const ECDSA: &str = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBGraOqigrA2J6S48cVOGbRXlRQ3KRsSMnWw3Td9jEP9QjIXLCOqVgMjQEVU7poDOolrgePDITb5Y4c5yppo7Z0Q=";
+
+    #[test]
+    fn only_keys_of_the_presented_type_can_change() {
+        let text = format!("example.org {ECDSA}\n");
+        // An ed25519 key where only an ECDSA key is recorded: a new type,
+        // not a change.
+        match evaluate(&text, "example.org", 22, &key(K1)) {
+            KnownHostStatus::OtherTypes { known } => {
+                assert_eq!(
+                    known,
+                    vec![format!("ecdsa-sha2-nistp256 {}", fingerprint(&key(ECDSA)))]
+                );
+            }
+            other => panic!("expected OtherTypes, got {other:?}"),
+        }
+        // With an ed25519 key on record, another ed25519 key is a change.
+        let text = format!("{text}example.org {K2}\n");
+        assert!(matches!(
+            evaluate(&text, "example.org", 22, &key(K1)),
+            KnownHostStatus::Changed { line: 2, .. }
+        ));
+        assert_eq!(
+            evaluate(&text, "example.org", 22, &key(ECDSA)),
+            KnownHostStatus::Trusted
+        );
+        // Accepting the new type adds it beside the old one.
+        let store = MemoryKnownHosts::new();
+        store.add("example.org", 22, &key(ECDSA)).unwrap();
+        store.add("example.org", 22, &key(K1)).unwrap();
+        assert_eq!(
+            store.check("example.org", 22, &key(ECDSA)).unwrap(),
+            KnownHostStatus::Trusted
+        );
+        assert_eq!(
+            store.check("example.org", 22, &key(K1)).unwrap(),
+            KnownHostStatus::Trusted
         );
     }
 

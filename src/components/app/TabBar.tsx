@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { scopeOf, toggleGlobalBroadcast, toggleTabBroadcast, useBroadcast } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
+import { exitTitle } from "@/lib/terminalSession";
 import { appear } from "@/lib/motion";
 import type { Axis, PaneState } from "@/lib/panes";
 import { shortcutHint } from "@/lib/shortcutTable";
@@ -241,7 +242,8 @@ function TabIcon({ tab }: { tab: Tab }) {
     );
   }
   if (tab.status.state === "exited") {
-    return <Unplug className={cn(icon, "text-label-3")} strokeWidth={1.5} aria-label={t.sessionEnded} />;
+    const label = tab.status.error ? t.sessionFailed : exitTitle(tab.status);
+    return <Unplug className={cn(icon, "text-label-3")} strokeWidth={1.5} aria-label={label} />;
   }
   if (tab.hostId === null) {
     return <SquareTerminal className={cn(icon, "text-label-2")} strokeWidth={1.5} aria-label={t.connected} />;

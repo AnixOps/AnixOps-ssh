@@ -40,7 +40,7 @@ import {
 import { t } from "@/lib/i18n";
 import { shortcutHint } from "@/lib/shortcutTable";
 import { appear, duration, ease } from "@/lib/motion";
-import { locate, parentPath, resolvePath } from "@/lib/remotePath";
+import { locate, localName, parentPath, resolvePath, uploadConflicts } from "@/lib/remotePath";
 import { cn } from "@/lib/utils";
 
 interface TransferItem {
@@ -57,8 +57,6 @@ interface TransferItem {
 type Editing = { kind: "mkdir"; value: string } | { kind: "rename"; from: string; value: string };
 
 const joinPath = (dir: string, name: string) => (dir.endsWith("/") ? dir + name : `${dir}/${name}`);
-/** A local file's name, for the transfer list (local paths may use `\\`). */
-const baseName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -108,6 +106,8 @@ export function FilesPane({
   const [dragOver, setDragOver] = useState(false);
   const paneRef = useRef<HTMLElement>(null);
   const cwdRef = useRef("");
+  /** The listing of `cwdRef`, for checking what an upload would replace. */
+  const entriesRef = useRef<RemoteFile[]>([]);
 
   const navigate = useCallback(
     async (files: FilesHandle, path: string, typed = false, notFolder?: () => void) => {
@@ -117,6 +117,7 @@ export function FilesPane({
         // A typed location may name a file: show its folder with it selected.
         const found = typed ? await locate(files.list, path) : { dir: path, entries: await files.list(path), select: null };
         setEntries(sortEntries(found.entries));
+        entriesRef.current = found.entries;
         setCwd(found.dir);
         setPathInput(found.dir);
         cwdRef.current = found.dir;
@@ -198,7 +199,7 @@ export function FilesPane({
         setTransfers((current) => [
           {
             id,
-            name: baseName(upload ? started.local : started.remote),
+            name: localName(upload ? started.local : started.remote),
             upload,
             local: started.local,
             state: "running",
@@ -217,10 +218,21 @@ export function FilesPane({
   );
 
   const uploadPaths = useCallback(
-    (paths: string[]) => {
-      for (const path of paths) void transfer(true, cwdRef.current, path, null);
+    async (paths: string[]) => {
+      const dir = cwdRef.current;
+      // Ask once before anything in the folder is overwritten.
+      const conflicts = uploadConflicts(paths, entriesRef.current);
+      if (conflicts.length > 0) {
+        const title =
+          conflicts.length === 1
+            ? t.uploadReplaceTitle.replace("{name}", conflicts[0])
+            : t.uploadReplaceManyTitle.replace("{n}", String(conflicts.length)).replace("{dir}", dir);
+        const items = conflicts.length > 1 ? conflicts : undefined;
+        if (!(await confirm({ title, body: t.uploadReplaceBody, verb: t.replace, items }))) return;
+      }
+      for (const path of paths) void transfer(true, dir, path, null);
     },
-    [transfer],
+    [confirm, transfer],
   );
 
   // Files dropped from the system onto the pane are uploaded to the current folder.
@@ -237,7 +249,7 @@ export function FilesPane({
       if (payload.type === "over") setDragOver(inside(payload.position.x, payload.position.y));
       else if (payload.type === "drop") {
         setDragOver(false);
-        if (inside(payload.position.x, payload.position.y)) uploadPaths(payload.paths);
+        if (inside(payload.position.x, payload.position.y)) void uploadPaths(payload.paths);
       } else setDragOver(false);
     });
     return () => void unlisten.then((stop) => stop());
