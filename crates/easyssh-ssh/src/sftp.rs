@@ -117,6 +117,27 @@ impl Sftp {
         Ok(self.session.rename(from, to).await?)
     }
 
+    /// Sets the permission bits (`0o644` style) and the modification time
+    /// that are given, and nothing else. The access time is set to the
+    /// modification time.
+    pub async fn set_stat(
+        &self,
+        path: &str,
+        permissions: Option<u32>,
+        modified: Option<SystemTime>,
+    ) -> Result<()> {
+        let seconds = modified
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|age| u32::try_from(age.as_secs()).unwrap_or(u32::MAX));
+        let metadata = russh_sftp::client::fs::Metadata {
+            permissions: permissions.map(|bits| bits & 0o7777),
+            atime: seconds,
+            mtime: seconds,
+            ..Default::default()
+        };
+        Ok(self.session.set_metadata(path, metadata).await?)
+    }
+
     pub async fn remove_file(&self, path: &str) -> Result<()> {
         Ok(self.session.remove_file(path).await?)
     }

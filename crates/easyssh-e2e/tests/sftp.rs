@@ -176,3 +176,27 @@ fn upload_and_download_through_scp_invocation() {
     let mut session = connect(&e2e, "e2e-target");
     session.remove(&remote, false).expect("cleanup");
 }
+
+#[test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+fn transfers_keep_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let e2e = E2e::new();
+    let mut session = connect(&e2e, "e2e-target");
+    let local = e2e.dir.path().join("run.sh");
+    std::fs::write(&local, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&local, std::fs::Permissions::from_mode(0o750)).unwrap();
+    let remote = join_remote(session.home(), &unique_name("e2e-mode.sh"));
+    upload(&e2e, "e2e-target", &local, &remote);
+    let name = remote.rsplit('/').next().unwrap();
+    let home = session.home().to_owned();
+    let listed = session.list(&home).expect("list");
+    let file = listed.iter().find(|f| f.name == name).expect("uploaded");
+    assert_eq!(file.permissions, "-rwxr-x---");
+
+    let back = e2e.dir.path().join("back.sh");
+    download(&e2e, "e2e-target", &remote, &back);
+    let mode = std::fs::metadata(&back).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o750);
+    session.remove(&remote, false).expect("cleanup");
+}

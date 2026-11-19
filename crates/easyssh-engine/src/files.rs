@@ -3,8 +3,9 @@
 //! connection; every transfer runs as its own task so it can be cancelled.
 
 use crate::events::Events;
+use crate::local_files::safe_file_name;
 use crate::Lease;
-use easyssh_ssh::{DirEntry, EntryKind, Error as SshError, Sftp};
+use easyssh_ssh::{DirEntry, EntryKind, Error as SshError, FileStat, Sftp};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -118,13 +119,11 @@ pub fn remote_file_json(entry: &DirEntry) -> Value {
 }
 
 /// Names from the server must not point outside the directory they are
-/// listed in.
+/// listed in. Characters that are only invalid on this side (`:` on
+/// Windows, say) are fine here; a download maps them with
+/// [`safe_file_name`].
 fn safe_name(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && !name.contains(['/', '\\', '\0'])
-        && !name.contains(':')
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0'])
 }
 
 fn join_remote(dir: &str, name: &str) -> String {
@@ -209,6 +208,7 @@ impl Files {
             let Some(transfer) = lock(&transfers).remove(&task_id) else {
                 return;
             };
+            let skipped = progress.skipped;
             let (status, error) = match result {
                 Ok(()) => ("completed", None),
                 Err(e) => {
@@ -218,10 +218,11 @@ impl Files {
                     ("failed", Some(e.to_string()))
                 }
             };
-            broadcast.emit(
-                "transfer.done",
-                json!({"transfer_id": task_id, "status": status, "error": error}),
-            );
+            let mut done = json!({"transfer_id": task_id, "status": status, "error": error});
+            if skipped > 0 {
+                done["skipped"] = json!(skipped);
+            }
+            broadcast.emit("transfer.done", done);
         });
         lock(&self.transfers).insert(
             id.clone(),
@@ -267,6 +268,9 @@ struct Progress {
     bytes: u64,
     reported: u64,
     last: Instant,
+    /// Links in a folder transfer that point nowhere, or back up into a
+    /// folder that holds them.
+    skipped: u64,
 }
 
 impl Progress {
@@ -277,6 +281,7 @@ impl Progress {
             bytes: 0,
             reported: 0,
             last: Instant::now(),
+            skipped: 0,
         }
     }
 
@@ -330,6 +335,42 @@ async fn upload_file(
     file.shutdown()
         .await
         .map_err(|e| SshError::Sftp(format!("closing {remote}: {e}")))?;
+    drop(file);
+    // Like `put -p`: the copy keeps the permissions and the modification
+    // time. A server that refuses leaves an upload that is still complete.
+    if let Ok(metadata) = source.metadata().await {
+        let _ = sftp
+            .set_stat(remote, local_mode(&metadata), metadata.modified().ok())
+            .await;
+    }
+    Ok(())
+}
+
+/// The permission bits of a local file; Windows has none to give.
+fn local_mode(metadata: &std::fs::Metadata) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Some(metadata.permissions().mode() & 0o777)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        None
+    }
+}
+
+/// Gives a downloaded file the permission bits and modification time of
+/// the remote one, like `get -p`.
+fn preserve_local(file: &std::fs::File, stat: &FileStat) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if let Some(mode) = stat.permissions {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(mode & 0o777))?;
+    }
+    if let Some(modified) = stat.modified {
+        file.set_modified(modified)?;
+    }
     Ok(())
 }
 
@@ -352,8 +393,13 @@ async fn upload_path(
             local_path.display()
         )));
     }
-    let mut pending = vec![(local_path.to_owned(), remote.to_owned())];
-    while let Some((dir, remote_dir)) = pending.pop() {
+    // Each folder carries the real paths of the folders above it, so a link
+    // back up one of them is not followed round in circles.
+    let root = tokio::fs::canonicalize(local_path)
+        .await
+        .map_err(|e| local(e, local_path))?;
+    let mut pending = vec![(local_path.to_owned(), remote.to_owned(), vec![root])];
+    while let Some((dir, remote_dir, above)) = pending.pop() {
         // An existing directory is fine.
         if let Err(e) = sftp.mkdir(&remote_dir).await {
             if !sftp
@@ -370,13 +416,29 @@ async fn upload_path(
         while let Some(entry) = entries.next_entry().await.map_err(|e| local(e, &dir))? {
             let name = entry.file_name().to_string_lossy().into_owned();
             let target = join_remote(&remote_dir, &name);
-            let kind = entry.file_type().await.map_err(|e| local(e, &dir))?;
-            if kind.is_dir() {
-                pending.push((entry.path(), target));
-            } else if kind.is_file() {
-                upload_file(sftp, &entry.path(), &target, progress).await?;
+            let path = entry.path();
+            let mut kind = entry.file_type().await.map_err(|e| local(e, &dir))?;
+            if kind.is_symlink() {
+                // A link is sent as what it points to.
+                match tokio::fs::metadata(&path).await {
+                    Ok(metadata) => kind = metadata.file_type(),
+                    Err(_) => {
+                        progress.skipped += 1;
+                        continue;
+                    }
+                }
             }
-            // Symbolic links and special files are not followed.
+            if kind.is_dir() {
+                match tokio::fs::canonicalize(&path).await {
+                    Ok(real) if !above.contains(&real) => {
+                        pending.push((path, target, [&above[..], &[real]].concat()))
+                    }
+                    _ => progress.skipped += 1,
+                }
+            } else if kind.is_file() {
+                upload_file(sftp, &path, &target, progress).await?;
+            }
+            // Special files (sockets, devices) are not sent.
         }
     }
     Ok(())
@@ -388,6 +450,7 @@ async fn download_file(
     local_path: &Path,
     progress: &mut Progress,
 ) -> Result<(), SshError> {
+    let stat = sftp.stat(remote).await?;
     let mut file = sftp.open_read(remote).await?;
     let mut sink = tokio::fs::File::create(local_path)
         .await
@@ -407,6 +470,8 @@ async fn download_file(
         progress.add(read as u64);
     }
     sink.flush().await.map_err(|e| local(e, local_path))?;
+    let sink = sink.into_std().await;
+    preserve_local(&sink, &stat).map_err(|e| local(e, local_path))?;
     Ok(())
 }
 
@@ -426,8 +491,11 @@ async fn download_path(
             "{remote} is a directory; use a recursive transfer"
         )));
     }
-    let mut pending = vec![(remote.to_owned(), local_path.to_owned())];
-    while let Some((remote_dir, dir)) = pending.pop() {
+    // Each folder carries the real paths of the folders above it, so a link
+    // back up one of them is not followed round in circles.
+    let root = sftp.realpath(remote).await?;
+    let mut pending = vec![(remote.to_owned(), local_path.to_owned(), vec![root])];
+    while let Some((remote_dir, dir, above)) = pending.pop() {
         tokio::fs::create_dir_all(&dir)
             .await
             .map_err(|e| local(e, &dir))?;
@@ -436,9 +504,25 @@ async fn download_path(
                 continue;
             }
             let source = join_remote(&remote_dir, &entry.name);
-            let target = dir.join(&entry.name);
-            match entry.stat.kind {
-                EntryKind::Dir => pending.push((source, target)),
+            let target = dir.join(safe_file_name(&entry.name));
+            let kind = match entry.stat.kind {
+                // A link is fetched as what it points to.
+                EntryKind::Symlink => match sftp.stat(&source).await {
+                    Ok(stat) => stat.kind,
+                    Err(_) => {
+                        progress.skipped += 1;
+                        continue;
+                    }
+                },
+                kind => kind,
+            };
+            match kind {
+                EntryKind::Dir => match sftp.realpath(&source).await {
+                    Ok(real) if !above.contains(&real) => {
+                        pending.push((source, target, [&above[..], &[real]].concat()))
+                    }
+                    _ => progress.skipped += 1,
+                },
                 EntryKind::File => download_file(sftp, &source, &target, progress).await?,
                 _ => {}
             }
@@ -487,14 +571,45 @@ impl SftpEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easyssh_ssh::FileStat;
     use std::time::SystemTime;
 
     #[test]
     fn remote_names_cannot_escape() {
         assert!(safe_name("report.pdf"));
-        for bad in ["", ".", "..", "a/b", "..\\x", "C:evil", "a\0b"] {
+        // Fine on the server; a download maps them for the local side.
+        for odd in ["a:b.log", "C:evil", "back\\slash", "what?"] {
+            assert!(safe_name(odd), "{odd:?}");
+        }
+        assert_eq!(safe_file_name("a:b.log"), "a_b.log");
+        assert_eq!(safe_file_name("..\\x"), ".._x");
+        for bad in ["", ".", "..", "a/b", "../x", "a\0b"] {
             assert!(!safe_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn downloads_take_the_remote_mode_and_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.sh");
+        let file = std::fs::File::create(&path).unwrap();
+        let modified = UNIX_EPOCH + Duration::from_secs(1_577_934_245);
+        let stat = FileStat {
+            kind: EntryKind::File,
+            size: 0,
+            modified: Some(modified),
+            permissions: Some(0o4755),
+            uid: None,
+            gid: None,
+        };
+        preserve_local(&file, &stat).unwrap();
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert_eq!(metadata.modified().unwrap(), modified);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Only the permission bits, never set-user-ID.
+            assert_eq!(metadata.permissions().mode() & 0o7777, 0o755);
+            assert_eq!(local_mode(&metadata), Some(0o755));
         }
     }
 
