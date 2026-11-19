@@ -167,6 +167,7 @@ impl Engine {
             (true, None) => AgentSource::Environment,
         };
         params.identity_files = spec.identity_files.clone();
+        params.identities_only = spec.identities_only;
         params.keyboard_interactive = spec.keyboard_interactive;
         params.password = spec.password;
         params.password_attempts = spec.password_attempts;

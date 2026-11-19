@@ -78,12 +78,17 @@ pub struct ConnectParams {
     /// Limit for the TCP connection (not for prompts to the user).
     pub connect_timeout: Duration,
     pub agent: AgentSource,
-    /// Private key files in OpenSSH (or PEM) format, tried in order after the
-    /// agent. Never defaulted from `~/.ssh`: the caller decides.
+    /// Private key files in OpenSSH (or PEM) format, or `.pub` files of keys
+    /// the agent holds. A key the agent holds is signed by the agent; the
+    /// others are offered after the agent's keys, as OpenSSH does. Never
+    /// defaulted from `~/.ssh`: the caller decides.
     pub identity_files: Vec<PathBuf>,
     /// Keys held in memory, tried before `identity_files`. Never written to
     /// disk by the engine.
     pub memory_identities: Vec<MemoryIdentity>,
+    /// `IdentitiesOnly`: of the agent's keys, offer only those that match
+    /// `identity_files` (or their `.pub` files).
+    pub identities_only: bool,
     pub keyboard_interactive: bool,
     pub password: bool,
     /// How often the password prompt is shown when the server refuses it.
@@ -109,6 +114,7 @@ impl ConnectParams {
             agent: AgentSource::default(),
             identity_files: Vec::new(),
             memory_identities: Vec::new(),
+            identities_only: false,
             keyboard_interactive: true,
             password: true,
             password_attempts: 3,

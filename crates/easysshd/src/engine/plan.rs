@@ -308,6 +308,8 @@ pub struct HostSpec {
     pub user: String,
     pub identity_files: Vec<PathBuf>,
     pub agent: bool,
+    /// `IdentitiesOnly`: the agent signs only for the configured keys.
+    pub identities_only: bool,
     pub password: bool,
     pub keyboard_interactive: bool,
     pub password_attempts: u32,
@@ -328,9 +330,11 @@ impl HostSpec {
             host: facts.hostname.clone(),
             port: facts.port,
             user: facts.user.clone(),
-            // `IdentitiesOnly yes` with keys on disk: do not offer the
-            // agent's other keys.
-            agent: facts.pubkey && !(facts.identities_only && !identity_files.is_empty()),
+            // With `IdentitiesOnly yes` the agent stays on for the configured
+            // keys it holds (signing without their passphrase); the engine
+            // leaves its other keys out.
+            agent: facts.pubkey,
+            identities_only: facts.identities_only,
             identity_files,
             password: facts.password,
             keyboard_interactive: facts.keyboard_interactive,
@@ -616,7 +620,7 @@ proxycommand none
     }
 
     #[test]
-    fn identities_only_keeps_the_agent_out() {
+    fn identities_only_limits_the_agent_to_the_configured_keys() {
         let dir = tempfile::tempdir().unwrap();
         let key = dir.path().join("id");
         std::fs::write(&key, "x").unwrap();
@@ -625,11 +629,11 @@ proxycommand none
             key.display()
         );
         let spec = HostSpec::from_facts(&parse_ssh_g(&text).unwrap(), "h".into());
-        assert!(!spec.agent);
+        assert!(spec.agent && spec.identities_only);
         assert_eq!(spec.identity_files, vec![key.clone()]);
         let text = format!("hostname h\nuser u\nidentityfile {}\n", key.display());
         let spec = HostSpec::from_facts(&parse_ssh_g(&text).unwrap(), "h".into());
-        assert!(spec.agent);
+        assert!(spec.agent && !spec.identities_only);
         assert_eq!(spec.address(), "u@h:22");
     }
 
