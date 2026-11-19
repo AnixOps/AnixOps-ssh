@@ -117,6 +117,15 @@ impl Sftp {
         Ok(self.session.rename(from, to).await?)
     }
 
+    /// Sets the permission bits (`0o644` style) and nothing else.
+    pub async fn set_permissions(&self, path: &str, mode: u32) -> Result<()> {
+        let metadata = russh_sftp::client::fs::Metadata {
+            permissions: Some(mode & 0o7777),
+            ..Default::default()
+        };
+        Ok(self.session.set_metadata(path, metadata).await?)
+    }
+
     pub async fn remove_file(&self, path: &str) -> Result<()> {
         Ok(self.session.remove_file(path).await?)
     }
