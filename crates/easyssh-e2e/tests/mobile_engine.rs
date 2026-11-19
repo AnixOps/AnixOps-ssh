@@ -5,7 +5,9 @@
 #![cfg(unix)]
 
 use easyssh_core::{Tunnel, TunnelKind};
-use easyssh_e2e::russh_support::{echo_roundtrip, wait_for_port_open, wait_for_port_shut, within};
+use easyssh_e2e::russh_support::{
+    echo_roundtrip, wait_for_port_open, wait_for_port_shut, within, Scripted,
+};
 use easyssh_e2e::{
     sample_bytes, unique_name, E2e, BASTION_PORT, ECHO_PORT, PW_PASSWORD, PW_USER, TARGET_PORT,
 };
@@ -669,9 +671,187 @@ async fn sh(session: &Session, command: &str) -> String {
         output.exit,
         ExitStatus::Code(0),
         "{command}: {}",
-        output.stderr_text()
+        String::from_utf8_lossy(&output.stderr)
     );
     output.stdout_text()
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn an_upload_replaces_an_existing_file_and_leaves_no_temporary_file() {
+    let e2e = E2e::new();
+    let shell = pw_session(&e2e).await;
+    let engine = engine(PW_PASSWORD, Arc::default());
+    let (sftp_id, home) = within("sftp", engine.open_files(&target()))
+        .await
+        .expect("open the files");
+    let entry = engine.files().get(&sftp_id).unwrap();
+    let dir = format!("{home}/{}", unique_name("e2e-replace"));
+    sh(
+        &shell,
+        &format!("mkdir '{dir}' && printf old > '{dir}/notes.txt' && chmod 640 '{dir}/notes.txt'"),
+    )
+    .await;
+
+    let scratch = tempfile::tempdir().unwrap();
+    let local = scratch.path().join("notes.txt");
+    let data = sample_bytes(200_000);
+    std::fs::write(&local, &data).unwrap();
+    let remote = format!("{dir}/notes.txt");
+    let end = run_transfer(&engine, entry.clone(), true, local, remote.clone()).await;
+    assert_eq!(end.status, "completed", "{:?}", end.error);
+
+    assert_eq!(
+        sh(&shell, &format!("stat -c '%s %a' '{remote}'"))
+            .await
+            .trim(),
+        format!("{} 640", data.len())
+    );
+    assert_eq!(sh(&shell, &format!("ls -A '{dir}'")).await, "notes.txt\n");
+    sh(&shell, &format!("rm -r '{dir}'")).await;
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_cancelled_upload_leaves_the_original_intact_and_no_temporary_file() {
+    let e2e = E2e::new();
+    let shell = pw_session(&e2e).await;
+    let engine = engine(PW_PASSWORD, Arc::default());
+    let (sftp_id, home) = within("sftp", engine.open_files(&target()))
+        .await
+        .expect("open the files");
+    let entry = engine.files().get(&sftp_id).unwrap();
+    let dir = format!("{home}/{}", unique_name("e2e-cancel"));
+    sh(
+        &shell,
+        &format!("mkdir '{dir}' && printf original > '{dir}/big.bin'"),
+    )
+    .await;
+
+    let scratch = tempfile::tempdir().unwrap();
+    let local = scratch.path().join("big.bin");
+    std::fs::write(&local, sample_bytes(32 * 1024 * 1024)).unwrap();
+    let (sender, mut receiver) = mpsc::unbounded_channel::<(String, Value)>();
+    let sink: easyssh_engine::Events = Arc::new(move |name: &str, payload: Value| {
+        let _ = sender.send((name.to_owned(), payload));
+        1usize
+    });
+    let id = engine.files().start_transfer(
+        entry.clone(),
+        true,
+        local,
+        format!("{dir}/big.bin"),
+        false,
+        sink,
+    );
+    // Cancel once bytes are on their way, so the temporary file exists.
+    let status = within("cancel", async {
+        loop {
+            let (name, payload) = receiver.recv().await.expect("events");
+            match name.as_str() {
+                "transfer.progress" => engine.files().cancel_transfer(&id),
+                "transfer.done" => return payload["status"].as_str().unwrap().to_owned(),
+                _ => {}
+            }
+        }
+    })
+    .await;
+    assert_eq!(status, "cancelled");
+    assert_eq!(
+        sh(&shell, &format!("cat '{dir}/big.bin'")).await,
+        "original"
+    );
+    assert_eq!(sh(&shell, &format!("ls -A '{dir}'")).await, "big.bin\n");
+    sh(&shell, &format!("rm -r '{dir}'")).await;
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_failed_upload_leaves_the_original_intact_and_no_temporary_file() {
+    let e2e = E2e::new();
+    // Another user's file in the sticky /tmp: the upload can write its
+    // temporary file next to it but cannot replace it.
+    let owner = within(
+        "connect",
+        Session::connect(e2e.russh_target(), &Scripted::trusting()),
+    )
+    .await
+    .expect("connect");
+    let remote = format!("/tmp/{}.txt", unique_name("e2e-theirs"));
+    sh(
+        &owner,
+        &format!("printf theirs > '{remote}' && chmod 666 '{remote}'"),
+    )
+    .await;
+    let shell = pw_session(&e2e).await;
+    let engine = engine(PW_PASSWORD, Arc::default());
+    let (sftp_id, _) = within("sftp", engine.open_files(&target()))
+        .await
+        .expect("open the files");
+    let entry = engine.files().get(&sftp_id).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let local = scratch.path().join("mine.txt");
+    std::fs::write(&local, sample_bytes(100_000)).unwrap();
+    let end = run_transfer(&engine, entry.clone(), true, local, remote.clone()).await;
+    assert_eq!(end.status, "failed");
+    assert!(end.error.is_some());
+    assert_eq!(sh(&shell, &format!("cat '{remote}'")).await, "theirs");
+    let part = remote.replacen("/tmp/", "/tmp/.", 1) + ".easyssh-part";
+    assert_eq!(
+        sh(
+            &shell,
+            &format!("test -e '{part}' && echo left || echo gone")
+        )
+        .await,
+        "gone\n"
+    );
+    sh(&owner, &format!("rm -f '{remote}'")).await;
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_failed_folder_download_keeps_the_files_it_finished() {
+    let e2e = E2e::new();
+    let shell = pw_session(&e2e).await;
+    let engine = engine(PW_PASSWORD, Arc::default());
+    let (sftp_id, home) = within("sftp", engine.open_files(&target()))
+        .await
+        .expect("open the files");
+    let entry = engine.files().get(&sftp_id).unwrap();
+    let dir = format!("{home}/{}", unique_name("e2e-partial"));
+    // Listed by name: a.txt arrives, then b.txt cannot be read.
+    sh(
+        &shell,
+        &format!(
+            "mkdir '{dir}' && printf done > '{dir}/a.txt' && printf secret > '{dir}/b.txt' \
+             && chmod 000 '{dir}/b.txt'"
+        ),
+    )
+    .await;
+    let scratch = tempfile::tempdir().unwrap();
+    let local = scratch.path().join("partial");
+    let end = run_transfer_with(
+        &engine,
+        entry.clone(),
+        false,
+        local.clone(),
+        dir.clone(),
+        true,
+    )
+    .await;
+    assert_eq!(end.status, "failed");
+    assert_eq!(std::fs::read(local.join("a.txt")).unwrap(), b"done");
+    let mut names: Vec<String> = std::fs::read_dir(&local)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["a.txt"]);
+    sh(&shell, &format!("rm -rf '{dir}'")).await;
+    engine.shutdown().await;
 }
 
 #[cfg(unix)]

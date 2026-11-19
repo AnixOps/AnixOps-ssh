@@ -8,12 +8,14 @@ use crate::Lease;
 use easyssh_ssh::{DirEntry, EntryKind, Error as SshError, FileStat, Sftp};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::task::AbortHandle;
+use tokio::runtime::Handle;
+use tokio::task::JoinHandle;
 
 const CHUNK: usize = 64 * 1024;
 const PROGRESS_EVERY: Duration = Duration::from_millis(150);
@@ -28,13 +30,24 @@ pub struct SftpEntry {
     _lease: Lease,
 }
 
+/// The file a transfer is writing right now, under a temporary name next to
+/// where it ends up. A cancelled or failed transfer removes it; everything
+/// finished before it stays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Partial {
+    Local(PathBuf),
+    Remote(String),
+}
+
+type Current = Arc<Mutex<Option<Partial>>>;
+
 struct Transfer {
-    abort: AbortHandle,
+    task: JoinHandle<()>,
+    runtime: Handle,
     /// Where this transfer reports to.
     events: Events,
-    /// What a cancelled or failed transfer leaves behind and should remove
-    /// (downloads only).
-    partial: Option<PathBuf>,
+    entry: Arc<SftpEntry>,
+    current: Current,
 }
 
 #[derive(Default)]
@@ -172,7 +185,11 @@ impl Files {
     /// Cancels every transfer and forgets every session.
     pub fn stop_all(&self) {
         for (_, transfer) in lock(&self.transfers).drain() {
-            transfer.abort.abort();
+            transfer.task.abort();
+            // Remote leftovers would need the connection that is going away.
+            if let Some(Partial::Local(path)) = lock(&transfer.current).take() {
+                let _ = std::fs::remove_file(path);
+            }
         }
         lock(&self.sessions).clear();
     }
@@ -193,28 +210,32 @@ impl Files {
         let transfers = self.transfers.clone();
         let task_id = id.clone();
         let (go, gate) = tokio::sync::oneshot::channel::<()>();
-        let task_local = local.clone();
+        let current = Current::default();
+        let task_entry = entry.clone();
+        let task_current = current.clone();
         let task = tokio::spawn(async move {
             let _ = gate.await;
-            let mut progress = Progress::new(task_id.clone(), broadcast.clone());
-            let result = if upload {
-                upload_path(&entry.sftp, &task_local, &remote, recursive, &mut progress).await
-            } else {
-                download_path(&entry.sftp, &remote, &task_local, recursive, &mut progress).await
+            let mut job = Job {
+                sftp: &task_entry.sftp,
+                progress: Progress::new(task_id.clone(), broadcast.clone()),
+                current: task_current.clone(),
             };
-            progress.flush();
+            let result = if upload {
+                upload_path(&mut job, &local, &remote, recursive).await
+            } else {
+                download_path(&mut job, &remote, &local, recursive).await
+            };
+            job.progress.flush();
             // Whoever removes the entry reports the end: this task, or a
             // cancel that got there first.
-            let Some(transfer) = lock(&transfers).remove(&task_id) else {
+            if lock(&transfers).remove(&task_id).is_none() {
                 return;
-            };
-            let skipped = progress.skipped;
+            }
+            let skipped = job.progress.skipped;
             let (status, error) = match result {
                 Ok(()) => ("completed", None),
                 Err(e) => {
-                    if let Some(partial) = &transfer.partial {
-                        remove_partial(partial);
-                    }
+                    remove_partial(&task_entry.sftp, &task_current).await;
                     ("failed", Some(e.to_string()))
                 }
             };
@@ -227,9 +248,11 @@ impl Files {
         lock(&self.transfers).insert(
             id.clone(),
             Transfer {
-                abort: task.abort_handle(),
+                task,
+                runtime: Handle::current(),
                 events,
-                partial: (!upload).then_some(local),
+                entry,
+                current,
             },
         );
         let _ = go.send(());
@@ -237,28 +260,73 @@ impl Files {
     }
 
     /// `transfer.cancel`. Unknown or finished transfers are ignored. The
-    /// end is reported to the sink the transfer was started with.
+    /// end is reported to the sink the transfer was started with, once the
+    /// file it was writing is removed.
     pub fn cancel_transfer(&self, id: &str) {
         let Some(transfer) = lock(&self.transfers).remove(id) else {
             return;
         };
-        transfer.abort.abort();
-        if let Some(partial) = &transfer.partial {
-            remove_partial(partial);
-        }
-        transfer.events.emit(
-            "transfer.done",
-            json!({"transfer_id": id, "status": "cancelled", "error": null}),
-        );
+        let Transfer {
+            task,
+            runtime,
+            events,
+            entry,
+            current,
+        } = transfer;
+        task.abort();
+        let id = id.to_owned();
+        runtime.spawn(async move {
+            // Once the task has stopped it cannot create the file again.
+            let _ = task.await;
+            remove_partial(&entry.sftp, &current).await;
+            events.emit(
+                "transfer.done",
+                json!({"transfer_id": id, "status": "cancelled", "error": null}),
+            );
+        });
     }
 }
 
-fn remove_partial(path: &Path) {
-    let _ = if path.is_dir() {
-        std::fs::remove_dir_all(path)
-    } else {
-        std::fs::remove_file(path)
-    };
+async fn remove_partial(sftp: &Sftp, current: &Current) {
+    let partial = lock(current).take();
+    match partial {
+        Some(Partial::Local(path)) => {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+        Some(Partial::Remote(path)) => {
+            let _ = sftp.remove_file(&path).await;
+        }
+        None => {}
+    }
+}
+
+/// `dir/.name.easyssh-part`: where a file is written before it replaces
+/// `dir/name`, so a transfer that stops halfway never leaves a cut-off file
+/// under the real name.
+fn remote_part(path: &str) -> String {
+    let cut = path.rfind('/').map_or(0, |cut| cut + 1);
+    format!("{}.{}.easyssh-part", &path[..cut], &path[cut..])
+}
+
+fn local_part(path: &Path) -> PathBuf {
+    let mut name = OsString::from(".");
+    name.push(path.file_name().unwrap_or_default());
+    name.push(".easyssh-part");
+    path.with_file_name(name)
+}
+
+/// What one transfer works with.
+struct Job<'a> {
+    sftp: &'a Sftp,
+    progress: Progress,
+    /// The file being written now, for a cancel or failure to remove.
+    current: Current,
+}
+
+impl Job<'_> {
+    fn writing(&self, partial: Option<Partial>) {
+        *lock(&self.current) = partial;
+    }
 }
 
 /// Reports bytes moved, at most every [`PROGRESS_EVERY`].
@@ -308,16 +376,30 @@ fn local(error: std::io::Error, path: &Path) -> SshError {
     SshError::Sftp(format!("{}: {error}", path.display()))
 }
 
-async fn upload_file(
-    sftp: &Sftp,
-    local_path: &Path,
-    remote: &str,
-    progress: &mut Progress,
-) -> Result<(), SshError> {
+async fn upload_file(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Result<(), SshError> {
+    let sftp = job.sftp;
     let mut source = tokio::fs::File::open(local_path)
         .await
         .map_err(|e| local(e, local_path))?;
-    let mut file = sftp.create(remote).await?;
+    // Uploading onto a link replaces the file it points to, as writing
+    // through it did. A broken link is replaced itself.
+    let mut existing = sftp.lstat(remote).await.ok();
+    let mut target = remote.to_owned();
+    if existing
+        .as_ref()
+        .is_some_and(|s| s.kind == EntryKind::Symlink)
+    {
+        if let Ok(real) = sftp.realpath(remote).await {
+            existing = sftp.lstat(&real).await.ok();
+            target = real;
+        }
+    }
+    if existing.as_ref().is_some_and(|s| s.kind == EntryKind::Dir) {
+        return Err(SshError::Sftp(format!("{remote} is a folder")));
+    }
+    let part = remote_part(&target);
+    job.writing(Some(Partial::Remote(part.clone())));
+    let mut file = sftp.create(&part).await?;
     let mut buffer = vec![0u8; CHUNK];
     loop {
         let read = source
@@ -330,22 +412,36 @@ async fn upload_file(
         file.write_all(&buffer[..read])
             .await
             .map_err(|e| SshError::Sftp(format!("writing {remote}: {e}")))?;
-        progress.add(read as u64);
+        job.progress.add(read as u64);
     }
     file.shutdown()
         .await
         .map_err(|e| SshError::Sftp(format!("closing {remote}: {e}")))?;
     drop(file);
-    // Like `put -p`: the copy keeps the permissions and the modification
-    // time. A server that refuses leaves an upload that is still complete.
-    if let Ok(metadata) = source.metadata().await {
-        let _ = sftp
-            .set_stat(remote, local_mode(&metadata), metadata.modified().ok())
-            .await;
+    // A replaced file keeps its own permissions, as it did when it was
+    // overwritten in place; a new one gets the local permissions, like
+    // `put -p`. Both get the local modification time. A server that refuses
+    // leaves an upload that is still complete.
+    let metadata = source.metadata().await.ok();
+    let mode = existing
+        .as_ref()
+        .and_then(|s| s.permissions)
+        .or_else(|| metadata.as_ref().and_then(local_mode));
+    let modified = metadata.and_then(|m| m.modified().ok());
+    if mode.is_some() || modified.is_some() {
+        let _ = sftp.set_stat(&part, mode, modified).await;
     }
+    // A plain SFTP rename does not replace an existing file on OpenSSH.
+    if let Err(error) = sftp.rename(&part, &target).await {
+        if existing.is_none() {
+            return Err(error);
+        }
+        sftp.remove_file(&target).await?;
+        sftp.rename(&part, &target).await?;
+    }
+    job.writing(None);
     Ok(())
 }
-
 /// The permission bits of a local file; Windows has none to give.
 fn local_mode(metadata: &std::fs::Metadata) -> Option<u32> {
     #[cfg(unix)]
@@ -375,17 +471,17 @@ fn preserve_local(file: &std::fs::File, stat: &FileStat) -> std::io::Result<()> 
 }
 
 async fn upload_path(
-    sftp: &Sftp,
+    job: &mut Job<'_>,
     local_path: &Path,
     remote: &str,
     recursive: bool,
-    progress: &mut Progress,
 ) -> Result<(), SshError> {
+    let sftp = job.sftp;
     let metadata = tokio::fs::metadata(local_path)
         .await
         .map_err(|e| local(e, local_path))?;
     if !metadata.is_dir() {
-        return upload_file(sftp, local_path, remote, progress).await;
+        return upload_file(job, local_path, remote).await;
     }
     if !recursive {
         return Err(SshError::Sftp(format!(
@@ -423,7 +519,7 @@ async fn upload_path(
                 match tokio::fs::metadata(&path).await {
                     Ok(metadata) => kind = metadata.file_type(),
                     Err(_) => {
-                        progress.skipped += 1;
+                        job.progress.skipped += 1;
                         continue;
                     }
                 }
@@ -433,10 +529,10 @@ async fn upload_path(
                     Ok(real) if !above.contains(&real) => {
                         pending.push((path, target, [&above[..], &[real]].concat()))
                     }
-                    _ => progress.skipped += 1,
+                    _ => job.progress.skipped += 1,
                 }
             } else if kind.is_file() {
-                upload_file(sftp, &path, &target, progress).await?;
+                upload_file(job, &path, &target).await?;
             }
             // Special files (sockets, devices) are not sent.
         }
@@ -444,17 +540,14 @@ async fn upload_path(
     Ok(())
 }
 
-async fn download_file(
-    sftp: &Sftp,
-    remote: &str,
-    local_path: &Path,
-    progress: &mut Progress,
-) -> Result<(), SshError> {
-    let stat = sftp.stat(remote).await?;
-    let mut file = sftp.open_read(remote).await?;
-    let mut sink = tokio::fs::File::create(local_path)
+async fn download_file(job: &mut Job<'_>, remote: &str, local_path: &Path) -> Result<(), SshError> {
+    let stat = job.sftp.stat(remote).await?;
+    let mut file = job.sftp.open_read(remote).await?;
+    let part = local_part(local_path);
+    job.writing(Some(Partial::Local(part.clone())));
+    let mut sink = tokio::fs::File::create(&part)
         .await
-        .map_err(|e| local(e, local_path))?;
+        .map_err(|e| local(e, &part))?;
     let mut buffer = vec![0u8; CHUNK];
     loop {
         let read = file
@@ -466,25 +559,30 @@ async fn download_file(
         }
         sink.write_all(&buffer[..read])
             .await
-            .map_err(|e| local(e, local_path))?;
-        progress.add(read as u64);
+            .map_err(|e| local(e, &part))?;
+        job.progress.add(read as u64);
     }
-    sink.flush().await.map_err(|e| local(e, local_path))?;
+    sink.flush().await.map_err(|e| local(e, &part))?;
     let sink = sink.into_std().await;
-    preserve_local(&sink, &stat).map_err(|e| local(e, local_path))?;
+    preserve_local(&sink, &stat).map_err(|e| local(e, &part))?;
+    drop(sink);
+    tokio::fs::rename(&part, local_path)
+        .await
+        .map_err(|e| local(e, local_path))?;
+    job.writing(None);
     Ok(())
 }
 
 async fn download_path(
-    sftp: &Sftp,
+    job: &mut Job<'_>,
     remote: &str,
     local_path: &Path,
     recursive: bool,
-    progress: &mut Progress,
 ) -> Result<(), SshError> {
+    let sftp = job.sftp;
     let stat = sftp.stat(remote).await?;
     if stat.kind != EntryKind::Dir {
-        return download_file(sftp, remote, local_path, progress).await;
+        return download_file(job, remote, local_path).await;
     }
     if !recursive {
         return Err(SshError::Sftp(format!(
@@ -510,7 +608,7 @@ async fn download_path(
                 EntryKind::Symlink => match sftp.stat(&source).await {
                     Ok(stat) => stat.kind,
                     Err(_) => {
-                        progress.skipped += 1;
+                        job.progress.skipped += 1;
                         continue;
                     }
                 },
@@ -521,9 +619,9 @@ async fn download_path(
                     Ok(real) if !above.contains(&real) => {
                         pending.push((source, target, [&above[..], &[real]].concat()))
                     }
-                    _ => progress.skipped += 1,
+                    _ => job.progress.skipped += 1,
                 },
-                EntryKind::File => download_file(sftp, &source, &target, progress).await?,
+                EntryKind::File => download_file(job, &source, &target).await?,
                 _ => {}
             }
         }
@@ -611,6 +709,17 @@ mod tests {
             assert_eq!(metadata.permissions().mode() & 0o7777, 0o755);
             assert_eq!(local_mode(&metadata), Some(0o755));
         }
+    }
+
+    #[test]
+    fn unfinished_files_have_a_hidden_name_beside_the_real_one() {
+        assert_eq!(remote_part("/srv/app.tar"), "/srv/.app.tar.easyssh-part");
+        assert_eq!(remote_part("/app.tar"), "/.app.tar.easyssh-part");
+        assert_eq!(remote_part("app.tar"), ".app.tar.easyssh-part");
+        assert_eq!(
+            local_part(Path::new("/tmp/x/report 1.pdf")),
+            Path::new("/tmp/x/.report 1.pdf.easyssh-part")
+        );
     }
 
     #[test]
