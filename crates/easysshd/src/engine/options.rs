@@ -1,8 +1,12 @@
 //! `ssh -G` options beyond the basics the plan needs, and what they mean for
-//! the russh engine: honoured (`IdentityAgent`, `StrictHostKeyChecking yes`
-//! and `accept-new`), or a reason to run the host on OpenSSH instead
+//! the russh engine: honoured (`IdentityAgent`, `StrictHostKeyChecking yes`,
+//! `UserKnownHostsFile`), or a reason to run the host on OpenSSH instead
 //! ([`Unsupported`]). Also the expansion of `%` tokens and `${ENV}` in paths,
 //! which `ssh -G` leaves to connection time for identity files.
+//!
+//! `StrictHostKeyChecking accept-new` keeps the engine's question about an
+//! unknown key (the app's dialog is the stricter answer), and
+//! `GlobalKnownHostsFile` is not read.
 //!
 //! OpenSSH defaults never count as unsupported: `ssh -G` prints them for
 //! every host (`forwardagent no`, `stricthostkeychecking ask`, the default
@@ -23,17 +27,19 @@ pub enum HostKeyPolicy {
     Ask,
     /// `yes`: an unknown key is refused without asking.
     Strict,
-    /// `accept-new`: an unknown key is recorded without asking; a changed
-    /// one is still refused.
+    /// `accept-new`: OpenSSH records an unknown key without asking. The
+    /// engine still asks (the app's host key dialog is the stricter
+    /// choice, and nothing is accepted behind the user's back); a changed
+    /// key is refused either way.
     AcceptNew,
     /// `no`/`off`: any key is accepted, even a changed one. The russh engine
     /// does not do that; OpenSSH runs the host.
     Off,
 }
 
-/// A known_hosts store that applies `StrictHostKeyChecking yes` (an unknown
-/// key is refused without asking) or `accept-new` (it is recorded without
-/// asking). A changed key is left to the engine, which refuses it.
+/// A known_hosts store that applies `StrictHostKeyChecking yes`: an unknown
+/// key is refused without asking. A changed key is left to the engine, which
+/// refuses it.
 struct PolicyKnownHosts {
     inner: Arc<dyn KnownHosts>,
     policy: HostKeyPolicy,
@@ -42,11 +48,11 @@ struct PolicyKnownHosts {
 /// `store` with `policy` applied; `ask` leaves it as it is.
 pub fn with_policy(store: Arc<dyn KnownHosts>, policy: HostKeyPolicy) -> Arc<dyn KnownHosts> {
     match policy {
-        HostKeyPolicy::Strict | HostKeyPolicy::AcceptNew => Arc::new(PolicyKnownHosts {
+        HostKeyPolicy::Strict => Arc::new(PolicyKnownHosts {
             inner: store,
             policy,
         }),
-        HostKeyPolicy::Ask | HostKeyPolicy::Off => store,
+        HostKeyPolicy::Ask | HostKeyPolicy::AcceptNew | HostKeyPolicy::Off => store,
     }
 }
 
@@ -70,11 +76,7 @@ impl KnownHosts for PolicyKnownHosts {
                     fingerprint(key)
                 ),
             }),
-            HostKeyPolicy::AcceptNew => {
-                self.inner.add(host, port, key)?;
-                Ok(KnownHostStatus::Trusted)
-            }
-            HostKeyPolicy::Ask | HostKeyPolicy::Off => Ok(status),
+            HostKeyPolicy::Ask | HostKeyPolicy::AcceptNew | HostKeyPolicy::Off => Ok(status),
         }
     }
 
@@ -113,8 +115,8 @@ pub struct ConfigOptions {
     pub send_env: Vec<String>,
     pub set_env: Vec<String>,
     pub host_key_alias: Option<String>,
+    /// `UserKnownHostsFile`, as printed (space-separated, maybe `~`).
     pub user_known_hosts: Option<String>,
-    pub global_known_hosts: Option<String>,
     pub host_key_policy: HostKeyPolicy,
     pub kex: Vec<String>,
     pub ciphers: Vec<String>,
@@ -133,7 +135,6 @@ impl Default for ConfigOptions {
             set_env: Vec::new(),
             host_key_alias: None,
             user_known_hosts: None,
-            global_known_hosts: None,
             host_key_policy: HostKeyPolicy::Ask,
             kex: Vec::new(),
             ciphers: Vec::new(),
@@ -182,7 +183,8 @@ impl ConfigOptions {
                     (!lower.is_empty() && lower != "none").then(|| value.to_owned())
             }
             "userknownhostsfile" => self.user_known_hosts = Some(value.to_owned()),
-            "globalknownhostsfile" => self.global_known_hosts = Some(value.to_owned()),
+            // Not read by the engine (see the module documentation).
+            "globalknownhostsfile" => {}
             "stricthostkeychecking" => {
                 self.host_key_policy = match lower.as_str() {
                     "yes" | "true" => HostKeyPolicy::Strict,
@@ -200,9 +202,8 @@ impl ConfigOptions {
         true
     }
 
-    /// What of these options the russh engine cannot honour. `home` is the
-    /// user's home directory, to recognise the default known_hosts files.
-    pub fn unsupported(&self, home: Option<&Path>) -> Vec<Unsupported> {
+    /// What of these options the russh engine cannot honour.
+    pub fn unsupported(&self) -> Vec<Unsupported> {
         let mut found = Vec::new();
         if self.forward_agent {
             found.push(Unsupported::AgentForwarding);
@@ -215,28 +216,6 @@ impl ConfigOptions {
         }
         if self.host_key_alias.is_some() {
             found.push(Unsupported::HostKeyAlias);
-        }
-        let user_default = |path: &str| {
-            let path = normalise(&super::plan::expand_home_in(path, home));
-            home.is_some_and(|home| {
-                ["known_hosts", "known_hosts2"]
-                    .iter()
-                    .any(|name| path == normalise(&home.join(".ssh").join(name)))
-            })
-        };
-        if self
-            .user_known_hosts
-            .as_deref()
-            .is_some_and(|files| !files.split_whitespace().all(user_default))
-        {
-            found.push(Unsupported::KnownHostsFile);
-        }
-        if self
-            .global_known_hosts
-            .as_deref()
-            .is_some_and(|files| !files.split_whitespace().all(global_default))
-        {
-            found.push(Unsupported::KnownHostsFile);
         }
         if self.host_key_policy == HostKeyPolicy::Off {
             found.push(Unsupported::HostKeyChecking);
@@ -259,20 +238,6 @@ fn default_send_env(name: &str) -> bool {
             "LANG" | "LANGUAGE" | "LC_*" | "LC_ALL" | "COLORTERM" | "NO_COLOR" | "XMODIFIERS"
         )
         || name.starts_with("LC_")
-}
-
-fn normalise(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
-/// `/etc/ssh/ssh_known_hosts[2]`, or the same names under another `ssh`
-/// directory (`%PROGRAMDATA%\ssh` on Windows, `/usr/local/etc/ssh`).
-fn global_default(path: &str) -> bool {
-    let path = path.replace('\\', "/");
-    let mut parts = path.rsplit('/');
-    let name = parts.next().unwrap_or_default();
-    let dir = parts.next().unwrap_or_default();
-    dir == "ssh" && matches!(name, "ssh_known_hosts" | "ssh_known_hosts2")
 }
 
 /// The algorithms OpenSSH clients offer by default (the union over the
@@ -645,23 +610,13 @@ macs umac-64-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-256-etm@openssh.
 hostkeyalgorithms ssh-ed25519-cert-v01@openssh.com,ecdsa-sha2-nistp256-cert-v01@openssh.com,ecdsa-sha2-nistp384-cert-v01@openssh.com,ecdsa-sha2-nistp521-cert-v01@openssh.com,sk-ssh-ed25519-cert-v01@openssh.com,sk-ecdsa-sha2-nistp256-cert-v01@openssh.com,rsa-sha2-512-cert-v01@openssh.com,rsa-sha2-256-cert-v01@openssh.com,ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256
 ";
 
-    fn home() -> Option<&'static Path> {
-        Some(Path::new("/home/me"))
-    }
-
     #[test]
     fn openssh_defaults_are_not_unsupported() {
         let parsed = options(DEFAULTS);
         assert_eq!(parsed.original_host, "plain");
         assert_eq!(parsed.host_key_policy, HostKeyPolicy::Ask);
         assert_eq!(parsed.identity_agent, IdentityAgent::Environment);
-        assert_eq!(parsed.unsupported(home()), vec![]);
-        // `~` spelling of the same files.
-        let tilde = options(
-            "userknownhostsfile ~/.ssh/known_hosts ~/.ssh/known_hosts2\n\
-             globalknownhostsfile C:\\ProgramData\\ssh\\ssh_known_hosts\n",
-        );
-        assert_eq!(tilde.unsupported(home()), vec![]);
+        assert_eq!(parsed.unsupported(), vec![]);
     }
 
     #[test]
@@ -673,11 +628,6 @@ hostkeyalgorithms ssh-ed25519-cert-v01@openssh.com,ecdsa-sha2-nistp256-cert-v01@
             ("sendenv EDITOR", Unsupported::Environment),
             ("setenv FOO=bar", Unsupported::Environment),
             ("hostkeyalias other", Unsupported::HostKeyAlias),
-            ("userknownhostsfile /dev/null", Unsupported::KnownHostsFile),
-            (
-                "globalknownhostsfile /opt/known_hosts",
-                Unsupported::KnownHostsFile,
-            ),
             ("stricthostkeychecking false", Unsupported::HostKeyChecking),
             (
                 "kexalgorithms curve25519-sha256,diffie-hellman-group1-sha1",
@@ -694,7 +644,7 @@ hostkeyalgorithms ssh-ed25519-cert-v01@openssh.com,ecdsa-sha2-nistp256-cert-v01@
             ("macs hmac-md5", Unsupported::LegacyAlgorithm),
         ];
         for (line, expected) in cases {
-            assert_eq!(options(line).unsupported(home()), vec![*expected], "{line}");
+            assert_eq!(options(line).unsupported(), vec![*expected], "{line}");
         }
     }
 
@@ -703,6 +653,10 @@ hostkeyalgorithms ssh-ed25519-cert-v01@openssh.com,ecdsa-sha2-nistp256-cert-v01@
         for line in [
             "stricthostkeychecking true",
             "stricthostkeychecking accept-new",
+            // Read as the OpenSSH file the engine consults.
+            "userknownhostsfile /tmp/test_known_hosts",
+            "userknownhostsfile /dev/null",
+            "globalknownhostsfile /dev/null",
             "identityagent none",
             "identityagent ~/.1password/agent.sock",
             "hostkeyalias none",
@@ -710,7 +664,7 @@ hostkeyalgorithms ssh-ed25519-cert-v01@openssh.com,ecdsa-sha2-nistp256-cert-v01@
             "ciphers aes256-gcm@openssh.com",
             "hostkeyalgorithms ssh-ed25519,ssh-rsa",
         ] {
-            assert_eq!(options(line).unsupported(home()), vec![], "{line}");
+            assert_eq!(options(line).unsupported(), vec![], "{line}");
         }
         assert_eq!(
             options("stricthostkeychecking true").host_key_policy,
@@ -805,16 +759,17 @@ hostkeyalgorithms ssh-ed25519-cert-v01@openssh.com,ecdsa-sha2-nistp256-cert-v01@
     }
 
     #[test]
-    fn accept_new_records_unknown_keys_without_asking() {
+    fn accept_new_still_asks_the_user() {
         let memory: Arc<dyn KnownHosts> = Arc::new(easyssh_ssh::MemoryKnownHosts::new());
         let accept = with_policy(memory.clone(), HostKeyPolicy::AcceptNew);
         assert_eq!(
             accept.check("h", 22, &test_key()).unwrap(),
-            KnownHostStatus::Trusted
+            KnownHostStatus::Unknown
         );
+        // Nothing was recorded behind the user's back.
         assert_eq!(
             memory.check("h", 22, &test_key()).unwrap(),
-            KnownHostStatus::Trusted
+            KnownHostStatus::Unknown
         );
     }
 

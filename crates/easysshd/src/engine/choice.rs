@@ -28,9 +28,6 @@ pub enum Unsupported {
     Environment,
     /// `HostKeyAlias`.
     HostKeyAlias,
-    /// A `UserKnownHostsFile` or `GlobalKnownHostsFile` other than the
-    /// default files.
-    KnownHostsFile,
     /// `StrictHostKeyChecking no`.
     HostKeyChecking,
     /// A key exchange, cipher, MAC or host key algorithm the user enabled
@@ -53,7 +50,6 @@ impl Unsupported {
             Unsupported::X11Forwarding => "X11 forwarding (ForwardX11)",
             Unsupported::Environment => "SendEnv or SetEnv",
             Unsupported::HostKeyAlias => "HostKeyAlias",
-            Unsupported::KnownHostsFile => "a custom known_hosts file",
             Unsupported::HostKeyChecking => "StrictHostKeyChecking no",
             Unsupported::LegacyAlgorithm => "a legacy algorithm enabled in the ssh config",
         }
@@ -199,7 +195,6 @@ mod tests {
             Unsupported::X11Forwarding,
             Unsupported::Environment,
             Unsupported::HostKeyAlias,
-            Unsupported::KnownHostsFile,
             Unsupported::HostKeyChecking,
             Unsupported::LegacyAlgorithm,
         ] {

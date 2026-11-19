@@ -153,12 +153,14 @@ impl Engine {
 
     fn params(&self, spec: &HostSpec, agent: Option<&PathBuf>) -> ConnectParams {
         let paths = lock(&self.paths).clone();
+        // `UserKnownHostsFile` of the ssh config, else the default file.
+        let user = spec.user_known_hosts.clone().unwrap_or(paths.user);
         let known: Arc<dyn easyssh_ssh::KnownHosts> = match lock(&self.store).clone() {
             Some(store) => Arc::new(LayeredKnownHosts::with_primary(
                 Arc::new(StoreKnownHosts::new(store)),
-                paths.user,
+                user,
             )),
-            None => Arc::new(LayeredKnownHosts::new(paths.app, paths.user)),
+            None => Arc::new(LayeredKnownHosts::new(paths.app, user)),
         };
         let known = options::with_policy(known, spec.host_key_policy);
         let mut params =

@@ -213,6 +213,23 @@ impl HostFacts {
         ))
     }
 
+    /// The first `UserKnownHostsFile`, expanded. `None` when `ssh -G` did
+    /// not say (the default applies); `Some(None)` for `/dev/null` or
+    /// `none`.
+    fn user_known_hosts(&self) -> Option<Option<PathBuf>> {
+        let files = self.options.user_known_hosts.as_deref()?;
+        let first = files.split_whitespace().next()?;
+        if first.eq_ignore_ascii_case("none") || first == "/dev/null" || first == "NUL" {
+            return Some(None);
+        }
+        let home = dirs::home_dir();
+        Some(expand_path(
+            first,
+            &self.tokens(home.as_deref()),
+            home.as_deref(),
+        ))
+    }
+
     /// What this host needs that the russh engine lacks. Reads the identity
     /// files (to spot FIDO2 keys), so it touches the disk. FIDO2 `sk-*` keys
     /// count only on platforms where the engine has no authenticator backend.
@@ -234,7 +251,7 @@ impl HostFacts {
         if self.forwards {
             found.push(Unsupported::InlineForward);
         }
-        found.extend(self.options.unsupported(dirs::home_dir().as_deref()));
+        found.extend(self.options.unsupported());
         if !self.files(&self.certificate_files).is_empty() {
             found.push(Unsupported::Certificate);
         }
@@ -374,6 +391,9 @@ pub struct HostSpec {
     pub agent_path: Option<PathBuf>,
     /// `StrictHostKeyChecking`.
     pub host_key_policy: HostKeyPolicy,
+    /// The OpenSSH known_hosts file to read (the first `UserKnownHostsFile`):
+    /// `None` for the default, `Some(None)` for none (`/dev/null`).
+    pub user_known_hosts: Option<Option<PathBuf>>,
     pub password: bool,
     pub keyboard_interactive: bool,
     pub password_attempts: u32,
@@ -400,6 +420,7 @@ impl HostSpec {
             agent: facts.pubkey && !facts.identities_only && !matches!(identity_agent, Some(None)),
             agent_path: identity_agent.flatten(),
             host_key_policy: facts.options.host_key_policy,
+            user_known_hosts: facts.user_known_hosts(),
             identity_files,
             password: facts.password,
             keyboard_interactive: facts.keyboard_interactive,
@@ -808,6 +829,27 @@ proxycommand none
         assert_eq!(path.agent_path, Some(PathBuf::from("/run/user/1/u.sock")));
         let env = spec("identityagent SSH_AUTH_SOCK\n");
         assert!(env.agent && env.agent_path.is_none());
+    }
+
+    #[test]
+    fn the_user_known_hosts_file_of_the_config_is_read() {
+        let spec = |extra: &str| {
+            let text = format!("hostname h\nuser u\n{extra}");
+            HostSpec::from_facts(&parse_ssh_g(&text).unwrap(), "h".into()).user_known_hosts
+        };
+        assert_eq!(spec(""), None);
+        assert_eq!(
+            spec("userknownhostsfile /tmp/e2e/known_hosts /tmp/e2e/known_hosts2\n"),
+            Some(Some(PathBuf::from("/tmp/e2e/known_hosts")))
+        );
+        assert_eq!(spec("userknownhostsfile /dev/null\n"), Some(None));
+        // Not a reason for OpenSSH, and neither is accept-new.
+        let facts = parse_ssh_g(
+            "hostname h\nuserknownhostsfile /tmp/k\nglobalknownhostsfile /dev/null\n\
+             stricthostkeychecking accept-new\n",
+        )
+        .unwrap();
+        assert!(facts.unsupported().is_empty());
     }
 
     #[test]
