@@ -438,7 +438,8 @@ export interface HostKeyPrompt {
   fingerprint: string;
   /** "changed" means the server presents another key than the recorded one. */
   status: "unknown" | "changed";
-  /** Fingerprints on record when the key changed. */
+  /** Fingerprints on record when the key changed; for an "unknown" key of a
+   *  new type, the host's recorded keys of other types. */
   expected: string[];
 }
 

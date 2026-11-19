@@ -43,8 +43,12 @@ pub struct KnownHostsPaths {
     /// store. Entries in it are imported once and the file is renamed. It
     /// is also where keys go when the engine has no store (tests).
     pub app: PathBuf,
-    /// The user's OpenSSH file, read only. `None` to ignore it.
+    /// The user's OpenSSH file, read only (with `known_hosts2` beside it).
+    /// `None` to ignore it.
     pub user: Option<PathBuf>,
+    /// The system-wide OpenSSH files, read only
+    /// ([`known_hosts::system_known_hosts`]); empty in tests.
+    pub system: Vec<PathBuf>,
 }
 
 pub use easyssh_engine::error_code;
@@ -152,13 +156,13 @@ impl Engine {
 
     fn params(&self, spec: &HostSpec, agent: Option<&PathBuf>) -> ConnectParams {
         let paths = lock(&self.paths).clone();
-        let known: Arc<dyn easyssh_ssh::KnownHosts> = match lock(&self.store).clone() {
-            Some(store) => Arc::new(LayeredKnownHosts::with_primary(
-                Arc::new(StoreKnownHosts::new(store)),
-                paths.user,
-            )),
-            None => Arc::new(LayeredKnownHosts::new(paths.app, paths.user)),
+        let fallbacks = known_hosts::openssh_files(paths.user.as_deref(), &paths.system);
+        let primary: Arc<dyn easyssh_ssh::KnownHosts> = match lock(&self.store).clone() {
+            Some(store) => Arc::new(StoreKnownHosts::new(store)),
+            None => Arc::new(easyssh_ssh::KnownHostsFile::new(paths.app)),
         };
+        let known: Arc<dyn easyssh_ssh::KnownHosts> =
+            Arc::new(LayeredKnownHosts::with_fallbacks(primary, fallbacks));
         let mut params =
             ConnectParams::new(spec.host.clone(), spec.port, spec.user.clone()).known_hosts(known);
         params.agent = match (spec.agent, agent) {
