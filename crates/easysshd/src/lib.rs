@@ -14,6 +14,7 @@ pub mod integration;
 pub mod launch;
 pub mod link;
 pub mod log;
+mod monitor_ssh;
 mod platform;
 pub mod recorder;
 pub mod runtime;

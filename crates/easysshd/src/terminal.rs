@@ -472,6 +472,10 @@ impl TermSession {
         &self.id
     }
 
+    pub fn host_id(&self) -> Option<&str> {
+        self.host_id.as_deref()
+    }
+
     /// Records which engine runs the session and why.
     pub fn set_engine(&self, engine: &str, reason: &str) {
         *lock(&self.engine) = Some((engine.to_owned(), reason.to_owned()));
