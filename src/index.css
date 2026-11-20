@@ -112,6 +112,12 @@
     border-color: var(--separator);
   }
 
+  /* Thin, quiet scrollbars that match the material (layout.md: hairlines,
+     no thick borders); the platform's wide grey bar with arrows does not. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--fill-3) transparent;
+  }
   :focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;

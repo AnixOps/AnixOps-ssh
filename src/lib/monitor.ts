@@ -119,6 +119,10 @@ function hiddenMount(mount: string): boolean {
   );
 }
 
+/** File systems that live in memory or describe the kernel, not storage:
+ *  /run, /dev/shm, efivars and the like. */
+const VIRTUAL_FS = new Set(["tmpfs", "devtmpfs", "ramfs", "efivarfs", "udev", "none", "shm", "cgroup", "cgroup2"]);
+
 function parseDf(lines: string[]): Disk[] {
   const out: Disk[] = [];
   for (const line of lines) {
@@ -126,7 +130,7 @@ function parseDf(lines: string[]): Disk[] {
     if (fields.length < 6 || !/^\d+$/.test(fields[1])) continue;
     const size = num(fields[1]) * 1024;
     const mount = fields.slice(5).join(" ");
-    if (size === 0 || hiddenMount(mount)) continue;
+    if (size === 0 || hiddenMount(mount) || (VIRTUAL_FS.has(fields[0]) && mount !== "/")) continue;
     out.push({ mount, size, used: num(fields[2]) * 1024, available: num(fields[3]) * 1024 });
   }
   return out;
@@ -366,18 +370,19 @@ export function pushPoint(series: number[], value: number, limit = 60): number[]
   return next.length > limit ? next.slice(next.length - limit) : next;
 }
 
-/** 1.5K, 23.4M, 1.7T: the units `top` and `df -h` use (powers of 1024). */
+/** 1.5 KB, 23.4 MB, 1.7 TB: a space between number and unit
+ *  (typography.md), powers of 1024 as `top` and `df -h` count. */
 export function formatBytes(bytes: number): string {
-  const units = ["B", "K", "M", "G", "T", "P"];
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
   let value = Math.max(0, bytes);
   let unit = 0;
   while (value >= 1024 && unit < units.length - 1) {
     value /= 1024;
     unit += 1;
   }
-  if (unit === 0) return `${Math.round(value)}B`;
+  if (unit === 0) return `${Math.round(value)} B`;
   const digits = value >= 100 ? 0 : 1;
-  return `${value.toFixed(digits).replace(/\.0$/, "")}${units[unit]}`;
+  return `${value.toFixed(digits).replace(/\.0$/, "")} ${units[unit]}`;
 }
 
 /** Uptime the way people read it: 5d 3h, 4h 12m, 7m. */

@@ -86,6 +86,8 @@ const scenes = [
     waitText: "old-sg-02",
   },
   { name: "terminal-en", query: "lang=en", open: ["prod-web-01", "home-nas"] },
+  // Last: folding the monitor is remembered for the rest of this context.
+  { name: "monitor-rail", query: "", open: ["prod-web-01"], wait: 4000, clicks: [{ name: "收起监控" }] },
 ];
 
 // The touch UI of the mobile app (components/mobile), forced on with ?mobile=1.

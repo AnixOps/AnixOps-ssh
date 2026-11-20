@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 const columns: { key: ProcessSort; label: () => string; className: string; numeric?: boolean }[] = [
   { key: "pid", label: () => t.processPid, className: "w-20", numeric: true },
   { key: "user", label: () => t.processUser, className: "w-28" },
-  { key: "rss", label: () => t.processMemory, className: "w-20", numeric: true },
+  { key: "rss", label: () => t.processMemory, className: "w-24", numeric: true },
   { key: "cpu", label: () => t.processCpu, className: "w-16", numeric: true },
   { key: "name", label: () => t.processCommand, className: "" },
 ];
