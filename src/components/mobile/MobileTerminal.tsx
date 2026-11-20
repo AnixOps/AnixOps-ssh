@@ -11,6 +11,7 @@ import { attachTerminalTouch, type TouchController, type TouchOverlay } from "@/
 import { Button } from "@/components/ui/button";
 import { openSession, isTauri, type Host, type SessionEvent, type SessionHandle } from "@/lib/backend";
 import { snippetBytes } from "@/lib/barLayout";
+import { binaryInput } from "@/lib/terminalBytes";
 import { BackgroundPolicy, resumeAction } from "@/lib/backgroundPolicy";
 import { watchLifecycle } from "@/lib/mobileVault";
 import { t } from "@/lib/i18n";
@@ -177,6 +178,8 @@ export function MobileTerminal({
       });
     }
     terminal.onData(typed);
+    // Mouse reports in the original encoding come as binary, not as typed text.
+    terminal.onBinary((data) => send(binaryInput(data)));
     terminal.onResize(({ cols, rows }) => sessionRef.current?.resize(cols, rows));
     const rerender = () => redraw((count) => count + 1);
     terminal.onScroll(rerender);

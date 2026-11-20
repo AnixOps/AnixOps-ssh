@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { OSC52_MAX_BYTES, parseOsc52, sanitizeTitle, shouldOpenLink, TITLE_MAX } from "./terminalInput";
+import { mouseTrackingRequest, OSC52_MAX_BYTES, parseOsc52, sanitizeTitle, shouldOpenLink, TITLE_MAX } from "./terminalInput";
 
 const ctrl = { ctrlKey: true, metaKey: false };
 const cmd = { ctrlKey: false, metaKey: true };
@@ -67,5 +67,15 @@ describe("sanitizeTitle", () => {
     const long = sanitizeTitle("x".repeat(500));
     expect([...long]).toHaveLength(TITLE_MAX);
     expect(long.endsWith("…")).toBe(true);
+  });
+});
+
+describe("mouse tracking requests", () => {
+  it("names the last tracking mode and whether that is all", () => {
+    expect(mouseTrackingRequest([1002])).toEqual({ mode: 1002, only: true });
+    expect(mouseTrackingRequest([1000, 1003])).toEqual({ mode: 1003, only: true });
+    expect(mouseTrackingRequest([1049, 1000])).toEqual({ mode: 1000, only: false });
+    expect(mouseTrackingRequest([1006])).toEqual({ mode: null, only: false });
+    expect(mouseTrackingRequest([[1000]])).toEqual({ mode: 1000, only: true });
   });
 });

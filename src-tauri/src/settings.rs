@@ -45,6 +45,9 @@ pub struct Settings {
     /// Remote programs may write (never read) the clipboard with OSC 52.
     #[serde(default = "yes")]
     terminal_osc52: bool,
+    /// Full-screen programs (btop, vim, tmux) may take mouse clicks and the wheel.
+    #[serde(default = "yes")]
+    terminal_mouse_reporting: bool,
     /// Reconnect by itself, with backoff, when a connection drops.
     #[serde(default = "yes")]
     terminal_auto_reconnect: bool,
@@ -123,6 +126,7 @@ struct TerminalBehaviour {
     right_click: RightClick,
     copy_on_select: bool,
     osc52: bool,
+    mouse_reporting: bool,
     auto_reconnect: bool,
 }
 
@@ -138,6 +142,7 @@ impl Default for TerminalBehaviour {
             right_click: RightClick::Menu,
             copy_on_select: false,
             osc52: true,
+            mouse_reporting: true,
             auto_reconnect: true,
         }
     }
@@ -174,6 +179,7 @@ pub fn settings_get() -> Result<Settings, String> {
         terminal_right_click: behaviour.right_click,
         terminal_copy_on_select: behaviour.copy_on_select,
         terminal_osc52: behaviour.osc52,
+        terminal_mouse_reporting: behaviour.mouse_reporting,
         terminal_auto_reconnect: behaviour.auto_reconnect,
         editor_command: files.editor_command,
         follow_terminal_folder: files.follow_terminal_folder,
@@ -224,6 +230,7 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
         right_click: settings.terminal_right_click,
         copy_on_select: settings.terminal_copy_on_select,
         osc52: settings.terminal_osc52,
+        mouse_reporting: settings.terminal_mouse_reporting,
         auto_reconnect: settings.terminal_auto_reconnect,
     };
     if behaviour != terminal_behaviour() {

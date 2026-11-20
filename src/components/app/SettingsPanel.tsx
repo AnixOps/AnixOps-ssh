@@ -222,6 +222,20 @@ export function SettingsPanel({
               onClick={() => update({ terminalCopyOnSelect: !current.terminalCopyOnSelect })}
             />
           </SettingsRow>
+          <SettingsRow
+            label={t.mouseReporting}
+            hint={
+              current.terminalMouseReporting
+                ? t.mouseReportingHint.replace("{key}", isMac ? "Option" : "Shift")
+                : t.mouseReportingOffHint
+            }
+          >
+            <Switch
+              on={current.terminalMouseReporting}
+              label={t.mouseReporting}
+              onClick={() => update({ terminalMouseReporting: !current.terminalMouseReporting })}
+            />
+          </SettingsRow>
           <SettingsRow label={t.warnMultilinePaste} hint={t.warnMultilinePasteHint}>
             <Switch
               on={current.terminalWarnMultilinePaste}
