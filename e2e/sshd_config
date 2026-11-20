@@ -9,6 +9,9 @@ AllowTcpForwarding yes
 AllowStreamLocalForwarding yes
 # A -R socket left by an earlier run is replaced.
 StreamLocalBindUnlink yes
+# As Debian's and Ubuntu's default: the client's locale reaches the shell
+# (COLORTERM does not, as on most servers).
+AcceptEnv LANG LC_*
 Subsystem sftp /usr/lib/openssh/sftp-server
 
 PasswordAuthentication no

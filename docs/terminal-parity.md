@@ -21,7 +21,7 @@ OpenSSH 服务器、真实的会话守护进程和内置 SSH 引擎、应用自�
 
 | 方面 | 检查 | 主流终端的行为 | 修复前 | 现在 |
 |---|---|---|---|---|
-| 连接 | `connect` | 打开主机即得到远端提示符，TERM/COLORTERM/LANG 正确 | ✅ | ✅ `TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8` |
+| 连接 | `connect` | 打开主机即得到远端提示符，TERM 与 UTF-8 的 LANG 正确（服务器按 Debian/Ubuntu 默认只接收 LANG、LC_*，真彩色由 XTGETTCAP 告知） | ✅ | ✅ `TERM=xterm-256color LANG=C.UTF-8` |
 | 显示 | `cjk-emoji-width` | 中文、emoji 各占两格，光标对齐 | ✅ | ✅ |
 | 显示 | `truecolor` | 24 位真彩色按原色显示 | ✅ | ✅ |
 | 显示 | `ansi-black-contrast` | ANSI 黑色是深色；htop 表头、F1–F10 键名、tmux 状态栏这类"彩色底黑字"清楚可读 | ❌ 深色主题里黑色被映射成灰色 `#8E8E93`，彩色底上对比度 1.6:1，htop 底栏的 Help/Setup… 和表头几乎看不见 | 🔧 黑色改为 `--bg-elevated`（#1C1C1E），并加 VS Code 同款"最低对比度 4.5:1"保护；最差 8.3:1 |

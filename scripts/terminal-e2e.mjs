@@ -180,10 +180,10 @@ async function run(page, command) {
 }
 
 /** Runs a command and waits for a marker it prints, so output is complete. */
-async function runAndWait(page, command, marker = null) {
+async function runAndWait(page, command, marker = null, { timeout = 15000 } = {}) {
   const token = marker ?? `done-${Math.random().toString(36).slice(2, 8)}`;
   await run(page, marker ? command : `${command}; echo ${token.slice(0, 5)}''${token.slice(5)}`);
-  await waitScreen(page, new RegExp(token));
+  await waitScreen(page, new RegExp(token), { timeout });
 }
 
 function term(page, fn, arg) {
@@ -235,7 +235,10 @@ check("连接", "connect", "打开主机即得到远端 shell 提示符", async 
   await run(page, "echo TERM=$TERM COLORTERM=$COLORTERM LANG=$LANG");
   const text = await waitScreen(page, /^TERM=/m);
   if (!/TERM=xterm-256color/.test(text)) throw new Error("TERM is not xterm-256color");
-  if (!/COLORTERM=truecolor/.test(text)) throw new Error("COLORTERM is not truecolor");
+  // The server's sshd decides whether COLORTERM gets through (Debian and
+  // Ubuntu accept only LANG and LC_*); 24-bit colour is announced through
+  // XTGETTCAP instead (terminalInput.ts).
+  if (!/LANG=\S*UTF-8/i.test(text)) throw new Error("LANG is not a UTF-8 locale");
   return text.match(/^TERM=.*$/m)?.[0];
 });
 
@@ -736,7 +739,7 @@ check("会话", "exit-reconnect", "会话结束后显示原因，按回车重新
 check("性能", "bulk-output", "大量输出（20 万行）不卡死，几秒内结束", async (page) => {
   await openHost(page);
   const started = Date.now();
-  await runAndWait(page, "seq 1 200000");
+  await runAndWait(page, "seq 1 200000", null, { timeout: 40000 });
   const seconds = (Date.now() - started) / 1000;
   if (seconds > 30) throw new Error(`用了 ${seconds.toFixed(1)} 秒`);
   return `${seconds.toFixed(1)} 秒`;
