@@ -11,7 +11,9 @@
 use crate::Target;
 use easyssh_core::security::{validate_connection, validate_host, validate_username};
 use easyssh_core::tunnel::bare_host;
-use easyssh_core::{AppConfig, Connection, ConnectionTarget, Group, Tunnel, TunnelKind};
+use easyssh_core::{
+    AppConfig, Connection, ConnectionTarget, Group, ProxySettings, Tunnel, TunnelKind,
+};
 use easyssh_store::Store;
 use serde_json::{json, Value};
 
@@ -31,6 +33,8 @@ pub struct NewHost {
     pub favorite: bool,
     /// The jump host chain, `[user@]host[:port]` separated by commas.
     pub jump: Option<String>,
+    /// The outbound proxy of the first hop. `None` removes it.
+    pub proxy: Option<ProxySettings>,
 }
 
 fn display_target(hostname: &str, username: Option<&str>, port: u16) -> String {
@@ -95,6 +99,7 @@ fn host_json(connection: &Connection) -> Option<Value> {
             "notes": connection.notes,
             "engine": null,
             "shellIntegration": false,
+            "proxy": connection.proxy,
             "serial": null,
         },
     }))
@@ -233,6 +238,17 @@ pub fn save_host(store: &Store, input: &NewHost) -> Result<String, String> {
             Some(jump.to_owned())
         }
     };
+    connection.proxy = input.proxy.as_ref().map(|proxy| ProxySettings {
+        kind: proxy.kind,
+        host: proxy.host.trim().to_owned(),
+        port: proxy.port,
+        username: proxy
+            .username
+            .as_deref()
+            .map(str::trim)
+            .filter(|user| !user.is_empty())
+            .map(str::to_owned),
+    });
     connection.updated_at = chrono::Utc::now();
     validate_connection(&connection).map_err(|error| error.to_string())?;
     store
@@ -310,6 +326,7 @@ fn hop_target(config: &AppConfig, hop_text: &str, fallback_user: &str) -> Result
             identity: None,
             jump: Vec::new(),
             saved_password: None,
+            proxy: None,
         });
     }
     let hop = parse_jump(hop_text)?
@@ -336,6 +353,7 @@ fn hop_target(config: &AppConfig, hop_text: &str, fallback_user: &str) -> Result
         identity: None,
         jump: Vec::new(),
         saved_password: None,
+        proxy: None,
     })
 }
 
@@ -370,6 +388,14 @@ pub fn target_for(config: &AppConfig, host_id: &str) -> Result<Target, String> {
             jump.push(hop);
         }
     }
+    // The proxy of the host reaches its first hop; the password is added by
+    // `with_saved_login`, the only place secrets are read.
+    let proxy = connection
+        .proxy
+        .as_ref()
+        .map(|settings| crate::saved_proxy(settings, None, &connection.id))
+        .transpose()
+        .map_err(|error| error.to_string())?;
     Ok(Target {
         host_id: connection.id.clone(),
         label: connection.name.clone(),
@@ -379,6 +405,7 @@ pub fn target_for(config: &AppConfig, host_id: &str) -> Result<Target, String> {
         identity: None,
         jump,
         saved_password: None,
+        proxy,
     })
 }
 
@@ -473,6 +500,56 @@ mod tests {
         assert_eq!(host["fields"]["hostname"], "10.0.0.5");
         assert!(host["fields"]["serial"].is_null());
         assert_eq!(snapshot["warnings"], json!([]));
+    }
+
+    #[test]
+    fn a_host_keeps_its_outbound_proxy_and_the_target_carries_it() {
+        use easyssh_core::ProxyKind;
+        let (_dir, store) = store();
+        let mut input = new_host("web", "10.0.0.5", Some("deploy"), 22);
+        input.proxy = Some(ProxySettings {
+            kind: ProxyKind::Socks5,
+            host: " 127.0.0.1 ".into(),
+            port: 7890,
+            username: Some(" ".into()),
+        });
+        let id = add_host(&store, &input).unwrap();
+        let config = store.load_app_config().unwrap();
+        // Trimmed, and a blank user means no login.
+        assert_eq!(
+            config.connections[0].proxy,
+            Some(ProxySettings {
+                kind: ProxyKind::Socks5,
+                host: "127.0.0.1".into(),
+                port: 7890,
+                username: None,
+            })
+        );
+        let host = &snapshot(&config)["hosts"][0]["fields"]["proxy"];
+        assert_eq!(host["kind"], "socks5");
+        assert_eq!(host["port"], 7890);
+        let target = target_for(&config, &id).unwrap();
+        assert_eq!(
+            target
+                .proxy
+                .as_ref()
+                .map(|proxy| proxy.display())
+                .as_deref(),
+            Some("socks5://127.0.0.1:7890")
+        );
+        // Editing without a proxy takes it away; a bad one is refused.
+        let mut edited = input.clone();
+        edited.id = Some(id.clone());
+        edited.proxy = None;
+        save_host(&store, &edited).unwrap();
+        assert_eq!(store.load_app_config().unwrap().connections[0].proxy, None);
+        edited.proxy = Some(ProxySettings {
+            kind: ProxyKind::Http,
+            host: "".into(),
+            port: 3128,
+            username: None,
+        });
+        assert!(save_host(&store, &edited).is_err());
     }
 
     #[test]

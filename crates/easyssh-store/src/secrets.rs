@@ -1,4 +1,5 @@
-//! Saved host secrets: password, private key and key passphrase, one row per
+//! Saved host secrets: password, private key, key passphrase and outbound
+//! proxy password, one row per
 //! host in `host_secrets`, every value sealed by the store's [`FieldCipher`].
 //!
 //! Reading or writing a value needs the cipher to be unlocked; the plain
@@ -22,14 +23,21 @@ pub struct SecretFlags {
     pub password: bool,
     pub private_key: bool,
     pub passphrase: bool,
+    /// The password of the host's outbound proxy.
+    pub proxy_password: bool,
 }
 
-/// The three encrypted columns of one `host_secrets` row.
-type SecretBlobs = (Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>);
+/// The encrypted columns of one `host_secrets` row.
+type SecretBlobs = (
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+);
 
 impl SecretFlags {
     pub fn any(&self) -> bool {
-        self.password || self.private_key || self.passphrase
+        self.password || self.private_key || self.passphrase || self.proxy_password
     }
 }
 
@@ -39,6 +47,7 @@ pub struct StoredSecrets {
     pub password: Option<SecretText>,
     pub private_key: Option<SecretText>,
     pub passphrase: Option<SecretText>,
+    pub proxy_password: Option<SecretText>,
 }
 
 /// What to do with one stored secret when saving.
@@ -57,6 +66,7 @@ pub struct SecretsUpdate {
     pub password: SecretChange,
     pub private_key: SecretChange,
     pub passphrase: SecretChange,
+    pub proxy_password: SecretChange,
 }
 
 impl SecretsUpdate {
@@ -64,6 +74,7 @@ impl SecretsUpdate {
         self.password == SecretChange::Keep
             && self.private_key == SecretChange::Keep
             && self.passphrase == SecretChange::Keep
+            && self.proxy_password == SecretChange::Keep
     }
 }
 
@@ -89,7 +100,7 @@ impl Store {
             .conn
             .query_row(
                 "SELECT password_enc IS NOT NULL, private_key_enc IS NOT NULL,
-                        passphrase_enc IS NOT NULL
+                        passphrase_enc IS NOT NULL, proxy_password_enc IS NOT NULL
                  FROM host_secrets WHERE host_id = ?1",
                 [host_id],
                 |row| {
@@ -97,6 +108,7 @@ impl Store {
                         password: row.get(0)?,
                         private_key: row.get(1)?,
                         passphrase: row.get(2)?,
+                        proxy_password: row.get(3)?,
                     })
                 },
             )
@@ -109,7 +121,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT host_id FROM host_secrets
              WHERE password_enc IS NOT NULL OR private_key_enc IS NOT NULL
-                OR passphrase_enc IS NOT NULL
+                OR passphrase_enc IS NOT NULL OR proxy_password_enc IS NOT NULL
              ORDER BY host_id",
         )?;
         let ids = stmt
@@ -125,7 +137,8 @@ impl Store {
         let row = self
             .conn
             .query_row(
-                "SELECT h.vault_id, s.password_enc, s.private_key_enc, s.passphrase_enc
+                "SELECT h.vault_id, s.password_enc, s.private_key_enc, s.passphrase_enc,
+                        s.proxy_password_enc
                  FROM host_secrets s JOIN hosts h ON h.id = s.host_id
                  WHERE s.host_id = ?1 AND h.deleted = 0",
                 [host_id],
@@ -135,11 +148,12 @@ impl Store {
                         row.get::<_, Option<Vec<u8>>>(1)?,
                         row.get::<_, Option<Vec<u8>>>(2)?,
                         row.get::<_, Option<Vec<u8>>>(3)?,
+                        row.get::<_, Option<Vec<u8>>>(4)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((vault_id, password, private_key, passphrase)) = row else {
+        let Some((vault_id, password, private_key, passphrase, proxy_password)) = row else {
             return Ok(StoredSecrets::default());
         };
         let open = |field: &str, blob: Option<Vec<u8>>| -> Result<Option<SecretText>> {
@@ -150,6 +164,7 @@ impl Store {
             password: open("password", password)?,
             private_key: open("private_key", private_key)?,
             passphrase: open("passphrase", passphrase)?,
+            proxy_password: open("proxy_password", proxy_password)?,
         })
     }
 
@@ -180,13 +195,13 @@ impl Store {
             let existing: SecretBlobs = self
                 .conn
                 .query_row(
-                    "SELECT password_enc, private_key_enc, passphrase_enc
+                    "SELECT password_enc, private_key_enc, passphrase_enc, proxy_password_enc
                      FROM host_secrets WHERE host_id = ?1",
                     [host_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
                 .optional()?
-                .unwrap_or((None, None, None));
+                .unwrap_or((None, None, None, None));
             let merge = |field: &str,
                          change: &SecretChange,
                          old: Option<Vec<u8>>|
@@ -204,25 +219,33 @@ impl Store {
             let password = merge("password", &update.password, existing.0)?;
             let private_key = merge("private_key", &update.private_key, existing.1)?;
             let passphrase = merge("passphrase", &update.passphrase, existing.2)?;
-            if password.is_none() && private_key.is_none() && passphrase.is_none() {
+            let proxy_password = merge("proxy_password", &update.proxy_password, existing.3)?;
+            if password.is_none()
+                && private_key.is_none()
+                && passphrase.is_none()
+                && proxy_password.is_none()
+            {
                 self.conn
                     .execute("DELETE FROM host_secrets WHERE host_id = ?1", [host_id])?;
             } else {
                 self.conn.execute(
                     "INSERT INTO host_secrets
-                        (host_id, updated_at, password_enc, private_key_enc, passphrase_enc)
-                     VALUES (?1, ?2, ?3, ?4, ?5)
+                        (host_id, updated_at, password_enc, private_key_enc, passphrase_enc,
+                         proxy_password_enc)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                      ON CONFLICT(host_id) DO UPDATE SET
                         updated_at = excluded.updated_at,
                         password_enc = excluded.password_enc,
                         private_key_enc = excluded.private_key_enc,
-                        passphrase_enc = excluded.passphrase_enc",
+                        passphrase_enc = excluded.passphrase_enc,
+                        proxy_password_enc = excluded.proxy_password_enc",
                     params![
                         host_id,
                         fmt_ts(Utc::now()),
                         password,
                         private_key,
-                        passphrase
+                        passphrase,
+                        proxy_password
                     ],
                 )?;
             }

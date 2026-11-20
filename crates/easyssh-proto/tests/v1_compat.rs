@@ -43,6 +43,12 @@ fn full_connection() -> Connection {
     c.terminal.scrollback_lines = 50_000;
     c.terminal.startup_command = Some("cd /srv".into());
     c.engine = Some(easyssh_core::EnginePreference::Russh);
+    c.proxy = Some(easyssh_core::ProxySettings {
+        kind: easyssh_core::ProxyKind::Http,
+        host: "127.0.0.1".into(),
+        port: 7890,
+        username: Some("me".into()),
+    });
     c
 }
 

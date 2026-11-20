@@ -33,6 +33,21 @@ pub struct Settings {
     terminal_cursor_style: CursorStyle,
     #[serde(default = "default_true")]
     terminal_cursor_blink: bool,
+    /// Ask before a multi-line paste into a shell without bracketed paste.
+    #[serde(default = "yes")]
+    terminal_warn_multiline_paste: bool,
+    /// What a right-click in the terminal does.
+    #[serde(default)]
+    terminal_right_click: RightClick,
+    /// Selecting text in the terminal copies it.
+    #[serde(default)]
+    terminal_copy_on_select: bool,
+    /// Remote programs may write (never read) the clipboard with OSC 52.
+    #[serde(default = "yes")]
+    terminal_osc52: bool,
+    /// Reconnect by itself, with backoff, when a connection drops.
+    #[serde(default = "yes")]
+    terminal_auto_reconnect: bool,
 }
 
 fn default_line_height() -> f32 {
@@ -52,6 +67,19 @@ pub enum CursorStyle {
     Underline,
 }
 
+fn yes() -> bool {
+    true
+}
+
+/// What a right-click in the terminal does.
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RightClick {
+    #[default]
+    Menu,
+    Paste,
+}
+
 /// Terminal behaviour only the app's terminal view reads. Kept under its own
 /// key so the shared `terminal` preferences and their schema stay unchanged;
 /// a missing or older value falls back to the defaults field by field.
@@ -63,6 +91,11 @@ struct TerminalBehaviour {
     line_height: f32,
     cursor_style: CursorStyle,
     cursor_blink: bool,
+    warn_multiline_paste: bool,
+    right_click: RightClick,
+    copy_on_select: bool,
+    osc52: bool,
+    auto_reconnect: bool,
 }
 
 impl Default for TerminalBehaviour {
@@ -73,6 +106,11 @@ impl Default for TerminalBehaviour {
             line_height: default_line_height(),
             cursor_style: CursorStyle::default(),
             cursor_blink: true,
+            warn_multiline_paste: true,
+            right_click: RightClick::Menu,
+            copy_on_select: false,
+            osc52: true,
+            auto_reconnect: true,
         }
     }
 }
@@ -103,6 +141,11 @@ pub fn settings_get() -> Result<Settings, String> {
         terminal_line_height: behaviour.line_height,
         terminal_cursor_style: behaviour.cursor_style,
         terminal_cursor_blink: behaviour.cursor_blink,
+        terminal_warn_multiline_paste: behaviour.warn_multiline_paste,
+        terminal_right_click: behaviour.right_click,
+        terminal_copy_on_select: behaviour.copy_on_select,
+        terminal_osc52: behaviour.osc52,
+        terminal_auto_reconnect: behaviour.auto_reconnect,
     })
 }
 
@@ -146,6 +189,11 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
         line_height: settings.terminal_line_height,
         cursor_style: settings.terminal_cursor_style,
         cursor_blink: settings.terminal_cursor_blink,
+        warn_multiline_paste: settings.terminal_warn_multiline_paste,
+        right_click: settings.terminal_right_click,
+        copy_on_select: settings.terminal_copy_on_select,
+        osc52: settings.terminal_osc52,
+        auto_reconnect: settings.terminal_auto_reconnect,
     };
     if behaviour != terminal_behaviour() {
         store
@@ -250,12 +298,18 @@ pub async fn ssh_status() -> Result<SshStatus, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_state, AgentState, TerminalBehaviour};
+    use super::{agent_state, AgentState, RightClick, TerminalBehaviour};
 
     #[test]
     fn terminal_behaviour_defaults_when_missing_or_partial() {
         let empty: TerminalBehaviour = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, TerminalBehaviour::default());
+        assert!(empty.warn_multiline_paste && empty.osc52 && !empty.copy_on_select);
+        assert!(empty.auto_reconnect);
+        let partial: TerminalBehaviour =
+            serde_json::from_str(r#"{"right_click":"paste"}"#).unwrap();
+        assert_eq!(partial.right_click, RightClick::Paste);
+        assert!(partial.osc52);
         assert!(!empty.option_as_meta);
         let on: TerminalBehaviour = serde_json::from_str(r#"{"option_as_meta":true}"#).unwrap();
         assert!(on.option_as_meta);

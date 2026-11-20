@@ -3,6 +3,8 @@ import { isTauri, type SshEngine } from "./backend";
 import { readMirror, writeMirror, type LocaleSetting, type ThemeSetting } from "./prefsMirror";
 
 export type CursorStyle = "block" | "bar" | "underline";
+/** What a right-click in the terminal does: a menu, or paste (PuTTY style). */
+export type TerminalRightClick = "menu" | "paste";
 
 export interface Settings {
   theme: ThemeSetting;
@@ -17,6 +19,15 @@ export interface Settings {
   terminalLineHeight: number;
   terminalCursorStyle: CursorStyle;
   terminalCursorBlink: boolean;
+  /** Ask before a multi-line paste into a shell without bracketed paste. */
+  terminalWarnMultilinePaste: boolean;
+  terminalRightClick: TerminalRightClick;
+  /** Selecting text copies it. */
+  terminalCopyOnSelect: boolean;
+  /** Remote programs may write the clipboard with OSC 52 (never read it). */
+  terminalOsc52: boolean;
+  /** Reconnect by itself, with backoff, when a connection drops. */
+  terminalAutoReconnect: boolean;
   /** The SSH engine for hosts that follow the global setting: the built-in
    * engine unless OpenSSH was chosen (an advanced option kept for compatibility). */
   sshEngine: SshEngine;
@@ -35,6 +46,11 @@ let current: Settings = {
   terminalLineHeight: 1.2,
   terminalCursorStyle: "block",
   terminalCursorBlink: true,
+  terminalWarnMultilinePaste: true,
+  terminalRightClick: "menu",
+  terminalCopyOnSelect: false,
+  terminalOsc52: true,
+  terminalAutoReconnect: true,
   sshEngine: "russh",
   crashReports: null,
   usageStats: false,

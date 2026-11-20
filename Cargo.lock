@@ -114,6 +114,7 @@ dependencies = [
  "easyssh-store",
  "easyssh-telemetry",
  "easyssh-unlock",
+ "easyssh-update",
  "easyssh-vault",
  "easysshd",
  "fontdb",
@@ -1858,6 +1859,7 @@ dependencies = [
  "quick-xml 0.37.5",
  "serde",
  "serde_json",
+ "serde_norway",
  "tempfile",
  "uuid",
  "zip",
@@ -1923,6 +1925,7 @@ name = "easyssh-services"
 version = "2.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "easyssh-core",
  "easyssh-crypto",
  "easyssh-store",
@@ -2044,6 +2047,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "easyssh-update"
+version = "2.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek 3.0.0",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "ureq",
+]
+
+[[package]]
 name = "easyssh-vault"
 version = "2.1.0"
 dependencies = [
@@ -2086,6 +2103,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serialport",
+ "sha1 0.10.7",
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
@@ -6150,6 +6168,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_norway"
+version = "0.9.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e408f29489b5fd500fab51ff1484fc859bb655f32c671f307dcd733b72e8168c"
+dependencies = [
+ "indexmap 2.14.2",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml-norway",
+]
+
+[[package]]
 name = "serde_path_to_error"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7755,6 +7786,12 @@ dependencies = [
  "crypto-common 0.2.2",
  "ctutils",
 ]
+
+[[package]]
+name = "unsafe-libyaml-norway"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b39abd59bf32521c7f2301b52d05a6a2c975b6003521cbd0c6dc1582f0a22104"
 
 [[package]]
 name = "untrusted"
