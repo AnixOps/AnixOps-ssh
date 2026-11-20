@@ -1,4 +1,4 @@
-use crate::domain::{Connection, ConnectionTarget, SerialSettings};
+use crate::domain::{Connection, ConnectionTarget, ProxySettings, SerialSettings};
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -36,7 +36,39 @@ pub fn validate_connection(connection: &Connection) -> Result<(), ValidationErro
             Ok(())
         }
         ConnectionTarget::Serial(serial) => validate_serial(serial),
+    }?;
+    if let Some(proxy) = &connection.proxy {
+        validate_proxy(proxy)?;
     }
+    Ok(())
+}
+
+/// An outbound proxy: a host name or address, a port, and an optional user
+/// that fits the protocols (at most 255 bytes, one line, and no colon, which
+/// would end the user name in HTTP basic authentication).
+pub fn validate_proxy(proxy: &ProxySettings) -> Result<(), ValidationError> {
+    validate_host(&proxy.host).map_err(|error| match error {
+        ValidationError::Required { .. } => ValidationError::Required {
+            field: "proxy host",
+        },
+        _ => ValidationError::Unsafe {
+            field: "proxy host",
+        },
+    })?;
+    if proxy.port == 0 {
+        return Err(ValidationError::Port);
+    }
+    if let Some(username) = &proxy.username {
+        if username.is_empty()
+            || username.len() > 255
+            || username.chars().any(|c| c.is_control() || c == ':')
+        {
+            return Err(ValidationError::Unsafe {
+                field: "proxy user",
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The settings of a serial port. The path is handed to the OS as is, so it
@@ -60,8 +92,22 @@ pub fn validate_serial(serial: &SerialSettings) -> Result<(), ValidationError> {
 pub fn validate_alias(value: &str) -> Result<(), ValidationError> {
     validate_token(value, "alias", true)
 }
+/// A user name: letters, digits, `_`, `-`, `.`, and `@`. The last two exist
+/// for gateways that carry the target in the user name (JumpServer KoKo:
+/// `jms_user@account@10.0.0.5`); ssh splits `user@host` at the last `@`, so
+/// the host is still the one after it. No leading `-`, nothing else special.
 pub fn validate_username(value: &str) -> Result<(), ValidationError> {
-    validate_token(value, "username", false)
+    if value.is_empty() {
+        return Err(ValidationError::Required { field: "username" });
+    }
+    if value.starts_with('-')
+        || !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '@'))
+    {
+        return Err(ValidationError::Unsafe { field: "username" });
+    }
+    Ok(())
 }
 pub fn validate_host(value: &str) -> Result<(), ValidationError> {
     if value.is_empty() {
@@ -141,6 +187,15 @@ pub fn serialized_has_sensitive_keys(value: &serde_json::Value) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn gateway_style_user_names_are_accepted_but_not_options() {
+        assert!(validate_username("jms@root@10.0.0.5").is_ok());
+        assert!(validate_username("first.last").is_ok());
+        for bad in ["", "-oProxyCommand=x", "a b", "a;b", "a$b", "a\nb"] {
+            assert!(validate_username(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
     fn rejects_argument_injection() {
         assert!(validate_host("-oProxyCommand=x").is_err());
         assert!(validate_alias("host;id").is_err());
@@ -211,5 +266,46 @@ mod serial_tests {
         assert_eq!(back, connection.target);
         assert!(crate::SshInvocation::for_connection(&crate::OpenSsh, &connection).is_err());
         assert!(crate::sftp::sftp_args(&connection, false).is_err());
+    }
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+    use crate::domain::ProxyKind;
+
+    fn with(proxy: ProxySettings) -> Connection {
+        let mut connection = Connection::alias("h", "h");
+        connection.proxy = Some(proxy);
+        connection
+    }
+
+    fn proxy(host: &str, port: u16, username: Option<&str>) -> ProxySettings {
+        ProxySettings {
+            kind: ProxyKind::Socks5,
+            host: host.into(),
+            port,
+            username: username.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_proxy_needs_a_safe_host_a_port_and_a_plain_user() {
+        validate_connection(&with(proxy("127.0.0.1", 7890, None))).unwrap();
+        validate_connection(&with(proxy("proxy.example.org", 1080, Some("me@corp")))).unwrap();
+        assert_eq!(
+            validate_connection(&with(proxy("", 1080, None))),
+            Err(ValidationError::Required {
+                field: "proxy host"
+            })
+        );
+        assert!(validate_connection(&with(proxy("-oProxyCommand=x", 1080, None))).is_err());
+        assert_eq!(
+            validate_connection(&with(proxy("p", 0, None))),
+            Err(ValidationError::Port)
+        );
+        assert!(validate_connection(&with(proxy("p", 1, Some("a:b")))).is_err());
+        assert!(validate_connection(&with(proxy("p", 1, Some("")))).is_err());
+        assert!(validate_connection(&with(proxy("p", 1, Some("a\nb")))).is_err());
     }
 }

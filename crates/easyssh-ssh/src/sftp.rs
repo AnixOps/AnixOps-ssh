@@ -117,10 +117,22 @@ impl Sftp {
         Ok(self.session.rename(from, to).await?)
     }
 
-    /// Sets the permission bits (`0o644` style) and nothing else.
-    pub async fn set_permissions(&self, path: &str, mode: u32) -> Result<()> {
+    /// Sets the permission bits (`0o644` style) and the modification time
+    /// that are given, and nothing else. The access time is set to the
+    /// modification time.
+    pub async fn set_stat(
+        &self,
+        path: &str,
+        permissions: Option<u32>,
+        modified: Option<SystemTime>,
+    ) -> Result<()> {
+        let seconds = modified
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|age| u32::try_from(age.as_secs()).unwrap_or(u32::MAX));
         let metadata = russh_sftp::client::fs::Metadata {
-            permissions: Some(mode & 0o7777),
+            permissions: permissions.map(|bits| bits & 0o7777),
+            atime: seconds,
+            mtime: seconds,
             ..Default::default()
         };
         Ok(self.session.set_metadata(path, metadata).await?)
@@ -133,7 +145,7 @@ impl Sftp {
         if self.lstat(path).await?.kind == EntryKind::Symlink {
             return Ok(());
         }
-        self.set_permissions(path, mode).await?;
+        self.set_stat(path, Some(mode), None).await?;
         let mut pending = vec![path.to_owned()];
         while let Some(dir) = pending.pop() {
             for entry in self.list(&dir).await? {
@@ -151,10 +163,10 @@ impl Sftp {
                 match entry.stat.kind {
                     EntryKind::Symlink => {}
                     EntryKind::Dir => {
-                        self.set_permissions(&child, mode).await?;
+                        self.set_stat(&child, Some(mode), None).await?;
                         pending.push(child);
                     }
-                    _ => self.set_permissions(&child, mode).await?,
+                    _ => self.set_stat(&child, Some(mode), None).await?,
                 }
             }
         }

@@ -5,7 +5,7 @@ import { BackupSync } from "@/components/app/BackupSync";
 import { KnownHosts } from "@/components/app/KnownHosts";
 import { SyncSettings } from "@/components/app/SyncSettings";
 import { VaultSettings } from "@/components/app/VaultSettings";
-import { CircleAlert, CircleCheck, Eye, EyeOff, Minus, Plus, RotateCw, Trash2 } from "lucide-react";
+import { CircleAlert, CircleCheck, Download, Eye, EyeOff, Minus, Plus, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,8 +19,13 @@ import {
   telemetryDeletePending,
   telemetryPending,
   telemetryStatus,
+  updateCheck,
+  updateOpen,
+  updateSetAuto,
+  updateStatus,
   type SshStatus,
 } from "@/lib/backend";
+import { NO_UPDATES, updateState, type UpdateStatus } from "@/lib/update";
 import { completionPrefs, onCompletionPrefs, updateCompletionPrefs } from "@/lib/completion/prefs";
 import { t } from "@/lib/i18n";
 import type { LocaleSetting, ThemeSetting } from "@/lib/prefsMirror";
@@ -94,6 +99,10 @@ export function SettingsPanel({
           </SettingsRow>
         </SettingsGroup>
 
+        <SettingsGroup title={t.updatesTitle}>
+          <UpdatesSection version={version} />
+        </SettingsGroup>
+
         <SettingsGroup title={t.terminal}>
           <SettingsRow label={t.fontSize}>
             <div className="flex items-center gap-1">
@@ -127,6 +136,49 @@ export function SettingsPanel({
                 </option>
               ))}
             </Select>
+          </SettingsRow>
+          <SettingsRow
+            label={t.rightClick}
+            hint={current.terminalRightClick === "paste" ? t.rightClickPasteHint : undefined}
+          >
+            <Segmented
+              size="sm"
+              value={current.terminalRightClick}
+              onChange={(terminalRightClick) => update({ terminalRightClick })}
+              label={t.rightClick}
+              options={[
+                { value: "menu", label: t.rightClickMenu },
+                { value: "paste", label: t.rightClickPaste },
+              ]}
+            />
+          </SettingsRow>
+          <SettingsRow label={t.copyOnSelect}>
+            <Switch
+              on={current.terminalCopyOnSelect}
+              label={t.copyOnSelect}
+              onClick={() => update({ terminalCopyOnSelect: !current.terminalCopyOnSelect })}
+            />
+          </SettingsRow>
+          <SettingsRow label={t.warnMultilinePaste} hint={t.warnMultilinePasteHint}>
+            <Switch
+              on={current.terminalWarnMultilinePaste}
+              label={t.warnMultilinePaste}
+              onClick={() => update({ terminalWarnMultilinePaste: !current.terminalWarnMultilinePaste })}
+            />
+          </SettingsRow>
+          <SettingsRow label={t.osc52} hint={t.osc52Hint}>
+            <Switch
+              on={current.terminalOsc52}
+              label={t.osc52}
+              onClick={() => update({ terminalOsc52: !current.terminalOsc52 })}
+            />
+          </SettingsRow>
+          <SettingsRow label={t.autoReconnect} hint={t.autoReconnectHint}>
+            <Switch
+              on={current.terminalAutoReconnect}
+              label={t.autoReconnect}
+              onClick={() => update({ terminalAutoReconnect: !current.terminalAutoReconnect })}
+            />
           </SettingsRow>
           {isMac && (
             <SettingsRow label={t.optionAsMeta} hint={t.optionAsMetaHint}>
@@ -299,6 +351,86 @@ function Stepper({
     <Button variant="secondary" size="icon-sm" aria-label={label} disabled={disabled} onClick={onClick}>
       {children}
     </Button>
+  );
+}
+
+/** Check and notify: the backend verifies the signed feed; "Download" opens
+ *  the release in the browser. Nothing is installed from here. */
+function UpdatesSection({ version }: { version: string }) {
+  const [status, setStatus] = useState<UpdateStatus>(NO_UPDATES);
+  const [loaded, setLoaded] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  useEffect(() => {
+    updateStatus()
+      .then(setStatus)
+      .catch(console.error)
+      .finally(() => setLoaded(true));
+  }, []);
+
+  const checkNow = () => {
+    setChecking(true);
+    setFailure(null);
+    updateCheck()
+      .then(setStatus)
+      .catch((reason) => setFailure(String(reason)))
+      .finally(() => setChecking(false));
+  };
+
+  const toggle = () => {
+    updateSetAuto(!status.autoCheck).then(setStatus).catch((reason) => setFailure(String(reason)));
+  };
+
+  if (!loaded) return null;
+  const state = updateState(status);
+  const checkedAt = status.lastChecked ? new Date(status.lastChecked * 1000).toLocaleString() : t.never;
+  const found = status.update;
+
+  return (
+    <>
+      <SettingsRow
+        label={`${t.version} ${version}`}
+        hint={
+          state === "unavailable"
+            ? undefined
+            : `${state === "current" ? `${t.updatesUpToDate} · ` : ""}${t.updatesLastChecked} ${checkedAt}`
+        }
+      >
+        {state !== "unavailable" && (
+          <Button variant="secondary" size="sm" onClick={checkNow} disabled={checking}>
+            <RotateCw />
+            {checking ? t.updatesChecking : t.updatesCheckNow}
+          </Button>
+        )}
+      </SettingsRow>
+      {state === "unavailable" ? (
+        <p className="px-4 py-2 text-callout text-label-2">{t.updatesUnavailable}</p>
+      ) : (
+        <SettingsRow label={t.updatesAuto} hint={t.updatesAutoHint}>
+          <Switch on={status.autoCheck} label={t.updatesAuto} onClick={toggle} />
+        </SettingsRow>
+      )}
+      {failure && (
+        <p className="px-4 py-2 text-callout text-danger">
+          {t.updatesFailed}: {failure}
+        </p>
+      )}
+      {found && (
+        <div className="space-y-2 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <p className="min-w-0 flex-1 truncate text-body text-label-1">
+              {t.updatesAvailable} · {found.version}
+            </p>
+            <Button variant="primary" size="sm" onClick={() => updateOpen().catch((reason) => setFailure(String(reason)))}>
+              <Download />
+              {t.download}
+            </Button>
+          </div>
+          {found.notes && <p className="selectable whitespace-pre-wrap text-callout text-label-2">{found.notes}</p>}
+        </div>
+      )}
+    </>
   );
 }
 

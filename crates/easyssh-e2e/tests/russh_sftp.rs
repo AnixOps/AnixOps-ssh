@@ -197,7 +197,7 @@ async fn chmod_one_entry_and_a_whole_folder() {
         let deep = format!("{inner}/b.txt");
         sftp.write_file(&deep, b"y").await.expect("write deep");
 
-        sftp.set_permissions(&file, 0o600).await.expect("chmod one");
+        sftp.set_stat(&file, Some(0o600), None).await.expect("chmod one");
         assert_eq!(sftp.stat(&file).await.unwrap().permissions, Some(0o600));
         // The folder itself is not touched.
         assert_ne!(sftp.stat(&dir).await.unwrap().permissions, Some(0o600));

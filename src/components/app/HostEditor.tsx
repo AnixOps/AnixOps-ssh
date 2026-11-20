@@ -1,6 +1,7 @@
 import { FileUp, RefreshCw, Star, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { HostHistory, HostVault } from "@/components/app/HostSync";
+import { ProxySection } from "@/components/app/ProxySection";
 import { SecretField } from "@/components/app/SecretField";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
@@ -35,6 +36,7 @@ import { logHostSet, logSettingsGet } from "@/lib/aiBackend";
 import { t } from "@/lib/i18n";
 import { choiceValue, hostChoice, type HostChoice } from "@/lib/sessionLogs";
 import { BAUD_RATES, defaultSerial, serialReady } from "@/lib/serialUi";
+import { cleanProxy, proxyReady } from "@/lib/proxyUi";
 import { requestVaultUnlock } from "@/lib/vaultUi";
 import { cn } from "@/lib/utils";
 
@@ -46,7 +48,7 @@ type SecretName = keyof SecretsStatus;
 /** What the user did to one saved secret: typed a new value, or marked it for removal. */
 type Draft = { value: string; cleared: boolean };
 const emptyDraft: Draft = { value: "", cleared: false };
-const noSecrets: SecretsStatus = { password: false, privateKey: false, passphrase: false };
+const noSecrets: SecretsStatus = { password: false, privateKey: false, passphrase: false, proxyPassword: false };
 
 /** Create or edit a host. `host` is null for a new one; `serial` starts a
  *  new host as a serial port. */
@@ -85,6 +87,7 @@ export function HostEditor({
     password: emptyDraft,
     privateKey: emptyDraft,
     passphrase: emptyDraft,
+    proxyPassword: emptyDraft,
   });
   const [keyNote, setKeyNote] = useState<string | null>(null);
   const [logChoice, setLogChoice] = useState<HostChoice>("default");
@@ -127,16 +130,21 @@ export function HostEditor({
   /** What to send to the vault: untouched fields are left out so they stay as saved. */
   const secretChanges = (): SecretsInput => {
     const input: SecretsInput = {};
-    for (const name of ["password", "privateKey", "passphrase"] as const) {
+    for (const name of ["password", "privateKey", "passphrase", "proxyPassword"] as const) {
       const { value, cleared } = drafts[name];
       if (cleared) input[name] = "";
       else if (value !== "") input[name] = value;
     }
+    // A host without a proxy keeps no proxy password.
+    if (!proxyOn && savedSecrets.proxyPassword) input.proxyPassword = "";
+    else if (!proxyOn) delete input.proxyPassword;
     return input;
   };
 
   const set = <K extends keyof HostFields>(key: K, value: HostFields[K]) =>
     setFields((current) => ({ ...current, [key]: value }));
+  // A serial port has no network connection to proxy.
+  const proxyOn = !serialOn && Boolean(fields.proxy);
 
   const submit = async () => {
     setBusy(true);
@@ -150,10 +158,10 @@ export function HostEditor({
         favorite,
         color,
         fields: serialOn
-          ? { ...fields, alias: null, serial: { ...serial, port: serial.port.trim(), baud: Number(serial.baud) } }
+          ? { ...fields, alias: null, proxy: null, serial: { ...serial, port: serial.port.trim(), baud: Number(serial.baud) } }
           : byAlias
-            ? { ...fields, alias: fields.alias?.trim() || null, serial: null }
-            : { ...fields, alias: null, port: Number(fields.port) || 22, serial: null },
+            ? { ...fields, alias: fields.alias?.trim() || null, proxy: cleanProxy(fields.proxy), serial: null }
+            : { ...fields, alias: null, port: Number(fields.port) || 22, proxy: cleanProxy(fields.proxy), serial: null },
       });
       const changes = secretChanges();
       if (Object.keys(changes).length > 0) {
@@ -365,6 +373,21 @@ export function HostEditor({
           </div>
 
           {!serialOn && (
+            <ProxySection
+              proxy={fields.proxy ?? null}
+              onChange={(proxy) => set("proxy", proxy)}
+              openssh={fields.engine === "openssh"}
+              password={{
+                saved: savedSecrets.proxyPassword,
+                value: drafts.proxyPassword.value,
+                cleared: drafts.proxyPassword.cleared,
+                onValue: (value) => draft("proxyPassword", { value, cleared: false }),
+                onCleared: (cleared) => draft("proxyPassword", { cleared }),
+              }}
+            />
+          )}
+
+          {!serialOn && (
             <section aria-labelledby="host-editor-credentials" className="space-y-3 rounded-md bg-fill-1 p-3">
               <div>
                 <h3 id="host-editor-credentials" className="text-callout text-label-2">
@@ -460,7 +483,11 @@ export function HostEditor({
           <Button type="button" variant="secondary" onClick={onCancel}>
             {t.cancel}
           </Button>
-          <Button type="submit" variant="primary" disabled={busy || (serialOn && !serialReady(serial))}>
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={busy || (serialOn && !serialReady(serial)) || (!serialOn && !proxyReady(fields.proxy))}
+          >
             {t.save}
           </Button>
         </div>
