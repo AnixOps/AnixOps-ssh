@@ -83,7 +83,7 @@ describe("ShellIntegrationLineSource change notice", () => {
     const source = new ShellIntegrationLineSource();
     let count = 0;
     source.onChange(() => count++);
-    source.handle({ kind: "ready" });
+    source.handle({ kind: "ready", shell: "bash" });
     source.handle({ kind: "cwd", path: "/srv" });
     expect(count).toBe(2);
     expect(source.cwd()).toBe("/srv");
