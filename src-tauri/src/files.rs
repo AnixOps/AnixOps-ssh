@@ -7,24 +7,111 @@ use easyssh_core::sftp::{self, RemoteFile, RemoteFileKind, SftpSession};
 use easyssh_core::{OpenSsh, OpenSshError};
 use serde::Serialize;
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use tauri::{ipc::Channel, AppHandle, Manager, State};
 
 struct RunningTransfer {
-    child: Mutex<Child>,
+    /// None while the transfer waits in its host's queue.
+    child: Mutex<Option<Child>>,
     cancelled: AtomicBool,
+    gate: Arc<Gate>,
+}
+
+/// The transfer queue of one host for the OpenSSH backend: at most
+/// [`easyssh_core::transfer::concurrent_transfers`] `sftp` processes run,
+/// the others wait in the order they were started.
+struct Gate {
+    state: Mutex<GateState>,
+    changed: Condvar,
+    limit: usize,
+}
+
+#[derive(Default)]
+struct GateState {
+    running: usize,
+    next: u64,
+    waiting: VecDeque<u64>,
+}
+
+impl Gate {
+    fn new(limit: usize) -> Self {
+        Gate {
+            state: Mutex::default(),
+            changed: Condvar::new(),
+            limit,
+        }
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, GateState> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Takes a place in the queue.
+    fn join(&self) -> u64 {
+        let mut state = self.state();
+        state.next += 1;
+        let ticket = state.next;
+        state.waiting.push_back(ticket);
+        ticket
+    }
+
+    /// Runs now if it is `ticket`'s turn and there is room.
+    fn try_enter(&self, ticket: u64) -> bool {
+        let mut state = self.state();
+        if state.running < self.limit && state.waiting.front() == Some(&ticket) {
+            state.waiting.pop_front();
+            state.running += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Waits for the turn of `ticket`; false when `cancelled` came first.
+    fn wait(&self, ticket: u64, cancelled: &AtomicBool) -> bool {
+        let mut state = self.state();
+        loop {
+            if cancelled.load(Ordering::Relaxed) {
+                state.waiting.retain(|t| *t != ticket);
+                drop(state);
+                self.changed.notify_all();
+                return false;
+            }
+            if state.running < self.limit && state.waiting.front() == Some(&ticket) {
+                state.waiting.pop_front();
+                state.running += 1;
+                return true;
+            }
+            state = self
+                .changed
+                .wait_timeout(state, Duration::from_millis(250))
+                .unwrap_or_else(|p| p.into_inner())
+                .0;
+        }
+    }
+
+    fn leave(&self) {
+        let mut state = self.state();
+        state.running = state.running.saturating_sub(1);
+        drop(state);
+        self.changed.notify_all();
+    }
+
+    fn wake(&self) {
+        self.changed.notify_all();
+    }
 }
 
 /// Transfers the daemon runs (built-in engine): where their events go.
 #[derive(Default)]
 struct RemoteTransfers {
-    channels: HashMap<String, (Channel<TransferEvent>, String)>,
+    channels: HashMap<String, Channel<TransferEvent>>,
     /// Events that arrived before the transfer was registered.
     early: HashMap<String, Vec<TransferEvent>>,
 }
@@ -35,10 +122,19 @@ pub struct Files {
     transfers: Mutex<HashMap<String, Arc<RunningTransfer>>>,
     /// File sessions that live in the daemon.
     remote_sessions: Mutex<HashSet<String>>,
+    gates: Mutex<HashMap<String, Arc<Gate>>>,
     remote_transfers: Mutex<RemoteTransfers>,
 }
 
 impl Files {
+    fn gate(&self, host_id: &str) -> Arc<Gate> {
+        let mut gates = self.gates.lock().unwrap_or_else(|p| p.into_inner());
+        gates
+            .entry(host_id.to_owned())
+            .or_insert_with(|| Arc::new(Gate::new(easyssh_core::transfer::concurrent_transfers())))
+            .clone()
+    }
+
     fn is_remote(&self, id: &str) -> bool {
         self.remote_sessions
             .lock()
@@ -48,7 +144,10 @@ impl Files {
 }
 
 fn is_final(event: &TransferEvent) -> bool {
-    !matches!(event, TransferEvent::Progress { .. })
+    !matches!(
+        event,
+        TransferEvent::Progress { .. } | TransferEvent::Started
+    )
 }
 
 /// Delivers a daemon transfer event to the pane that started it.
@@ -57,11 +156,8 @@ pub fn remote_event(app: &AppHandle, transfer_id: &str, event: TransferEvent) {
     let Ok(mut transfers) = files.remote_transfers.lock() else {
         return;
     };
-    let target = transfers
-        .channels
-        .get(transfer_id)
-        .map(|(channel, sftp_id)| (channel.clone(), sftp_id.clone()));
-    let Some((channel, sftp_id)) = target else {
+    let target = transfers.channels.get(transfer_id).cloned();
+    let Some(channel) = target else {
         // The start reply has not been handled yet.
         transfers
             .early
@@ -73,19 +169,6 @@ pub fn remote_event(app: &AppHandle, transfer_id: &str, event: TransferEvent) {
     let _ = channel.send(event.clone());
     if is_final(&event) {
         transfers.channels.remove(transfer_id);
-        drop(transfers);
-        close_remote(app, &sftp_id);
-    }
-}
-
-/// The transfer's own file session is no longer needed.
-fn close_remote(app: &AppHandle, sftp_id: &str) {
-    let files = app.state::<Files>();
-    if let Ok(mut sessions) = files.remote_sessions.lock() {
-        sessions.remove(sftp_id);
-    }
-    if let Some(link) = app.state::<DaemonState>().link() {
-        let _ = link.post("sftp.close", json!({ "sftp_id": sftp_id }));
     }
 }
 
@@ -377,9 +460,16 @@ pub fn sftp_close(
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum TransferEvent {
-    Progress { bytes: u64, total: Option<u64> },
+    /// A queued transfer's turn has come.
+    Started,
+    Progress {
+        bytes: u64,
+        total: Option<u64>,
+    },
     Done,
-    Failed { message: String },
+    Failed {
+        message: String,
+    },
     Cancelled,
 }
 
@@ -389,6 +479,8 @@ pub struct StartedTransfer {
     id: String,
     local: String,
     remote: String,
+    /// Waits for others of the same host to finish first.
+    queued: bool,
 }
 
 /// Uploads `local` into the remote directory `remote`, or downloads the
@@ -421,42 +513,30 @@ pub async fn transfer_start(
         (unique_download_path(&safe_file_name(name))?, remote)
     };
     if let Some(link) = daemon::russh_link(&daemon, &host_id).await {
-        // A file session of its own on the shared connection, closed when
-        // the transfer ends.
+        // Joins the host's transfer queue in the daemon: a few transfers run
+        // at once on shared file sessions, the rest wait their turn.
         match link
-            .request("sftp.open", json!({ "host_id": host_id }))
+            .request(
+                "transfer.enqueue",
+                json!({
+                    "host_id": host_id,
+                    "direction": if upload { "upload" } else { "download" },
+                    "local_path": local.to_string_lossy(),
+                    "remote_path": remote,
+                    "recursive": true,
+                }),
+            )
             .await
         {
-            Ok(opened) => {
-                let sftp_id = opened["sftp_id"].as_str().unwrap_or_default().to_owned();
-                let started = link
-                    .request(
-                        "transfer.start",
-                        json!({
-                            "sftp_id": sftp_id,
-                            "direction": if upload { "upload" } else { "download" },
-                            "local_path": local.to_string_lossy(),
-                            "remote_path": remote,
-                            "recursive": true,
-                        }),
-                    )
-                    .await;
-                let started = match started {
-                    Ok(started) => started,
-                    Err(error) => {
-                        let _ = link.post("sftp.close", json!({ "sftp_id": sftp_id }));
-                        return Err(error.message);
-                    }
-                };
+            Ok(started) => {
                 let id = started["transfer_id"]
                     .as_str()
                     .unwrap_or_default()
                     .to_owned();
+                let queued = started["queued"].as_bool().unwrap_or(false);
                 let early = {
                     let mut transfers = files.remote_transfers.lock().map_err(lock_error)?;
-                    transfers
-                        .channels
-                        .insert(id.clone(), (events.clone(), sftp_id.clone()));
+                    transfers.channels.insert(id.clone(), events.clone());
                     transfers.early.remove(&id).unwrap_or_default()
                 };
                 for event in early {
@@ -466,6 +546,7 @@ pub async fn transfer_start(
                     id,
                     local: local.to_string_lossy().into_owned(),
                     remote,
+                    queued,
                 });
             }
             Err(error) if daemon::use_openssh(&error) => {}
@@ -474,20 +555,26 @@ pub async fn transfer_start(
     }
     let connection = hosts::connection(&host_id)?;
     let env = askpass::env_for(&app, &connection.name, Some(&connection.id))?;
-    let mut child = sftp::spawn_transfer(&OpenSsh, &connection, upload, &local, &remote, &env)
-        .map_err(|error| error.to_string())?;
-    let stderr = child.stderr.take();
-    let errors = std::thread::spawn(move || {
-        let mut text = String::new();
-        if let Some(mut stderr) = stderr {
-            let _ = stderr.read_to_string(&mut text);
-        }
-        text
-    });
+    let gate = files.gate(&host_id);
     let id = next_id();
+    let ticket = gate.join();
+    // The first transfers start at once, the rest wait their turn: every
+    // `sftp` process is a session on the host (OpenSSH's `MaxSessions`).
+    let queued = !gate.try_enter(ticket);
+    let mut first = None;
+    if !queued {
+        match sftp::spawn_transfer(&OpenSsh, &connection, upload, &local, &remote, &env) {
+            Ok(child) => first = Some(child),
+            Err(error) => {
+                gate.leave();
+                return Err(error.to_string());
+            }
+        }
+    }
     let transfer = Arc::new(RunningTransfer {
-        child: Mutex::new(child),
+        child: Mutex::new(first),
         cancelled: AtomicBool::new(false),
+        gate: gate.clone(),
     });
     files
         .transfers
@@ -496,8 +583,59 @@ pub async fn transfer_start(
         .insert(id.clone(), transfer.clone());
 
     let local_path = local.clone();
+    let remote_path = remote.clone();
     std::thread::spawn(move || {
+        if queued {
+            if !gate.wait(ticket, &transfer.cancelled) {
+                // Cancelled in the queue: nothing was started.
+                let _ = events.send(TransferEvent::Cancelled);
+                return;
+            }
+            let _ = events.send(TransferEvent::Started);
+            match sftp::spawn_transfer(
+                &OpenSsh,
+                &connection,
+                upload,
+                &local_path,
+                &remote_path,
+                &env,
+            ) {
+                Ok(child) => {
+                    if let Ok(mut slot) = transfer.child.lock() {
+                        *slot = Some(child);
+                    }
+                    // A cancel that came in between had no process to kill.
+                    if transfer.cancelled.load(Ordering::Relaxed) {
+                        if let Ok(mut slot) = transfer.child.lock() {
+                            if let Some(child) = slot.as_mut() {
+                                let _ = child.kill();
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    gate.leave();
+                    let _ = events.send(TransferEvent::Failed {
+                        message: error.to_string(),
+                    });
+                    return;
+                }
+            }
+        }
+        let errors = transfer
+            .child
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.as_mut().and_then(|child| child.stderr.take()))
+            .map(|mut stderr| {
+                std::thread::spawn(move || {
+                    let mut text = String::new();
+                    let _ = stderr.read_to_string(&mut text);
+                    text
+                })
+            });
         let event = watch(&transfer, &local_path, upload, &events);
+        gate.leave();
         let event = match event {
             Ok(()) => TransferEvent::Done,
             Err(_) if transfer.cancelled.load(Ordering::Relaxed) => {
@@ -507,7 +645,9 @@ pub async fn transfer_start(
                 TransferEvent::Cancelled
             }
             Err(message) => {
-                let detail = errors.join().unwrap_or_default();
+                let detail = errors
+                    .and_then(|reader| reader.join().ok())
+                    .unwrap_or_default();
                 let detail = detail.trim();
                 TransferEvent::Failed {
                     message: if detail.is_empty() {
@@ -525,6 +665,7 @@ pub async fn transfer_start(
         id,
         local: local.to_string_lossy().into_owned(),
         remote,
+        queued,
     })
 }
 
@@ -537,12 +678,10 @@ fn watch(
 ) -> Result<(), String> {
     let mut reported = None;
     loop {
-        let status = transfer
-            .child
-            .lock()
-            .map_err(lock_error)?
-            .try_wait()
-            .map_err(|error| error.to_string())?;
+        let status = match transfer.child.lock().map_err(lock_error)?.as_mut() {
+            Some(child) => child.try_wait().map_err(|error| error.to_string())?,
+            None => return Err("the transfer has no process".to_owned()),
+        };
         if let Some(status) = status {
             return if status.success() {
                 Ok(())
@@ -584,7 +723,11 @@ pub fn transfer_cancel(
     let transfer = files.transfers.lock().map_err(lock_error)?.remove(&id);
     if let Some(transfer) = transfer {
         transfer.cancelled.store(true, Ordering::Relaxed);
-        let _ = transfer.child.lock().map_err(lock_error)?.kill();
+        if let Some(child) = transfer.child.lock().map_err(lock_error)?.as_mut() {
+            let _ = child.kill();
+        }
+        // A transfer in the queue notices at once.
+        transfer.gate.wake();
     }
     Ok(())
 }

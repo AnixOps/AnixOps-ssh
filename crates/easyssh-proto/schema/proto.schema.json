@@ -3679,6 +3679,50 @@
       ],
       "additionalProperties": false
     },
+    "TransferEnqueueParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/TransferDirection"
+        },
+        "local_path": {
+          "type": "string"
+        },
+        "remote_path": {
+          "type": "string"
+        },
+        "recursive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "host_id",
+        "direction",
+        "local_path",
+        "remote_path"
+      ],
+      "additionalProperties": false,
+      "description": "Command `transfer.enqueue` payload (russh engine): like `transfer.start`, but on the host's transfer queue instead of a file session of its own. At most a few transfers per host run at once, the others wait (`queued` in the reply) and report `transfer.started` when their turn comes. Reply: TransferEnqueueResult."
+    },
+    "TransferEnqueueResult": {
+      "type": "object",
+      "properties": {
+        "transfer_id": {
+          "type": "string"
+        },
+        "queued": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "transfer_id",
+        "queued"
+      ],
+      "additionalProperties": false
+    },
     "TransferCancelParams": {
       "type": "object",
       "properties": {
@@ -3714,6 +3758,19 @@
       ],
       "additionalProperties": false,
       "description": "Event `transfer.progress` payload: bytes moved so far, and the total when known."
+    },
+    "TransferStartedEvent": {
+      "type": "object",
+      "properties": {
+        "transfer_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "transfer_id"
+      ],
+      "additionalProperties": false,
+      "description": "Event `transfer.started` payload: a queued transfer left the queue and runs."
     },
     "TransferDoneEvent": {
       "type": "object",
