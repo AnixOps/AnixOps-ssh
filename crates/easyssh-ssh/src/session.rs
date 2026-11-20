@@ -90,6 +90,27 @@ impl client::Handler for ClientHandler {
         }
         Ok(())
     }
+
+    async fn server_channel_open_forwarded_streamlocal(
+        &mut self,
+        channel: Channel<Msg>,
+        socket_path: &str,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> std::result::Result<(), Error> {
+        tracing::debug!("forwarded-streamlocal {socket_path}");
+        match self.forwards.get_socket(socket_path) {
+            Some(target) => {
+                tokio::spawn(target.serve(channel, reply));
+            }
+            None => {
+                reply
+                    .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                    .await
+            }
+        }
+        Ok(())
+    }
 }
 
 fn details(
@@ -401,6 +422,46 @@ impl Session {
         tokio::time::timeout(CHANNEL_OPEN_TIMEOUT, open)
             .await
             .unwrap_or(Err(russh::Error::ConnectionTimeout))
+    }
+
+    pub(crate) async fn open_direct_streamlocal(
+        &self,
+        socket: &str,
+    ) -> std::result::Result<Channel<Msg>, russh::Error> {
+        let open = self
+            .inner
+            .handle
+            .channel_open_direct_streamlocal(socket.to_owned());
+        tokio::time::timeout(CHANNEL_OPEN_TIMEOUT, open)
+            .await
+            .unwrap_or(Err(russh::Error::ConnectionTimeout))
+    }
+
+    pub(crate) async fn request_remote_socket_forward(&self, socket: &str) -> Result<()> {
+        match self
+            .inner
+            .handle
+            .streamlocal_forward(socket.to_owned())
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(russh::Error::RequestDenied) => Err(Error::Forward(format!(
+                "the server refused to listen on {socket} (is AllowStreamLocalForwarding off?)"
+            ))),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub(crate) async fn cancel_remote_socket_forward(&self, socket: &str) -> Result<()> {
+        match self
+            .inner
+            .handle
+            .cancel_streamlocal_forward(socket.to_owned())
+            .await
+        {
+            Ok(()) | Err(russh::Error::RequestDenied) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub(crate) async fn request_remote_forward(&self, bind: &str, port: u16) -> Result<u32> {

@@ -43,6 +43,24 @@ pub fn bare_host(value: &str) -> &str {
         .unwrap_or(value)
 }
 
+/// Whether a bind address or target host names a Unix domain socket (an
+/// absolute path) instead of a host: `-L /tmp/db.sock:/run/db.sock`.
+pub fn is_socket_path(value: &str) -> bool {
+    value.trim().starts_with('/')
+}
+
+fn socket_path(value: &str) -> Result<String, OpenSshError> {
+    let value = value.trim();
+    // `:` separates the parts of the spec, and OpenSSH has no escape for it.
+    if value.contains(':') || value.chars().any(char::is_control) {
+        return Err(ValidationError::Unsafe {
+            field: "socket path",
+        }
+        .into());
+    }
+    Ok(value.to_owned())
+}
+
 fn address(value: &str) -> Result<String, OpenSshError> {
     let value = bare_host(value);
     validate_host(value)?;
@@ -65,12 +83,27 @@ impl Tunnel {
     /// The argument for `-L`, `-R` or `-D`, after validating every part.
     pub fn forward_spec(&self) -> Result<String, OpenSshError> {
         let mut spec = String::new();
-        if let Some(bind) = self.bind_address.as_deref().filter(|bind| !bind.is_empty()) {
-            spec.push_str(&address(bind)?);
-            spec.push(':');
+        let bind = self.bind_address.as_deref().filter(|bind| !bind.is_empty());
+        match bind {
+            // A socket path replaces the address and the port.
+            Some(path) if is_socket_path(path) => {
+                if self.kind == TunnelKind::Dynamic {
+                    return Err(ValidationError::Unsafe {
+                        field: "socket path",
+                    }
+                    .into());
+                }
+                spec.push_str(&socket_path(path)?);
+            }
+            _ => {
+                if let Some(bind) = bind {
+                    spec.push_str(&address(bind)?);
+                    spec.push(':');
+                }
+                // Port 0: any free port (the server picks one for a remote forward).
+                spec.push_str(&self.bind_port.to_string());
+            }
         }
-        // Port 0: any free port (the server picks one for a remote forward).
-        spec.push_str(&self.bind_port.to_string());
         if self.kind != TunnelKind::Dynamic {
             let host = self
                 .target_host
@@ -79,6 +112,11 @@ impl Tunnel {
                 .ok_or(ValidationError::Required {
                     field: "target host",
                 })?;
+            if is_socket_path(host) {
+                spec.push(':');
+                spec.push_str(&socket_path(host)?);
+                return Ok(spec);
+            }
             let target_port = port(self.target_port, "target port")?;
             spec.push_str(&format!(":{}:{target_port}", address(host)?));
         }
@@ -189,6 +227,36 @@ mod tests {
         let mut zero = tunnel(TunnelKind::Local);
         zero.target_port = Some(0);
         assert!(zero.forward_spec().is_err());
+    }
+
+    #[test]
+    fn unix_sockets_replace_the_port() {
+        let mut local = tunnel(TunnelKind::Local);
+        local.bind_address = Some("/tmp/db.sock".into());
+        local.bind_port = 0;
+        local.target_host = Some("/run/postgres/.s.PGSQL.5432".into());
+        local.target_port = None;
+        assert_eq!(
+            local.forward_spec().unwrap(),
+            "/tmp/db.sock:/run/postgres/.s.PGSQL.5432"
+        );
+        // A socket on one side only.
+        local.target_host = Some("db.internal".into());
+        local.target_port = Some(5432);
+        assert_eq!(
+            local.forward_spec().unwrap(),
+            "/tmp/db.sock:db.internal:5432"
+        );
+        let mut to_socket = tunnel(TunnelKind::Remote);
+        to_socket.target_host = Some("/tmp/app.sock".into());
+        to_socket.target_port = None;
+        assert_eq!(to_socket.forward_spec().unwrap(), "15432:/tmp/app.sock");
+        // Not for SOCKS, and no ':' in a path.
+        let mut socks = tunnel(TunnelKind::Dynamic);
+        socks.bind_address = Some("/tmp/socks".into());
+        assert!(socks.forward_spec().is_err());
+        to_socket.target_host = Some("/tmp/a:b".into());
+        assert!(to_socket.forward_spec().is_err());
     }
 
     #[test]

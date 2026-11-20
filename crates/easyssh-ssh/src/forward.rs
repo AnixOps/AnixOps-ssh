@@ -7,6 +7,7 @@ use russh::client::{ChannelOpenHandle, Msg};
 use russh::{Channel, ChannelOpenFailure};
 use std::collections::HashMap;
 use std::net::{Ipv6Addr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -28,6 +29,10 @@ pub struct Forward {
     kind: ForwardKind,
     local_addr: Option<SocketAddr>,
     remote: Option<(Session, String, u32)>,
+    /// A remote forward of a Unix socket on the server (`-R /path:...`).
+    remote_socket: Option<(Session, String)>,
+    /// The socket file a local forward listens on, removed when it stops.
+    local_socket: Option<PathBuf>,
     stop: watch::Sender<bool>,
     task: Option<JoinHandle<()>>,
 }
@@ -47,6 +52,11 @@ impl Forward {
         self.remote.as_ref().map(|(_, _, port)| *port)
     }
 
+    /// The path a local forward listens on when it is a Unix socket.
+    pub fn local_socket(&self) -> Option<&std::path::Path> {
+        self.local_socket.as_deref()
+    }
+
     /// Stops listening, closes the connections going through the forward
     /// and returns once the listener is gone.
     pub async fn stop(mut self) -> Result<()> {
@@ -58,6 +68,13 @@ impl Forward {
             session.remote_forwards().remove(&bind, port);
             session.cancel_remote_forward(&bind, port).await?;
         }
+        if let Some((session, path)) = self.remote_socket.take() {
+            session.remote_forwards().remove_socket(&path);
+            session.cancel_remote_socket_forward(&path).await?;
+        }
+        if let Some(path) = self.local_socket.take() {
+            let _ = std::fs::remove_file(path);
+        }
         Ok(())
     }
 }
@@ -65,7 +82,21 @@ impl Forward {
 impl Drop for Forward {
     fn drop(&mut self) {
         let _ = self.stop.send(true);
+        if let Some(path) = self.local_socket.take() {
+            let _ = std::fs::remove_file(path);
+        }
     }
+}
+
+/// Where a forwarded connection ends up as seen from the server (`-L`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Dest {
+    Tcp {
+        host: String,
+        port: u16,
+    },
+    /// A Unix domain socket path on the server (`direct-streamlocal`).
+    Socket(String),
 }
 
 async fn stopped(stop: &mut watch::Receiver<bool>) {
@@ -89,11 +120,32 @@ where
 pub(crate) struct RemoteTarget {
     host: String,
     port: u16,
+    /// A Unix socket on this machine instead of `host:port`.
+    unix: Option<PathBuf>,
     stop: watch::Receiver<bool>,
 }
 
 impl RemoteTarget {
     pub(crate) async fn serve(self, channel: Channel<Msg>, reply: ChannelOpenHandle) {
+        if let Some(path) = &self.unix {
+            #[cfg(unix)]
+            {
+                let connect = tokio::net::UnixStream::connect(path);
+                match tokio::time::timeout(Duration::from_secs(10), connect).await {
+                    Ok(Ok(stream)) => {
+                        reply.accept().await;
+                        bridge(stream, channel.into_stream(), self.stop).await;
+                    }
+                    _ => reply.reject(ChannelOpenFailure::ConnectFailed).await,
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = path;
+                reply.reject(ChannelOpenFailure::ConnectFailed).await;
+            }
+            return;
+        }
         let connect = TcpStream::connect((self.host.as_str(), self.port));
         match tokio::time::timeout(Duration::from_secs(10), connect).await {
             Ok(Ok(tcp)) => {
@@ -111,6 +163,7 @@ impl RemoteTarget {
 #[derive(Default)]
 pub(crate) struct RemoteForwards {
     targets: Mutex<HashMap<(String, u32), RemoteTarget>>,
+    sockets: Mutex<HashMap<String, RemoteTarget>>,
 }
 
 impl RemoteForwards {
@@ -131,6 +184,21 @@ impl RemoteForwards {
             (Some((_, target)), None) => Some(target.clone()),
             _ => None,
         }
+    }
+
+    pub(crate) fn get_socket(&self, path: &str) -> Option<RemoteTarget> {
+        let sockets = self.sockets.lock().unwrap_or_else(|p| p.into_inner());
+        sockets.get(path).cloned()
+    }
+
+    fn insert_socket(&self, path: &str, target: RemoteTarget) {
+        let mut sockets = self.sockets.lock().unwrap_or_else(|p| p.into_inner());
+        sockets.insert(path.to_owned(), target);
+    }
+
+    pub(crate) fn remove_socket(&self, path: &str) {
+        let mut sockets = self.sockets.lock().unwrap_or_else(|p| p.into_inner());
+        sockets.remove(path);
     }
 
     fn insert(&self, address: &str, port: u32, target: RemoteTarget) {
@@ -175,8 +243,165 @@ impl Session {
             kind: ForwardKind::Local,
             local_addr,
             remote: None,
+            remote_socket: None,
+            local_socket: None,
             stop: stop_tx,
             task: Some(task),
+        })
+    }
+
+    /// `-L` with a Unix socket on either side: listens on `bind_socket`
+    /// (a path here) when given, else on `bind_host:bind_port`, and forwards
+    /// each connection to `dest` as seen from the server.
+    pub async fn forward_local_to(
+        &self,
+        bind_socket: Option<&str>,
+        bind_host: &str,
+        bind_port: u16,
+        dest: Dest,
+    ) -> Result<Forward> {
+        let Some(path) = bind_socket else {
+            return match dest {
+                Dest::Tcp { host, port } => {
+                    self.forward_local(bind_host, bind_port, &host, port).await
+                }
+                Dest::Socket(socket) => {
+                    let listeners = listen(bind_host, bind_port).await?;
+                    let local_addr = listeners[0].local_addr().ok();
+                    let (stop_tx, stop_rx) = watch::channel(false);
+                    let session = self.clone();
+                    let task = tokio::spawn(accept_all(listeners, stop_rx, move |tcp, _, stop| {
+                        let session = session.clone();
+                        let socket = socket.clone();
+                        async move { serve_socket(session, tcp, &socket, stop).await }
+                    }));
+                    Ok(Forward {
+                        kind: ForwardKind::Local,
+                        local_addr,
+                        remote: None,
+                        remote_socket: None,
+                        local_socket: None,
+                        stop: stop_tx,
+                        task: Some(task),
+                    })
+                }
+            };
+        };
+        #[cfg(unix)]
+        {
+            let listener = bind_unix(path)?;
+            let (stop_tx, mut stop) = watch::channel(false);
+            let session = self.clone();
+            let task = tokio::spawn(async move {
+                let stop_rx = stop.clone();
+                loop {
+                    tokio::select! {
+                        _ = stopped(&mut stop) => break,
+                        accepted = listener.accept() => match accepted {
+                            Ok((stream, _)) => {
+                                let session = session.clone();
+                                let dest = dest.clone();
+                                let stop = stop_rx.clone();
+                                tokio::spawn(async move {
+                                    serve_dest(session, stream, &dest, stop).await
+                                });
+                            }
+                            Err(e) => {
+                                tracing::debug!("accept failed: {e}");
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                            }
+                        },
+                    }
+                }
+            });
+            Ok(Forward {
+                kind: ForwardKind::Local,
+                local_addr: None,
+                remote: None,
+                remote_socket: None,
+                local_socket: Some(PathBuf::from(path)),
+                stop: stop_tx,
+                task: Some(task),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (path, dest);
+            Err(Error::Unsupported(
+                "listening on a Unix socket needs OpenSSH on this platform".into(),
+            ))
+        }
+    }
+
+    /// `-R` with a Unix socket on either side: the server listens on
+    /// `bind_socket` (a path there) when given, else on `bind_host:bind_port`,
+    /// and each connection goes to `local_socket` (a path here) when given,
+    /// else to `target_host:target_port`.
+    pub async fn forward_remote_to(
+        &self,
+        bind_socket: Option<&str>,
+        bind_host: &str,
+        bind_port: u16,
+        target_host: &str,
+        target_port: u16,
+        local_socket: Option<&str>,
+    ) -> Result<Forward> {
+        if bind_socket.is_none() && local_socket.is_none() {
+            return self
+                .forward_remote(bind_host, bind_port, target_host, target_port)
+                .await;
+        }
+        #[cfg(not(unix))]
+        if local_socket.is_some() {
+            return Err(Error::Unsupported(
+                "connecting to a Unix socket needs OpenSSH on this platform".into(),
+            ));
+        }
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let target = RemoteTarget {
+            host: target_host.to_owned(),
+            port: target_port,
+            unix: local_socket.map(PathBuf::from),
+            stop: stop_rx,
+        };
+        let table = self.remote_forwards();
+        if let Some(path) = bind_socket {
+            table.insert_socket(path, target);
+            if let Err(e) = self.request_remote_socket_forward(path).await {
+                table.remove_socket(path);
+                return Err(e);
+            }
+            return Ok(Forward {
+                kind: ForwardKind::Remote,
+                local_addr: None,
+                remote: None,
+                remote_socket: Some((self.clone(), path.to_owned())),
+                local_socket: None,
+                stop: stop_tx,
+                task: None,
+            });
+        }
+        if bind_port != 0 {
+            table.insert(bind_host, u32::from(bind_port), target.clone());
+        }
+        let port = match self.request_remote_forward(bind_host, bind_port).await {
+            Ok(port) => port,
+            Err(e) => {
+                table.remove(bind_host, u32::from(bind_port));
+                return Err(e);
+            }
+        };
+        if bind_port == 0 {
+            table.insert(bind_host, port, target);
+        }
+        Ok(Forward {
+            kind: ForwardKind::Remote,
+            local_addr: None,
+            remote: Some((self.clone(), bind_host.to_owned(), port)),
+            remote_socket: None,
+            local_socket: None,
+            stop: stop_tx,
+            task: None,
         })
     }
 
@@ -238,6 +463,8 @@ impl Session {
             kind: ForwardKind::Dynamic,
             local_addr,
             remote: None,
+            remote_socket: None,
+            local_socket: None,
             stop: stop_tx,
             task: Some(task),
         })
@@ -257,6 +484,7 @@ impl Session {
         let target = RemoteTarget {
             host: target_host.to_owned(),
             port: target_port,
+            unix: None,
             stop: stop_rx,
         };
         let table = self.remote_forwards();
@@ -278,10 +506,61 @@ impl Session {
             kind: ForwardKind::Remote,
             local_addr: None,
             remote: Some((self.clone(), bind_host.to_owned(), port)),
+            remote_socket: None,
+            local_socket: None,
             stop: stop_tx,
             task: None,
         })
     }
+}
+
+/// Opens the channel for one accepted connection and copies both ways.
+#[cfg(unix)]
+async fn serve_dest<S>(session: Session, stream: S, dest: &Dest, stop: watch::Receiver<bool>)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    match dest {
+        Dest::Socket(socket) => serve_socket(session, stream, socket, stop).await,
+        Dest::Tcp { host, port } => {
+            let origin = SocketAddr::from(([127, 0, 0, 1], 0));
+            match session.open_direct_tcpip(host, *port, origin).await {
+                Ok(channel) => bridge(stream, channel.into_stream(), stop).await,
+                Err(e) => tracing::debug!("-L to {host}:{port} failed: {e}"),
+            }
+        }
+    }
+}
+
+async fn serve_socket<S>(session: Session, stream: S, socket: &str, stop: watch::Receiver<bool>)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    match session.open_direct_streamlocal(socket).await {
+        Ok(channel) => bridge(stream, channel.into_stream(), stop).await,
+        Err(e) => tracing::debug!("-L to {socket} failed: {e}"),
+    }
+}
+
+/// Binds a listening socket like OpenSSH: a stale socket file left by a
+/// crashed run is replaced, a live one is an error.
+#[cfg(unix)]
+fn bind_unix(path: &str) -> Result<tokio::net::UnixListener> {
+    use std::os::unix::fs::FileTypeExt;
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        if meta.file_type().is_socket() {
+            if std::os::unix::net::UnixStream::connect(path).is_ok() {
+                return Err(Error::Forward(format!("{path} is already in use")));
+            }
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    let listener = tokio::net::UnixListener::bind(path)
+        .map_err(|e| Error::Forward(format!("cannot listen on {path}: {e}")))?;
+    // Like OpenSSH (umask 077 for its sockets): only the owner connects.
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    Ok(listener)
 }
 
 /// What to listen on for `host`: like OpenSSH, `localhost` is 127.0.0.1
@@ -372,6 +651,7 @@ mod tests {
         RemoteTarget {
             host: host.into(),
             port: 1,
+            unix: None,
             stop: watch::channel(false).1,
         }
     }

@@ -29,4 +29,10 @@ describe("describeTunnel", () => {
     expect(describeTunnel({ ...local, bindAddress: "::1", targetHost: "fd00::5" })).toBe("[::1]:15432 → [fd00::5]:5432");
     expect(describeTunnel({ ...local, bindAddress: "[::1]" })).toBe("[::1]:15432 → db.internal:5432");
   });
+
+  it("shows Unix sockets as paths without ports", () => {
+    expect(
+      describeTunnel({ ...local, bindAddress: "/tmp/db.sock", bindPort: 0, targetHost: "/run/pg.sock", targetPort: null }),
+    ).toBe("/tmp/db.sock → /run/pg.sock");
+  });
 });

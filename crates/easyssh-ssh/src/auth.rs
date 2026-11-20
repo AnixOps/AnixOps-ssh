@@ -261,20 +261,82 @@ async fn connect_agent(
             .map_err(|e| e.to_string()),
         #[cfg(windows)]
         AgentSource::Environment => {
-            let pipe = std::env::var_os("SSH_AUTH_SOCK")
-                .unwrap_or_else(|| r"\\.\pipe\openssh-ssh-agent".into());
-            AgentClient::connect_named_pipe(pipe)
-                .await
-                .map(AgentClient::dynamic)
-                .map_err(|e| e.to_string())
+            let configured = std::env::var_os("SSH_AUTH_SOCK");
+            let candidates = windows_agent_candidates(configured.as_deref());
+            let mut last = String::from("no agent found");
+            for candidate in candidates {
+                match connect_windows_agent(&candidate).await {
+                    Ok(client) => return Ok(client),
+                    Err(error) => last = error,
+                }
+            }
+            Err(last)
         }
         #[cfg(windows)]
-        AgentSource::Path(path) => AgentClient::connect_named_pipe(path)
+        AgentSource::Path(path) => {
+            connect_windows_agent(&WindowsAgent::from_name(path.as_os_str())).await
+        }
+        #[cfg(not(any(unix, windows)))]
+        _ => Err("agents are not supported on this platform".into()),
+    }
+}
+
+/// An agent on Windows: a named pipe (OpenSSH's, 1Password's...) or PuTTY's
+/// Pageant.
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WindowsAgent {
+    Pipe(std::ffi::OsString),
+    Pageant,
+}
+
+/// The OpenSSH for Windows agent's pipe.
+#[cfg(any(windows, test))]
+pub(crate) const OPENSSH_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
+
+#[cfg(any(windows, test))]
+impl WindowsAgent {
+    /// `pageant` (any case) names Pageant; anything else is a pipe name.
+    pub(crate) fn from_name(name: &std::ffi::OsStr) -> Self {
+        if name
+            .to_string_lossy()
+            .trim()
+            .eq_ignore_ascii_case("pageant")
+        {
+            WindowsAgent::Pageant
+        } else {
+            WindowsAgent::Pipe(name.to_owned())
+        }
+    }
+}
+
+/// Where to look for an agent on Windows, in order: `SSH_AUTH_SOCK` when set
+/// (the user chose), else the OpenSSH pipe and then Pageant, so either agent
+/// works without configuration.
+#[cfg(any(windows, test))]
+pub(crate) fn windows_agent_candidates(configured: Option<&std::ffi::OsStr>) -> Vec<WindowsAgent> {
+    match configured.filter(|value| !value.is_empty()) {
+        Some(value) => vec![WindowsAgent::from_name(value)],
+        None => vec![
+            WindowsAgent::Pipe(OPENSSH_PIPE.into()),
+            WindowsAgent::Pageant,
+        ],
+    }
+}
+
+#[cfg(windows)]
+async fn connect_windows_agent(
+    agent: &WindowsAgent,
+) -> std::result::Result<AgentClient<Box<dyn AgentStream + Send + Unpin>>, String> {
+    match agent {
+        WindowsAgent::Pipe(pipe) => AgentClient::connect_named_pipe(pipe)
             .await
             .map(AgentClient::dynamic)
             .map_err(|e| e.to_string()),
-        #[cfg(not(any(unix, windows)))]
-        _ => Err("agents are not supported on this platform".into()),
+        WindowsAgent::Pageant => AgentClient::connect_pageant()
+            .await
+            .map(AgentClient::dynamic)
+            .map_err(|e| format!("Pageant: {e}")),
     }
 }
 
@@ -1237,5 +1299,37 @@ mod tests {
 
         let error = load_identity(&path, &DenyAll).await.unwrap_err();
         assert!(matches!(error, Error::Cancelled(_)), "{error:?}");
+    }
+}
+
+#[cfg(test)]
+mod windows_agent_tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn without_a_setting_the_openssh_pipe_comes_before_pageant() {
+        assert_eq!(
+            windows_agent_candidates(None),
+            vec![
+                WindowsAgent::Pipe(OPENSSH_PIPE.into()),
+                WindowsAgent::Pageant
+            ]
+        );
+        assert_eq!(windows_agent_candidates(Some(OsStr::new(""))).len(), 2);
+        assert_eq!(OPENSSH_PIPE, r"\\.\pipe\openssh-ssh-agent");
+    }
+
+    #[test]
+    fn a_configured_agent_is_the_only_candidate() {
+        assert_eq!(
+            windows_agent_candidates(Some(OsStr::new("Pageant"))),
+            vec![WindowsAgent::Pageant]
+        );
+        let pipe = r"\\.\pipe\agent";
+        assert_eq!(
+            windows_agent_candidates(Some(OsStr::new(pipe))),
+            vec![WindowsAgent::Pipe(pipe.into())]
+        );
     }
 }

@@ -4,7 +4,7 @@
 use crate::askpass;
 use crate::daemon::{self, DaemonState};
 use crate::hosts::{self, load_config, open_store};
-use easyssh_core::tunnel::{bare_host, spawn_tunnel};
+use easyssh_core::tunnel::{bare_host, is_socket_path, spawn_tunnel};
 use easyssh_core::{OpenSsh, Tunnel, TunnelKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -363,6 +363,9 @@ fn watch(
 /// count as running once `ssh` stayed up for a moment.
 fn probe_address(tunnel: &Tunnel) -> Option<SocketAddr> {
     if tunnel.kind == TunnelKind::Remote || tunnel.bind_port == 0 {
+        return None;
+    }
+    if tunnel.bind_address.as_deref().is_some_and(is_socket_path) {
         return None;
     }
     let host = match tunnel.bind_address.as_deref().map(bare_host) {

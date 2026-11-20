@@ -4,9 +4,9 @@
 
 use crate::events::Events;
 use crate::Lease;
-use easyssh_core::tunnel::bare_host;
+use easyssh_core::tunnel::{bare_host, is_socket_path};
 use easyssh_core::{Tunnel, TunnelKind};
-use easyssh_ssh::{Error as SshError, Forward};
+use easyssh_ssh::{Dest, Error as SshError, Forward};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -190,6 +190,15 @@ impl Tunnels {
         lease: Lease,
         broadcast: Events,
     ) -> Result<u16, SshError> {
+        let socket_of = |value: Option<&str>| {
+            value
+                .map(str::trim)
+                .filter(|v| is_socket_path(v))
+                .map(str::to_owned)
+        };
+        let bind_socket = socket_of(tunnel.bind_address.as_deref());
+        let target_socket = socket_of(tunnel.target_host.as_deref());
+        // The target as a host and port, unless it is a socket.
         let target = || -> Result<(&str, u16), SshError> {
             let host = tunnel
                 .target_host
@@ -197,6 +206,9 @@ impl Tunnels {
                 .map(bare_host)
                 .filter(|h| !h.is_empty())
                 .ok_or_else(|| SshError::Forward("the target host is required".into()))?;
+            if target_socket.is_some() {
+                return Ok((host, 0));
+            }
             let port = tunnel
                 .target_port
                 .filter(|p| *p > 0)
@@ -206,8 +218,20 @@ impl Tunnels {
         let forward = match tunnel.kind {
             TunnelKind::Local => {
                 let (host, port) = target()?;
+                let dest = match &target_socket {
+                    Some(path) => Dest::Socket(path.clone()),
+                    None => Dest::Tcp {
+                        host: host.to_owned(),
+                        port,
+                    },
+                };
                 lease
-                    .forward_local(bind_host(tunnel), tunnel.bind_port, host, port)
+                    .forward_local_to(
+                        bind_socket.as_deref(),
+                        bind_host(tunnel),
+                        tunnel.bind_port,
+                        dest,
+                    )
                     .await
             }
             TunnelKind::Remote => {
@@ -219,10 +243,22 @@ impl Tunnels {
                     .filter(|b| !b.is_empty())
                     .unwrap_or("localhost");
                 lease
-                    .forward_remote(bind, tunnel.bind_port, host, port)
+                    .forward_remote_to(
+                        bind_socket.as_deref(),
+                        bind,
+                        tunnel.bind_port,
+                        host,
+                        port,
+                        target_socket.as_deref(),
+                    )
                     .await
             }
             TunnelKind::Dynamic => {
+                if bind_socket.is_some() {
+                    return Err(SshError::Forward(
+                        "a SOCKS proxy cannot listen on a Unix socket".into(),
+                    ));
+                }
                 lease
                     .forward_dynamic(bind_host(tunnel), tunnel.bind_port)
                     .await

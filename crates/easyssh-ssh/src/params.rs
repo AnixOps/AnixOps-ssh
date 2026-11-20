@@ -13,11 +13,12 @@ pub enum AgentSource {
     /// Do not use an agent.
     Disabled,
     /// `SSH_AUTH_SOCK` on Unix; on Windows `SSH_AUTH_SOCK` if set, else the
-    /// OpenSSH named pipe `\\.\pipe\openssh-ssh-agent`.
+    /// OpenSSH named pipe `\\.\pipe\openssh-ssh-agent`, else PuTTY's
+    /// Pageant.
     #[default]
     Environment,
     /// A Unix socket path, or a Windows named pipe name (for example the
-    /// 1Password agent).
+    /// 1Password agent). On Windows the name `pageant` selects Pageant.
     Path(PathBuf),
 }
 

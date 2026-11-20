@@ -249,3 +249,79 @@ async fn all_three_forwards_run_on_one_connection() {
     remote.stop().await.expect("stop -R");
     local.stop().await.expect("stop -L");
 }
+
+/// Unix sockets on both sides: a local socket forwarded to a socket the
+/// server listens on, which is itself forwarded (`-R`) to a service here.
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn unix_sockets_forward_both_ways() {
+    use easyssh_ssh::Dest;
+    use tokio::net::UnixStream;
+
+    let e2e = E2e::new();
+    let session = connect(&e2e).await;
+    let dir = std::env::temp_dir().join(format!("easyssh-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let local_sock = dir.join("local.sock");
+    let remote_sock = format!("/tmp/easyssh-e2e-{}.sock", std::process::id());
+
+    // A service on this machine that answers each line with "unix-pong:<line>".
+    let service = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let service_port = service.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = service.accept().await {
+            tokio::spawn(async move {
+                let (read, mut write) = stream.into_split();
+                let mut lines = BufReader::new(read).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if write
+                        .write_all(format!("unix-pong:{line}\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+
+    // -R /tmp/...sock:127.0.0.1:service_port
+    let remote = within(
+        "remote socket forward",
+        session.forward_remote_to(Some(&remote_sock), "", 0, "127.0.0.1", service_port, None),
+    )
+    .await
+    .expect("remote socket forward");
+    // -L local.sock:remote.sock
+    let local = within(
+        "local socket forward",
+        session.forward_local_to(
+            Some(local_sock.to_str().unwrap()),
+            "",
+            0,
+            Dest::Socket(remote_sock.clone()),
+        ),
+    )
+    .await
+    .expect("local socket forward");
+    assert_eq!(local.local_socket(), Some(local_sock.as_path()));
+
+    let answer = within_for("socket round trip", UP, async {
+        let mut stream = UnixStream::connect(&local_sock).await.unwrap();
+        stream.write_all(b"ping\n").await.unwrap();
+        let mut line = String::new();
+        BufReader::new(&mut stream)
+            .read_line(&mut line)
+            .await
+            .unwrap();
+        line
+    })
+    .await;
+    assert_eq!(answer, "unix-pong:ping\n");
+
+    within("stop local", local.stop()).await.expect("stop");
+    assert!(!local_sock.exists(), "the socket file is removed");
+    within("stop remote", remote.stop()).await.expect("stop");
+    let _ = std::fs::remove_dir_all(&dir);
+}
