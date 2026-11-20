@@ -313,6 +313,23 @@ export function App() {
     [tabs, activeKey],
   );
 
+  // The tab menu's "close other tabs" and "close tabs to the right": `keep` stays open and active.
+  const closeTabs = useCallback(
+    (keys: string[], keep: string) => {
+      const closing = new Set(keys);
+      for (const tab of tabs) {
+        if (!closing.has(tab.key)) continue;
+        for (const pane of leaves(tab.panes.tree)) {
+          terminalFor(pane)?.close();
+          sessionIds.current.delete(pane);
+        }
+      }
+      setTabs(tabs.filter((tab) => !closing.has(tab.key)));
+      if (activeKey === null || closing.has(activeKey)) setActiveKey(keep);
+    },
+    [tabs, activeKey],
+  );
+
   // Stable so terminals do not restart their sessions when the app re-renders.
   const updateStatus = useCallback((paneId: string, status: SessionStatus) => {
     setTabs((current) =>
@@ -480,6 +497,7 @@ export function App() {
               activeKey={activeKey}
               onSelect={setActiveKey}
               onClose={closeTab}
+              onCloseMany={closeTabs}
               onNew={openLocal}
               serialHosts={serialHosts(snapshot.hosts)}
               onOpenHost={openHost}

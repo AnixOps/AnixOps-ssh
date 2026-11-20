@@ -943,6 +943,11 @@ function EntryRow({
       tabIndex={0}
       onClick={onSelect}
       onDoubleClick={onOpen}
+      data-context-row
+      // A right-click acts on the row under the pointer, as in a file manager.
+      onContextMenu={(event) => {
+        if (!selected) onSelect(event);
+      }}
       onKeyDown={(event) => {
         // Keyboard.md, lists: Enter opens, F2 renames, Delete removes after a confirmation.
         if (event.key === "Enter" && event.altKey) onProperties();
@@ -973,6 +978,7 @@ function EntryRow({
         </IconButton>
         <Menu
           label={t.more}
+          contextRow
           items={[
             ...(onEdit ? [{ key: "edit", label: t.openInEditor, icon: <SquarePen />, onSelect: onEdit }] : []),
             { key: "rename", label: t.rename, icon: <Pencil />, shortcut: shortcutHint("rename"), onSelect: onRename },

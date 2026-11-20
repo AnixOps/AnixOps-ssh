@@ -53,6 +53,12 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 uuid.workspace = true
 zeroize = "1"
 
+# Windows release builds turn off WebView2's own context menu and browser keys
+# (reload, print, find, zoom) in webview_chrome.rs; same versions as wry uses.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows-core = "0.62"
+
 # Android: the TLS verifier asks the system trust store through JNI.
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.22"

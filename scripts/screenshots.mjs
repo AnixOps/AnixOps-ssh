@@ -26,6 +26,11 @@ const scenes = [
   { name: "monitor", query: "", open: ["prod-web-01"], type: ["ls"], wait: 13000 },
   { name: "processes", query: "", open: ["prod-web-01"], wait: 4000, clicks: [{ name: "全部进程" }], waitText: "node /srv/app/server.js", wide: true },
   { name: "search", query: "", search: "prod" },
+  // The app's own right-click menus (never the web view's), at the narrowest window.
+  { name: "menu-terminal", query: "", size: { width: 860, height: 520 }, open: ["prod-web-01"], type: ["ls"], rightClick: { css: ".xterm-screen", at: { x: 0.95, y: 0.7 } } },
+  { name: "menu-tab", query: "", size: { width: 860, height: 520 }, open: ["prod-db", "staging-api"], rightClick: { role: "tab", name: "prod-db" } },
+  { name: "menu-host", query: "", size: { width: 860, height: 520 }, rightClick: { role: "button", name: "prod-web-01" } },
+  { name: "menu-field", query: "lang=en", size: { width: 860, height: 520 }, search: "prod", rightClick: { role: "textbox" } },
   { name: "askpass", query: "askpass=1" },
   { name: "askpass-touch", query: "askpass=touch" },
   { name: "askpass-pin", query: "askpass=pin" },
@@ -165,6 +170,7 @@ async function playScene(context, scene, { en = false } = {}) {
   const name = en ? (value) => new RegExp(`^${englishName(value)}$`) : (value) => value;
   const step = en ? englishStep : (value) => value;
   const page = await context.newPage();
+  if (scene.size) await page.setViewportSize(scene.size);
   const query = en && !scene.query.includes("lang=") ? [scene.query, "lang=en"].filter(Boolean).join("&") : scene.query;
   await page.goto(`${baseUrl}/?${query}`);
   await page.waitForLoadState("networkidle");
@@ -215,7 +221,15 @@ async function playScene(context, scene, { en = false } = {}) {
   if (scene.waitText) await page.getByText(scene.query.includes("lang=en") || !en ? scene.waitText : (scene.waitTextEn ?? new RegExp(englishName(scene.waitText)))).first().waitFor();
   if (scene.click) await page.getByRole("button", { name: name(scene.click), exact: true }).first().click();
   if (scene.scrollEnd) await page.evaluate(() => document.querySelectorAll("aside .overflow-y-auto").forEach((element) => (element.scrollTop = element.scrollHeight)));
-  await page.mouse.move(0, 0);
+  if (scene.rightClick) {
+    const { css, role, name: target, at } = scene.rightClick;
+    const element = css ? page.locator(css).last() : page.getByRole(role, target ? { name: new RegExp(target) } : undefined).first();
+    // `at`: where in the target, as fractions of its box (near an edge, to see the menu stay on screen).
+    const box = await element.boundingBox();
+    const { x, y } = at ?? { x: 0.5, y: 0.5 };
+    await page.mouse.click(box.x + box.width * x, box.y + box.height * y, { button: "right" });
+    await page.getByRole("menu").waitFor();
+  } else await page.mouse.move(0, 0);
   await page.waitForTimeout(500);
   return page;
 }
