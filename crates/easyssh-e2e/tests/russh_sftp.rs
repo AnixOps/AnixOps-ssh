@@ -107,6 +107,37 @@ async fn upload_and_download_300_kb_streams() {
     assert_eq!(std::fs::read(&local_down).unwrap(), data);
 }
 
+/// Many more requests than the pipeline window, with a ragged last chunk:
+/// the file must come back byte for byte.
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn pipelined_transfer_of_8_mb_keeps_every_byte() {
+    let e2e = E2e::new();
+    let (_session, sftp) = open(&e2e).await;
+    let size = 8 * 1024 * 1024 + 12_345;
+    let data = sample_bytes(size);
+    let local_up = e2e.dir.path().join("big-up.bin");
+    let local_down = e2e.dir.path().join("big-down.bin");
+    std::fs::write(&local_up, &data).unwrap();
+    let remote = format!("/home/keyuser/{}.bin", unique_name("e2e-russh-big"));
+
+    within("transfer", async {
+        let mut source = tokio::fs::File::open(&local_up).await.unwrap();
+        let sent = sftp.upload(&remote, &mut source).await.expect("upload");
+        assert_eq!(sent, size as u64);
+        assert_eq!(sftp.stat(&remote).await.unwrap().size, size as u64);
+
+        let mut sink = tokio::fs::File::create(&local_down).await.unwrap();
+        let received = sftp.download(&remote, &mut sink).await.expect("download");
+        assert_eq!(received, size as u64);
+        drop(sink);
+
+        sftp.remove_file(&remote).await.expect("rm");
+    })
+    .await;
+    assert!(std::fs::read(&local_down).unwrap() == data);
+}
+
 #[tokio::test]
 #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
 async fn download_of_a_missing_file_fails_with_a_reason() {

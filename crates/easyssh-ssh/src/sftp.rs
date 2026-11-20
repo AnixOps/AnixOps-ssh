@@ -2,7 +2,7 @@
 
 use crate::error::{Error, Result};
 use crate::session::Session;
-use russh_sftp::client::SftpSession;
+use russh_sftp::client::{Config as SftpConfig, SftpSession};
 use std::time::SystemTime;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -52,6 +52,29 @@ fn convert(metadata: &russh_sftp::client::fs::Metadata) -> FileStat {
     }
 }
 
+/// Requests kept in flight per file, as OpenSSH's `sftp` does (`-R 64`).
+/// Reads and writes are pipelined by `SftpFile`: it sends this many
+/// positional requests before it waits for the oldest answer, hands the data
+/// back in file order, and re-requests the gap after a short read.
+pub const MAX_IN_FLIGHT: usize = 64;
+/// Size of one write request, OpenSSH's default (`-B 32768`).
+pub const WRITE_PACKET_LEN: u32 = 32 * 1024;
+/// Largest packet accepted; also caps the size of one read request.
+pub const MAX_PACKET_LEN: u32 = 256 * 1024;
+/// Seconds to wait for an answer. A full window of requests queues behind
+/// each other on a slow link, so the library's 10 s is too short.
+pub const REQUEST_TIMEOUT_SECS: u64 = 60;
+
+fn pipeline_config() -> SftpConfig {
+    SftpConfig {
+        max_packet_len: MAX_PACKET_LEN,
+        max_concurrent_reads: MAX_IN_FLIGHT,
+        max_concurrent_writes: MAX_IN_FLIGHT,
+        max_write_packet_len: WRITE_PACKET_LEN,
+        request_timeout_secs: REQUEST_TIMEOUT_SECS,
+    }
+}
+
 pub struct Sftp {
     session: SftpSession,
 }
@@ -61,12 +84,20 @@ impl Session {
     pub async fn sftp(&self) -> Result<Sftp> {
         let channel = self.open_session_channel().await?;
         channel.request_subsystem(true, "sftp").await?;
-        let session = SftpSession::new(channel.into_stream()).await?;
-        Ok(Sftp { session })
+        Sftp::over(channel.into_stream()).await
     }
 }
 
 impl Sftp {
+    /// Starts SFTP on any byte stream, with the pipelined transfer settings.
+    pub async fn over<S>(stream: S) -> Result<Sftp>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let session = SftpSession::new_with_config(stream, pipeline_config()).await?;
+        Ok(Sftp { session })
+    }
+
     /// The user's home directory.
     pub async fn home(&self) -> Result<String> {
         self.realpath(".").await
@@ -221,5 +252,184 @@ impl Sftp {
 
     pub async fn close(&self) -> Result<()> {
         Ok(self.session.close().await?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use russh_sftp::protocol::{Data, FileAttributes, Handle, OpenFlags, Status, StatusCode};
+    use sha2::{Digest, Sha256};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    /// An in-memory server that answers reads in short pieces and records
+    /// the offsets it was asked for.
+    struct Memory {
+        files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+        reads: Arc<Mutex<Vec<u64>>>,
+        piece: usize,
+    }
+
+    impl russh_sftp::server::Handler for Memory {
+        type Error = StatusCode;
+
+        fn unimplemented(&self) -> StatusCode {
+            StatusCode::OpUnsupported
+        }
+
+        async fn open(
+            &mut self,
+            id: u32,
+            filename: String,
+            pflags: OpenFlags,
+            _attrs: FileAttributes,
+        ) -> std::result::Result<Handle, StatusCode> {
+            let mut files = self.files.lock().unwrap();
+            if pflags.contains(OpenFlags::TRUNCATE) || pflags.contains(OpenFlags::CREATE) {
+                files.insert(filename.clone(), Vec::new());
+            } else if !files.contains_key(&filename) {
+                return Err(StatusCode::NoSuchFile);
+            }
+            Ok(Handle {
+                id,
+                handle: filename,
+            })
+        }
+
+        async fn close(
+            &mut self,
+            id: u32,
+            _handle: String,
+        ) -> std::result::Result<Status, StatusCode> {
+            Ok(ok(id))
+        }
+
+        async fn read(
+            &mut self,
+            id: u32,
+            handle: String,
+            offset: u64,
+            len: u32,
+        ) -> std::result::Result<Data, StatusCode> {
+            self.reads.lock().unwrap().push(offset);
+            let files = self.files.lock().unwrap();
+            let file = files.get(&handle).ok_or(StatusCode::NoSuchFile)?;
+            let start = offset as usize;
+            if start >= file.len() {
+                return Err(StatusCode::Eof);
+            }
+            let end = (start + (len as usize).min(self.piece)).min(file.len());
+            Ok(Data {
+                id,
+                data: file[start..end].to_vec(),
+            })
+        }
+
+        async fn write(
+            &mut self,
+            id: u32,
+            handle: String,
+            offset: u64,
+            data: Vec<u8>,
+        ) -> std::result::Result<Status, StatusCode> {
+            let mut files = self.files.lock().unwrap();
+            let file = files.get_mut(&handle).ok_or(StatusCode::NoSuchFile)?;
+            let end = offset as usize + data.len();
+            if file.len() < end {
+                file.resize(end, 0);
+            }
+            file[offset as usize..end].copy_from_slice(&data);
+            Ok(ok(id))
+        }
+    }
+
+    fn ok(id: u32) -> Status {
+        Status {
+            id,
+            status_code: StatusCode::Ok,
+            error_message: "Ok".into(),
+            language_tag: "en".into(),
+        }
+    }
+
+    async fn memory_sftp(
+        piece: usize,
+    ) -> (
+        Sftp,
+        Arc<Mutex<HashMap<String, Vec<u8>>>>,
+        Arc<Mutex<Vec<u64>>>,
+    ) {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let reads = Arc::new(Mutex::new(Vec::new()));
+        let (client, server) = tokio::io::duplex(1 << 20);
+        russh_sftp::server::run(
+            server,
+            Memory {
+                files: files.clone(),
+                reads: reads.clone(),
+                piece,
+            },
+        )
+        .await;
+        (Sftp::over(client).await.expect("sftp"), files, reads)
+    }
+
+    fn sample(len: usize) -> Vec<u8> {
+        // Not periodic at the chunk size, so a reordered chunk changes the hash.
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        (0..len)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 24) as u8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn window_memory_is_bounded() {
+        assert_eq!(MAX_IN_FLIGHT, 64);
+        // A full window of the largest requests: servers usually answer
+        // reads with 32 to 64 KiB, far below this.
+        assert!(MAX_IN_FLIGHT as u64 * MAX_PACKET_LEN as u64 <= 16 * 1024 * 1024);
+        let config = pipeline_config();
+        assert_eq!(config.max_concurrent_reads, MAX_IN_FLIGHT);
+        assert_eq!(config.max_concurrent_writes, MAX_IN_FLIGHT);
+        assert_eq!(config.max_write_packet_len, WRITE_PACKET_LEN);
+    }
+
+    #[tokio::test]
+    async fn upload_of_many_chunks_arrives_in_order() {
+        let (sftp, files, _) = memory_sftp(32 * 1024).await;
+        // 5 MiB plus a ragged tail: far more requests than the window.
+        let data = sample(5 * 1024 * 1024 + 4321);
+        let sent = sftp.upload("/up", &mut &data[..]).await.unwrap();
+        assert_eq!(sent, data.len() as u64);
+        let stored = files.lock().unwrap().get("/up").cloned().unwrap();
+        assert_eq!(Sha256::digest(&stored), Sha256::digest(&data));
+    }
+
+    #[tokio::test]
+    async fn download_handles_short_reads_and_eof() {
+        // The server answers with 10000 bytes however much is asked.
+        let (sftp, files, reads) = memory_sftp(10_000).await;
+        let data = sample(3 * 1024 * 1024 + 77);
+        files.lock().unwrap().insert("/down".into(), data.clone());
+        let mut sink = Vec::new();
+        let got = sftp.download("/down", &mut sink).await.unwrap();
+        assert_eq!(got, data.len() as u64);
+        assert_eq!(Sha256::digest(&sink), Sha256::digest(&data));
+        // Reads were asked for ahead of the data in hand (more than one per
+        // answer), yet every byte was requested at least once.
+        assert!(reads.lock().unwrap().len() > data.len() / 10_000);
+    }
+
+    #[tokio::test]
+    async fn empty_file_round_trips() {
+        let (sftp, _, _) = memory_sftp(32 * 1024).await;
+        sftp.write_file("/empty", b"").await.unwrap();
+        assert!(sftp.read_file("/empty").await.unwrap().is_empty());
     }
 }
