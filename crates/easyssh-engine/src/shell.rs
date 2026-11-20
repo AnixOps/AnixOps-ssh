@@ -478,6 +478,14 @@ async fn pump(
                 }
                 None => break,
             },
+            // A held-back lead byte with nothing after it: release it so a
+            // binary transfer (rz/sz) never waits on it.
+            () = tokio::time::sleep(Duration::from_millis(25)), if decoder.has_pending() => {
+                let text = decoder.flush();
+                if !text.is_empty() {
+                    sink.data(text);
+                }
+            }
             command = commands.recv() => match command {
                 Some(Command::Write(data)) => {
                     if let Err(error) = shell.write(&data).await {

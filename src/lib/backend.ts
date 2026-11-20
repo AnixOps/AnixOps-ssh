@@ -148,6 +148,8 @@ export interface SessionHandle {
   /** The daemon's id for the session, kept so a layout can reattach to it. */
   id: string;
   write(data: string): void;
+  /** Like `write`, resolving once the backend has taken the data (rz/sz paces itself on it). */
+  writeAsync?(data: string): Promise<void>;
   resize(cols: number, rows: number): void;
   /** Stops listening; the session keeps running in the background daemon. */
   detach(): void;
@@ -363,6 +365,7 @@ function sessionHandle(id: string, engine: SshEngine | null = null, engineReason
     engine,
     engineReason,
     write: (data) => void invoke("session_write", { id, data }).catch(report),
+    writeAsync: (data) => invoke<void>("session_write", { id, data }),
     resize: (cols, rows) => void invoke("session_resize", { id, cols, rows }).catch(report),
     detach: () => void invoke("session_detach", { id }).catch(report),
     close: () => void invoke("session_close", { id }).catch(report),

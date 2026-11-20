@@ -689,7 +689,7 @@ impl Daemon {
             "session.write" => {
                 let p: proto::SessionWriteParams = parse(payload)?;
                 let session = self.session(&p.session_id)?;
-                let data = p.data.into_bytes();
+                let data = easyssh_engine::text_to_bytes(&p.data);
                 tokio::task::spawn_blocking(move || session.write(&data))
                     .await
                     .map_err(|e| fail("internal", e.to_string()))?

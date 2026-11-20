@@ -122,6 +122,20 @@ succeeded, red when it failed, hover for the command and exit code), and the
 prompt jumps above. What the scripts do and the sequence format are in
 [`shell-integration/README.md`](shell-integration/README.md).
 
+## rz/sz in the terminal
+
+Run `sz file` on the host and the app asks nothing more than where to put it
+(the Downloads folder, or a Save dialog when **Ask where to save received
+files** is on); run `rz` and a file picker (several files at once) opens. A
+card over the terminal shows progress; Esc or Ctrl+C cancels and sends the
+ZMODEM abort sequence. Nothing of the transfer is written to the screen. It
+is on by default (**Settings → Terminal → rz/sz file transfer**) and on the
+desktop app only. The protocol is [zmodem.js](https://github.com/FGasper/zmodemjs)
+(Apache-2.0, a permissive licence compatible with this project's MIT); terminal
+output reaches the web view without losing a byte (bytes that are not UTF-8 are
+carried as private-use characters U+100080 to U+1000FF and turned back for the
+transfer). trzsz is not supported yet.
+
 ## Security boundary
 
 - Hosts, groups, snippets, tunnels, settings and known host keys live in a

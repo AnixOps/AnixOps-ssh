@@ -283,7 +283,9 @@ async fn session_open(
 
 #[tauri::command]
 fn session_write(state: State<'_, Mobile>, id: String, data: String) -> Result<(), String> {
-    state.sessions.write(&id, data.as_bytes())
+    state
+        .sessions
+        .write(&id, &easyssh_engine::text_to_bytes(&data))
 }
 
 #[tauri::command]
