@@ -12,7 +12,8 @@ use crate::files::Files;
 use crate::login::SavedPassword;
 use crate::prompts::{PromptInteraction, Prompts};
 use crate::registry::{self, Key, Registry};
-use crate::tunnels::Tunnels;
+use crate::supervisor::is_fatal;
+use crate::tunnels::{Relink, RelinkError, Tunnels};
 use crate::utf8::Utf8Stream;
 use crate::{Lease, SharedError};
 use easyssh_ssh::{
@@ -305,8 +306,10 @@ impl Engine {
     /// Starts the forward of `tunnel` on the host's shared connection and
     /// returns the port that listens. Progress is reported as `tunnel.status`
     /// events.
+    /// When the connection drops, the tunnel connects again by itself (see
+    /// [`crate::tunnels`]).
     pub async fn start_tunnel(
-        &self,
+        self: &Arc<Self>,
         tunnel: &easyssh_core::Tunnel,
         target: &Target,
     ) -> Result<u16, OpenError> {
@@ -324,7 +327,27 @@ impl Engine {
                 return Err(error);
             }
         };
-        match self.tunnels.start(tunnel, lease, self.events.clone()).await {
+        let engine = Arc::downgrade(self);
+        let again = target.clone();
+        let relink: Relink = Arc::new(move || {
+            let engine = engine.clone();
+            let target = again.clone();
+            Box::pin(async move {
+                let engine = engine.upgrade().ok_or_else(|| RelinkError {
+                    message: "the engine stopped".into(),
+                    fatal: true,
+                })?;
+                engine.lease(&target).await.map_err(|error| RelinkError {
+                    fatal: is_fatal(error.code),
+                    message: error.message,
+                })
+            })
+        });
+        match self
+            .tunnels
+            .start(tunnel, lease, relink, self.events.clone())
+            .await
+        {
             Ok(port) => Ok(port),
             Err(error) => {
                 self.tunnels.failed(tunnel, &error, &self.events);

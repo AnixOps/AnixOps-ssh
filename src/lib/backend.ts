@@ -809,8 +809,12 @@ export type TunnelStatus =
   | { state: "stopped" }
   | { state: "starting" }
   /** `port`: the port that listens (it differs from the saved one for a
-   *  tunnel saved with port 0, any free port). */
-  | { state: "running"; port?: number }
+   *  tunnel saved with port 0, any free port). `lastError`/`errorCount`:
+   *  connections the forward accepted but could not pass on (the target
+   *  refused, the server prohibits it). */
+  | { state: "running"; port?: number; lastError?: string; errorCount?: number }
+  /** The connection dropped; the forward is closed while it reconnects. */
+  | { state: "reconnecting"; message?: string }
   | { state: "failed"; message: string };
 
 export interface Tunnel {
@@ -917,6 +921,17 @@ const previewTunnels: Tunnel[] = [
     targetHost: "grafana.internal",
     targetPort: 3000,
     status: { state: "failed", message: "bind [127.0.0.1]:3000: Address already in use" },
+  },
+  {
+    id: "tunnel-4",
+    name: "内网 Redis",
+    hostId: "3",
+    kind: "local",
+    bindAddress: null,
+    bindPort: 16379,
+    targetHost: "redis.internal",
+    targetPort: 6379,
+    status: { state: "running", port: 16379, lastError: "redis.internal:6379: connect failed", errorCount: 2 },
   },
 ];
 

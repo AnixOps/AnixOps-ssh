@@ -2556,13 +2556,19 @@ pub struct TunnelStartResult {
 pub struct TunnelState {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub bind_port: ::std::option::Option<u16>,
+    ///Connections the running forward accepted but could not pass on (the server refused the channel, the target is down). Optional; absent means none.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub channel_errors: ::std::option::Option<u64>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub error: ::std::option::Option<::std::string::String>,
     pub host_id: ::std::string::String,
     pub id: ::std::string::String,
+    ///Why the last of `channel_errors` failed, e.g. `127.0.0.1:1: connect failed`.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub last_channel_error: ::std::option::Option<::std::string::String>,
     pub state: TunnelStateName,
 }
-///`TunnelStateName`
+///`reconnecting`: the connection dropped; the forward is closed while a new connection is made (the reason is in `error`).
 #[derive(
     ::serde::Deserialize,
     ::serde::Serialize,
@@ -2580,6 +2586,8 @@ pub enum TunnelStateName {
     Starting,
     #[serde(rename = "running")]
     Running,
+    #[serde(rename = "reconnecting")]
+    Reconnecting,
     #[serde(rename = "stopped")]
     Stopped,
     #[serde(rename = "failed")]
@@ -2590,6 +2598,7 @@ impl ::std::fmt::Display for TunnelStateName {
         match *self {
             Self::Starting => f.write_str("starting"),
             Self::Running => f.write_str("running"),
+            Self::Reconnecting => f.write_str("reconnecting"),
             Self::Stopped => f.write_str("stopped"),
             Self::Failed => f.write_str("failed"),
         }
@@ -2603,6 +2612,7 @@ impl ::std::str::FromStr for TunnelStateName {
         match value {
             "starting" => Ok(Self::Starting),
             "running" => Ok(Self::Running),
+            "reconnecting" => Ok(Self::Reconnecting),
             "stopped" => Ok(Self::Stopped),
             "failed" => Ok(Self::Failed),
             _ => Err("invalid value".into()),
@@ -2631,9 +2641,15 @@ impl ::std::convert::TryFrom<::std::string::String> for TunnelStateName {
 pub struct TunnelStatusEvent {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub bind_port: ::std::option::Option<u16>,
+    ///Connections the running forward accepted but could not pass on (the server refused the channel, the target is down). Optional; absent means none.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub channel_errors: ::std::option::Option<u64>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub error: ::std::option::Option<::std::string::String>,
     pub id: ::std::string::String,
+    ///Why the last of `channel_errors` failed, e.g. `127.0.0.1:1: connect failed`.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub last_channel_error: ::std::option::Option<::std::string::String>,
     pub state: TunnelStateName,
 }
 ///Command `tunnel.stop` payload.
