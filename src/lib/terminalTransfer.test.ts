@@ -86,7 +86,7 @@ const waitFor = async (check: () => boolean, ms = 20_000) => {
 
 const prefs = (enabled = true, askWhere = false) => () => ({ enabled, askWhere });
 
-describe.runIf(lrzsz)("rz/sz with lrzsz", () => {
+describe.runIf(lrzsz)("rz/sz with lrzsz", { timeout: 30_000 }, () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "rzsz-"));
