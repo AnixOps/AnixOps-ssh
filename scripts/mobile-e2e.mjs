@@ -145,7 +145,7 @@ test("the monitor card opens from the terminal, fills in and closes", async ({ p
   await card.getByRole("meter", { name: "CPU" }).waitFor();
   await page.waitForFunction(() => /\d+%/.test(document.querySelector("[data-monitor-card] [role=meter]")?.textContent ?? ""), null, { timeout: 8000 });
   for (const name of ["Memory", "Disks"]) await card.getByRole("meter", { name }).waitFor();
-  assert.match(await card.innerText(), /Up\n\d+d/);
+  assert.match(await card.innerText(), /Uptime\n\d+d/);
   const box = await card.getByRole("button", { name: "Close monitor" }).boundingBox();
   assert.ok(box && box.width >= 44 && box.height >= 44, "close button is a touch target");
   await card.getByRole("button", { name: "Close monitor" }).tap();
