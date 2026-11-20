@@ -168,6 +168,7 @@ struct TransferEnd {
     status: String,
     error: Option<String>,
     progress: u64,
+    skipped: u64,
 }
 
 async fn run_transfer(
@@ -208,6 +209,7 @@ async fn run_transfer_with(
                         status: payload["status"].as_str().unwrap().to_owned(),
                         error: payload["error"].as_str().map(str::to_owned),
                         progress,
+                        skipped: payload["skipped"].as_u64().unwrap_or(0),
                     }
                 }
                 other => panic!("unexpected event {other}"),
@@ -1044,6 +1046,81 @@ async fn a_transfer_waiting_in_the_queue_can_be_cancelled_and_never_starts() {
     engine.shutdown().await;
 }
 
+#[cfg(unix)]
+fn mode_and_mtime(path: &std::path::Path) -> (u32, u64) {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = std::fs::metadata(path).unwrap();
+    let mtime = metadata
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    (metadata.permissions().mode() & 0o777, mtime)
+}
+
+/// 2020-01-02 03:04:05 UTC.
+const OLD_MTIME: u64 = 1_577_934_245;
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn transfers_keep_permissions_and_modification_times() {
+    use std::os::unix::fs::PermissionsExt;
+    let e2e = E2e::new();
+    let shell = pw_session(&e2e).await;
+    let engine = engine(PW_PASSWORD, Arc::default());
+    let (sftp_id, home) = within("sftp", engine.open_files(&target()))
+        .await
+        .expect("open the files");
+    let entry = engine.files().get(&sftp_id).unwrap();
+    let dir = format!("{home}/{}", unique_name("e2e-modes"));
+    sh(&shell, &format!("mkdir '{dir}'")).await;
+
+    // Upload: an executable script with an old time.
+    let scratch = tempfile::tempdir().unwrap();
+    let local = scratch.path().join("run.sh");
+    std::fs::write(&local, "#!/bin/sh\necho hi\n").unwrap();
+    std::fs::set_permissions(&local, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&local)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(OLD_MTIME))
+        .unwrap();
+    let remote = format!("{dir}/run.sh");
+    let end = run_transfer(&engine, entry.clone(), true, local, remote.clone()).await;
+    assert_eq!(end.status, "completed", "{:?}", end.error);
+    assert_eq!(
+        sh(&shell, &format!("stat -c '%a %Y' '{remote}'"))
+            .await
+            .trim(),
+        format!("755 {OLD_MTIME}")
+    );
+
+    // Download: a private file with an old time.
+    sh(
+        &shell,
+        &format!(
+            "printf s > '{dir}/key' && chmod 600 '{dir}/key' && touch -d @{OLD_MTIME} '{dir}/key'"
+        ),
+    )
+    .await;
+    let back = scratch.path().join("key");
+    let end = run_transfer(
+        &engine,
+        entry.clone(),
+        false,
+        back.clone(),
+        format!("{dir}/key"),
+    )
+    .await;
+    assert_eq!(end.status, "completed", "{:?}", end.error);
+    assert_eq!(mode_and_mtime(&back), (0o600, OLD_MTIME));
+
+    sh(&shell, &format!("rm -r '{dir}'")).await;
+    engine.shutdown().await;
+}
+
 #[tokio::test]
 #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
 async fn a_large_file_round_trips_through_the_pipeline_with_the_same_checksum() {
@@ -1097,5 +1174,112 @@ async fn a_large_file_round_trips_through_the_pipeline_with_the_same_checksum() 
     );
     sh(&shell, &format!("rm '{remote}'")).await;
     engine.files().close(&sftp_id).await;
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_folder_download_follows_links_and_keeps_odd_names() {
+    let e2e = E2e::new();
+    let shell = pw_session(&e2e).await;
+    let engine = engine(PW_PASSWORD, Arc::default());
+    let (sftp_id, home) = within("sftp", engine.open_files(&target()))
+        .await
+        .expect("open the files");
+    let entry = engine.files().get(&sftp_id).unwrap();
+    let dir = format!("{home}/{}", unique_name("e2e-links"));
+    sh(
+        &shell,
+        &format!(
+            "set -e; mkdir -p '{dir}/sub'; cd '{dir}'; printf script > run.sh; chmod 755 run.sh; \
+             printf log > 'a:b.log'; printf inner > sub/inner.txt; ln -s run.sh alias.sh; \
+             ln -s sub linkdir; ln -s . loop; ln -s nowhere broken"
+        ),
+    )
+    .await;
+
+    let scratch = tempfile::tempdir().unwrap();
+    let local = scratch.path().join("copy");
+    let end = run_transfer_with(
+        &engine,
+        entry.clone(),
+        false,
+        local.clone(),
+        dir.clone(),
+        true,
+    )
+    .await;
+    assert_eq!(end.status, "completed", "{:?}", end.error);
+    // The loop back to the folder itself and the broken link.
+    assert_eq!(end.skipped, 2);
+
+    let mut names: Vec<String> = std::fs::read_dir(&local)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["a_b.log", "alias.sh", "linkdir", "run.sh", "sub"]);
+    assert_eq!(std::fs::read(local.join("a_b.log")).unwrap(), b"log");
+    assert_eq!(std::fs::read(local.join("alias.sh")).unwrap(), b"script");
+    assert!(std::fs::symlink_metadata(local.join("alias.sh"))
+        .unwrap()
+        .is_file());
+    assert_eq!(
+        std::fs::read(local.join("linkdir/inner.txt")).unwrap(),
+        b"inner"
+    );
+    assert_eq!(
+        std::fs::read(local.join("sub/inner.txt")).unwrap(),
+        b"inner"
+    );
+    assert_eq!(mode_and_mtime(&local.join("run.sh")).0, 0o755);
+
+    // The phone's listing shows the odd name too.
+    let listing = entry.list_view(&dir).await.unwrap();
+    assert!(
+        listing.iter().any(|row| row["name"] == "a:b.log"),
+        "{listing:?}"
+    );
+
+    sh(&shell, &format!("rm -r '{dir}'")).await;
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_folder_upload_follows_links_without_going_round_in_circles() {
+    let e2e = E2e::new();
+    let shell = pw_session(&e2e).await;
+    let engine = engine(PW_PASSWORD, Arc::default());
+    let (sftp_id, home) = within("sftp", engine.open_files(&target()))
+        .await
+        .expect("open the files");
+    let entry = engine.files().get(&sftp_id).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let local = scratch.path().join("site");
+    std::fs::create_dir_all(local.join("assets")).unwrap();
+    std::fs::write(local.join("index.html"), "home").unwrap();
+    std::fs::write(local.join("assets/app.js"), "js").unwrap();
+    std::os::unix::fs::symlink("index.html", local.join("default.html")).unwrap();
+    std::os::unix::fs::symlink("assets", local.join("static")).unwrap();
+    std::os::unix::fs::symlink("..", local.join("assets/up")).unwrap();
+    std::os::unix::fs::symlink("missing", local.join("broken")).unwrap();
+
+    let remote = format!("{home}/{}", unique_name("e2e-site"));
+    let end = run_transfer_with(&engine, entry.clone(), true, local, remote.clone(), true).await;
+    assert_eq!(end.status, "completed", "{:?}", end.error);
+    // `assets/up` and `static/up` lead back up; `broken` points nowhere.
+    assert_eq!(end.skipped, 3);
+    assert_eq!(
+        sh(&shell, &format!("cd '{remote}' && find . -type f | sort")).await,
+        "./assets/app.js\n./default.html\n./index.html\n./static/app.js\n"
+    );
+    assert_eq!(
+        sh(&shell, &format!("find '{remote}' -type l | wc -l"))
+            .await
+            .trim(),
+        "0"
+    );
+    sh(&shell, &format!("rm -r '{remote}'")).await;
     engine.shutdown().await;
 }

@@ -415,6 +415,16 @@ fn forward_lines(
     });
 }
 
+/// The batch command for a transfer: recursive, and keeping permissions
+/// and modification times (`-p`).
+fn transfer_command(upload: bool, local: &str, remote: &str) -> Result<String, OpenSshError> {
+    Ok(if upload {
+        format!("put -pr {} {}\n", quote(local)?, quote(remote)?)
+    } else {
+        format!("get -pr {} {}\n", quote(remote)?, quote(local)?)
+    })
+}
+
 /// Calls `line` for every line of `stream`, without the line break, until the
 /// stream ends or `line` returns false. Bytes that are not UTF-8 (a name in
 /// Latin-1, say) are replaced rather than ending the stream, which would
@@ -449,11 +459,7 @@ pub fn spawn_transfer(
     let local = local
         .to_str()
         .ok_or_else(|| OpenSshError::Failed("local path is not valid UTF-8".into()))?;
-    let command = if upload {
-        format!("put -r {} {}\n", quote(local)?, quote(remote)?)
-    } else {
-        format!("get -r {} {}\n", quote(remote)?, quote(local)?)
-    };
+    let command = transfer_command(upload, local, remote)?;
     let mut child = hide_window(&mut Command::new(openssh.sftp_path()?))
         .args(sftp_args(connection, true)?)
         .envs(env.iter().cloned())
@@ -470,6 +476,18 @@ pub fn spawn_transfer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transfers_keep_permissions_and_times() {
+        assert_eq!(
+            transfer_command(true, "/tmp/a b", "/srv/x").unwrap(),
+            "put -pr \"/tmp/a b\" \"/srv/x\"\n"
+        );
+        assert_eq!(
+            transfer_command(false, "/tmp/x", "/srv/run.sh").unwrap(),
+            "get -pr \"/srv/run.sh\" \"/tmp/x\"\n"
+        );
+    }
 
     #[test]
     fn lines_that_are_not_utf8_do_not_end_the_stream() {

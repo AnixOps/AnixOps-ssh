@@ -114,6 +114,7 @@ dependencies = [
  "easyssh-store",
  "easyssh-telemetry",
  "easyssh-unlock",
+ "easyssh-update",
  "easyssh-vault",
  "easysshd",
  "jni 0.22.4",
@@ -1915,6 +1916,7 @@ name = "easyssh-services"
 version = "2.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "easyssh-core",
  "easyssh-crypto",
  "easyssh-store",
@@ -2034,6 +2036,20 @@ dependencies = [
  "objc2-local-authentication",
  "windows",
  "zeroize",
+]
+
+[[package]]
+name = "easyssh-update"
+version = "2.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek 3.0.0",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "ureq",
 ]
 
 [[package]]

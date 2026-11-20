@@ -42,6 +42,7 @@ a runner outage), re-run the failed job; do not change the code.
 Install the build from the CI run or release, then:
 
 - [ ] The app starts; Settings → SSH environment shows OpenSSH and the agent.
+- [ ] Settings → Updates: "Check now" ends with "up to date" (or the newer release, with a working Download) on a build that carries the update key.
 - [ ] A host from `~/.ssh/config` and a saved host both open a terminal.
 - [ ] A password-only host asks for the password in the terminal.
 - [ ] `htop` or `vim` fills the window and follows a resize; Chinese text renders.
@@ -55,6 +56,54 @@ Install the build from the CI run or release, then:
 - [ ] Windows or macOS: with a passphrase set, enable Windows Hello or Touch ID in Settings, Vault; lock, then unlock with it, and cancel the prompt once (the passphrase still works).
 - [ ] Linux, macOS or Windows 11 with a FIDO2 key that has hmac-secret (YubiKey 5, Nitrokey 3, SoloKeys): Settings, Vault, "Add security key" (passphrase, two touches, PIN if set); lock, unlock with the key; add a second key and remove the first; unplug the key and see the "no security key" message; a key without hmac-secret (for example a U2F-only key) is refused with an explanation and nothing is stored.
 - [ ] With a USB serial adapter (or a loopback), a saved serial host opens from the new-tab menu, types and echoes; on Linux a port without access shows the `dialout` hint.
+
+## Update feed
+
+Desktop builds tell the user when a newer release exists (Settings → Updates);
+they never install anything. The check reads one signed file per platform,
+`anixops-ssh-<windows|macos|linux>.appcast.json`, in the `anixops-appcast-v1`
+format every AnixOps program uses ([anix-kit](https://github.com/AnixOps/anix-kit),
+package `update`). `release.yml` builds and signs the three files after the
+installers are uploaded (job `update-feed`, `scripts/build-update-feeds.sh`) and
+attaches them to the release, so `releases/latest/download/<file>` serves them
+once the release is published. What the app sends is in the README, Privacy.
+
+One-time setup, by the owner:
+
+1. Make the key pair (anix-kit, pinned like the workflow does):
+
+   ```sh
+   go run github.com/AnixOps/anix-kit/cmd/anixsign@73de268a2e0909b71ba1e1b80fd3470ae5a54aa9 keygen update-key.pem
+   ```
+
+   It writes the private key `update-key.pem` (PKCS#8 PEM, mode 0600) and prints
+   the **public key** (base64) and its **key id**. Keep `update-key.pem` offline
+   apart from the secret below; nobody needs to see it again.
+2. Repository **secret** `ANIXOPS_UPDATE_SIGNING_KEY`: the whole content of
+   `update-key.pem`, including the `BEGIN`/`END` lines.
+3. Repository **variable** `EASYSSH_UPDATE_PUBLIC_KEYS`: the public key (base64).
+   Several keys may be listed, comma separated, to roll a new key out before the
+   old one is retired. Release and CI builds compile it in
+   (`option_env!`); a build without it never checks for updates, and Settings
+   says so and points to the GitHub Releases page.
+
+Behaviour to know:
+
+- Without the secret the release still ships; the job only warns and attaches no
+  feed. Installed apps then keep seeing the previous release's feed.
+- The feed's `build` is `major*1000000 + minor*1000 + patch` (the number the
+  Android versionCode already uses); the app offers an item whose build is
+  higher than its own. `sequence` is the unix time of the workflow run, and the
+  app refuses a feed with a lower sequence than one it accepted (replay).
+- One item per platform, its installer (`*-setup.exe`, `*.dmg`, `*.AppImage`),
+  signed with the archive signature so a later in-app installer can verify it
+  (size, SHA-256 and signature) before opening it. Feeds carry no architecture:
+  if a second architecture of a platform is ever shipped, it needs its own
+  product name.
+- Rotating the key: add the new public key to the variable next to the old one,
+  release, then switch the secret to the new private key; drop the old public
+  key once nobody runs a build older than that release.
+- To re-issue a feed for a published release, re-run the `update-feed` job.
 
 ## Mobile
 
