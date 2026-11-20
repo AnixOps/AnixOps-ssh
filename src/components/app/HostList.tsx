@@ -1,4 +1,4 @@
-import { Cable, ChevronRight, Copy, Download, Pencil, Plus, Search, Server, Star, Trash2 } from "lucide-react";
+import { Cable, ChevronRight, Copy, Download, Pencil, Plus, Search, Server, Star, Trash2, SquarePlus } from "lucide-react";
 import { useMemo, useState, type KeyboardEvent, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
@@ -39,6 +39,7 @@ export function HostList({
   groups,
   selectedId,
   onOpen,
+  onOpenNew,
   onEdit,
   onToggleFavorite,
   onDelete,
@@ -50,6 +51,8 @@ export function HostList({
   groups: Group[];
   selectedId: string | null;
   onOpen: (host: Host) => void;
+  /** Always a new tab, even when the host already has one. */
+  onOpenNew?: (host: Host) => void;
   /** null creates a new host. */
   onEdit: (host: Host | null) => void;
   onToggleFavorite: (host: Host) => void;
@@ -121,6 +124,7 @@ export function HostList({
       tabStop={isStop(host)}
       selected={host.id === selectedId}
       onOpen={onOpen}
+      onOpenNew={onOpenNew}
       onEdit={onEdit}
       onToggleFavorite={onToggleFavorite}
       onDelete={onDelete}
@@ -224,6 +228,7 @@ function HostRow({
   tabStop,
   selected,
   onOpen,
+  onOpenNew,
   onEdit,
   onToggleFavorite,
   onDelete,
@@ -232,6 +237,7 @@ function HostRow({
   tabStop: boolean;
   selected: boolean;
   onOpen: (host: Host) => void;
+  onOpenNew?: (host: Host) => void;
   onEdit: (host: Host) => void;
   onToggleFavorite: (host: Host) => void;
   onDelete: (host: Host) => void;
@@ -243,6 +249,8 @@ function HostRow({
     if (await confirm({ title, body: t.hostDeleteBody, verb: t.delete })) onDelete(host);
   };
   const menu: MenuEntry[] = [
+    // A second session to the same host, as every terminal's "new tab" gives.
+    ...(onOpenNew ? [{ key: "open-new", label: t.openInNewTab, icon: <SquarePlus />, onSelect: () => onOpenNew(host) }, "separator" as const] : []),
     {
       key: "edit",
       label: saved ? t.editHost : t.saveToHosts,

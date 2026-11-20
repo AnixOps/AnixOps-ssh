@@ -14,6 +14,9 @@ import { shortcutHint } from "@/lib/shortcutTable";
 import { hostColor, type Host } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
+/** The drag data type of a tab being reordered. */
+const TAB_DRAG = "application/x-anixops-tab";
+
 export interface Tab {
   key: string;
   /** null for a local shell. */
@@ -40,6 +43,8 @@ export function TabBar({
   onSelect,
   onClose,
   onCloseMany,
+  onDuplicate,
+  onMove,
   onNew,
   serialHosts,
   onOpenHost,
@@ -55,6 +60,10 @@ export function TabBar({
   onClose: (key: string) => void;
   /** Close several tabs at once; `keep` stays open and becomes active if the active one closes. */
   onCloseMany: (keys: string[], keep: string) => void;
+  /** Opens another session like this tab's (same host, or a local shell). */
+  onDuplicate: (key: string) => void;
+  /** Moves tab `from` to where tab `to` is. */
+  onMove: (from: string, to: string) => void;
   onNew: () => void;
   /** Saved serial ports, offered in the new-tab menu. */
   serialHosts: Host[];
@@ -74,6 +83,8 @@ export function TabBar({
   const menuIndex = menu ? tabs.findIndex((tab) => tab.key === menu.key) : -1;
   const menuItems: MenuEntry[] = menu
     ? [
+        { key: "duplicate", label: t.duplicateTab, onSelect: () => onDuplicate(menu.key) },
+        "separator",
         { key: "close", label: t.closeTab, shortcut: shortcutHint("close-tab"), onSelect: () => onClose(menu.key) },
         {
           key: "close-others",
@@ -122,6 +133,23 @@ export function TabBar({
                 role="tab"
                 aria-selected={active}
                 data-tab={tab.key}
+                // Drag a tab along the strip to reorder it.
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.setData(TAB_DRAG, tab.key);
+                  event.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(event) => {
+                  if (!event.dataTransfer.types.includes(TAB_DRAG)) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                }}
+                onDrop={(event) => {
+                  const from = event.dataTransfer.getData(TAB_DRAG);
+                  if (!from) return;
+                  event.preventDefault();
+                  if (from !== tab.key) onMove(from, tab.key);
+                }}
                 onClick={() => onSelect(tab.key)}
                 onAuxClick={(event) => event.button === 1 && onClose(tab.key)}
                 onContextMenu={(event) => {

@@ -3,7 +3,7 @@
 FROM debian:bookworm-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openssh-server openssh-client openssh-sftp-server socat procps zsh fish tmux \
+ && apt-get install -y --no-install-recommends openssh-server openssh-client openssh-sftp-server socat procps zsh fish tmux htop vim less \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /run/sshd \
  && ssh-keygen -A \

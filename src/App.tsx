@@ -232,6 +232,27 @@ export function App() {
 
   const openLocal = useCallback(() => addTab(null, t.localTerminal, null), [addTab]);
 
+  // Another session like a tab's, in a new tab next to the others.
+  const duplicateTab = useCallback(
+    (key: string) => {
+      const tab = tabs.find((candidate) => candidate.key === key);
+      if (tab) addTab(tab.hostId, tab.title, tab.color);
+    },
+    [tabs, addTab],
+  );
+  const openHostInNewTab = useCallback((host: Host) => addTab(host.id, host.name, host.color), [addTab]);
+  const moveTab = useCallback((from: string, to: string) => {
+    setTabs((current) => {
+      const source = current.findIndex((tab) => tab.key === from);
+      const target = current.findIndex((tab) => tab.key === to);
+      if (source < 0 || target < 0) return current;
+      const next = [...current];
+      const [moved] = next.splice(source, 1);
+      next.splice(target, 0, moved);
+      return next;
+    });
+  }, []);
+
   const startSerialHost = useCallback(() => {
     setNav("hosts");
     setNewSerial(true);
@@ -490,6 +511,7 @@ export function App() {
             groups={snapshot.groups}
             selectedId={activeTab?.hostId ?? null}
             onOpen={openHost}
+            onOpenNew={openHostInNewTab}
             onEdit={(host) => {
               setNewSerial(false);
               setEditing(host);
@@ -518,6 +540,8 @@ export function App() {
               onSelect={setActiveKey}
               onClose={closeTab}
               onCloseMany={closeTabs}
+              onDuplicate={duplicateTab}
+              onMove={moveTab}
               onNew={openLocal}
               serialHosts={serialHosts(snapshot.hosts)}
               onOpenHost={openHost}

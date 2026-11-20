@@ -6,6 +6,8 @@
 #               request whose files are all frontend or docs (the list below):
 #               nothing the Rust code compiles, includes or tests. The Rust
 #               jobs (required checks) run on every pull request regardless.
+#   terminal    The terminal end-to-end job (scripts/terminal-e2e.mjs). False
+#               only for a pull request whose files are all docs.
 #   installers  `tauri build` (the AnixOps-SSH-<OS> artifacts). Always on main
 #               and manual runs; on a pull request only when it changes the
 #               version (the release smoke test, RELEASING.md) or packaging.
@@ -20,6 +22,7 @@ base=${1:-HEAD^1}
 
 if [ "$event" != "pull_request" ]; then
   echo "native=true"
+  echo "terminal=true"
   echo "installers=true"
   echo "reason=$event: everything runs" >&2
   exit 0
@@ -27,6 +30,7 @@ fi
 
 files=$(git diff --name-only "$base" HEAD)
 native=false
+terminal=false
 installers=false
 
 while IFS= read -r file; do
@@ -43,6 +47,10 @@ while IFS= read -r file; do
       native=true
       echo "native: $file" >&2
       ;;
+  esac
+  case "$file" in
+    docs/* | *.md | LICENSE) ;;
+    *) terminal=true ;;
   esac
   case "$file" in
     # Packaging: bundle settings, icons, the release scripts and CI itself.
@@ -63,4 +71,5 @@ if [ "$old" != "$new" ]; then
 fi
 
 echo "native=$native"
+echo "terminal=$terminal"
 echo "installers=$installers"

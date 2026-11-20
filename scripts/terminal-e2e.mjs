@@ -665,7 +665,7 @@ check("标签与分屏", "split", "Ctrl+Shift+D 分屏后新窗格也连上同�
   return "两个窗格各有一个会话";
 });
 
-check("标签与分屏", "tab-switch", "Ctrl+Tab / Ctrl+Shift+Tab（Ctrl+PageDown/PageUp）切换标签", async (page) => {
+check("标签与分屏", "tab-switch", "Ctrl+Tab / Ctrl+Shift+Tab 切换标签", async (page) => {
   await openHost(page, "prod-web-01");
   await openHost(page, "staging-api");
   const activeBefore = await page.getByRole("tab", { selected: true }).innerText();
@@ -678,6 +678,40 @@ check("标签与分屏", "tab-switch", "Ctrl+Tab / Ctrl+Shift+Tab（Ctrl+PageDow
   const back = await page.getByRole("tab", { selected: true }).innerText();
   if (back !== activeBefore) throw new Error("Ctrl+Shift+Tab 没有切回");
   return `${activeBefore.split("\n")[0]} ⇄ ${activeAfter.split("\n")[0]}`;
+});
+
+
+check("标签与分屏", "duplicate-tab", "标签右键“复制标签”再开一个同主机会话（Windows Terminal、Termius、MobaXterm）", async (page) => {
+  await openHost(page);
+  await page.getByRole("tab").first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "复制标签" }).click();
+  await page.waitForFunction(() => window.__anixopsE2eOpened.length >= 2, null, { timeout: 15000 });
+  await waitScreen(page, /keyuser@/, { index: -1 });
+  const count = await page.getByRole("tab").count();
+  if (count !== 2) throw new Error(`标签数 ${count}`);
+  return "两个标签，各自一个会话";
+});
+
+check("标签与分屏", "open-host-new-tab", "同一主机再开一个标签（主机右键“在新标签中打开”）", async (page) => {
+  await openHost(page);
+  await page.getByRole("button", { name: /prod-web-01/ }).first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "在新标签中打开" }).click();
+  await page.waitForFunction(() => window.__anixopsE2eOpened.length >= 2, null, { timeout: 15000 });
+  const count = await page.getByRole("tab").count();
+  if (count !== 2) throw new Error(`标签数 ${count}`);
+  return "同一主机两个标签";
+});
+
+check("标签与分屏", "tab-drag", "拖动标签调整顺序", async (page) => {
+  await openHost(page, "prod-web-01");
+  await openHost(page, "staging-api");
+  const names = async () => (await page.getByRole("tab").allInnerTexts()).map((text) => text.split("\n")[0]);
+  const before = await names();
+  await page.getByRole("tab").nth(1).dragTo(page.getByRole("tab").nth(0));
+  await page.waitForTimeout(300);
+  const after = await names();
+  if (after[0] !== before[1]) throw new Error(`顺序 ${before.join(",")} → ${after.join(",")}`);
+  return `${before.join(" | ")} → ${after.join(" | ")}`;
 });
 
 check("会话", "exit-reconnect", "会话结束后显示原因，按回车重新连接", async (page) => {
