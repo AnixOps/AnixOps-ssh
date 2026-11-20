@@ -25,7 +25,7 @@ mod vault;
 pub use bound::{BoundError, BoundKeyProvider, BoundStore};
 pub use fido::{FidoError, HmacAuthenticator, SecurityKeyProvider};
 pub use gated::{GatedKeyProvider, PresenceGate};
-pub use input::{secrets_update, InputError, MAX_SECRET_BYTES};
+pub use input::{proxy_password_change, secrets_update, InputError, MAX_SECRET_BYTES};
 pub use keyfile::{key_dir, sweep, KeyFile};
 pub use prompt::{match_prompt, Binding, SecretKind};
 pub use source::{Answer, PromptAnswers, SecretSource, StoreAccess, VaultSecrets};

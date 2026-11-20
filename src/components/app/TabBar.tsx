@@ -1,4 +1,4 @@
-import { Cable, Columns2, FolderOpen, LoaderCircle, Plus, Radio, RadioTower, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
+import { Activity, Bell, Cable, Columns2, FolderOpen, LoaderCircle, Plus, Radio, RadioTower, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
 import type { KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Menu, type MenuEntry } from "@/components/ui/menu";
@@ -30,6 +30,8 @@ export interface Tab {
   filesOpen: boolean;
   /** Set once the pane has been opened; it then stays mounted so transfers survive closing it. */
   filesMounted: boolean;
+  /** The server monitor beside the terminal (SSH hosts only). */
+  monitorOpen: boolean;
 }
 
 export function TabBar({
@@ -42,6 +44,8 @@ export function TabBar({
   onOpenHost,
   onNewSerial,
   onToggleFiles,
+  monitorAvailable,
+  onToggleMonitor,
   onSplit,
 }: {
   tabs: Tab[];
@@ -54,6 +58,9 @@ export function TabBar({
   onOpenHost: (host: Host) => void;
   onNewSerial: () => void;
   onToggleFiles: () => void;
+  /** The active tab is an SSH host the monitor can read. */
+  monitorAvailable: boolean;
+  onToggleMonitor: () => void;
   onSplit: (axis: Axis) => void;
 }) {
   const activeTab = tabs.find((tab) => tab.key === activeKey);
@@ -99,7 +106,15 @@ export function TabBar({
                 className="relative flex h-full min-w-0 items-center gap-2 pl-3 text-callout"
               >
                 <TabIcon tab={tab} />
-                <span className="truncate" title={tab.title}>{tab.title}</span>
+                <span
+                  className="truncate"
+                  title={tab.status.remoteTitle ? `${tab.title} — ${tab.status.remoteTitle}` : tab.title}
+                >
+                  {tab.title}
+                </span>
+                {tab.status.bell && !active && (
+                  <Bell className="size-3.5 shrink-0 text-warning" strokeWidth={1.5} aria-label={t.bell} />
+                )}
                 {tab.hostId !== null && tab.status.state === "connected" && tab.status.engine && (
                   <EngineBadge engine={tab.status.engine.engine} reason={tab.status.engine.reason} />
                 )}
@@ -164,6 +179,19 @@ export function TabBar({
             </Button>
           </Tooltip>
         </div>
+      )}
+      {activeTab?.hostId && monitorAvailable && (
+        <Tooltip label={t.toggleMonitor}>
+          <Button
+            variant="quiet"
+            aria-pressed={activeTab.monitorOpen}
+            onClick={onToggleMonitor}
+            className={cn(activeTab.monitorOpen && "bg-accent-soft text-(--accent) hover:bg-accent-soft hover:text-(--accent)")}
+          >
+            <Activity />
+            {t.monitor}
+          </Button>
+        </Tooltip>
       )}
       {activeTab?.hostId && (
         <Tooltip label={`${t.toggleFiles} (${shortcutHint("toggle-files")})`}>

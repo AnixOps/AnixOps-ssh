@@ -82,6 +82,9 @@ pub struct Key {
     pub target: String,
     /// The jump hops, in order, as `user@host:port`.
     pub jump: Vec<String>,
+    /// The outbound proxy of the first hop (`socks5://host:port`), so a host
+    /// whose proxy was edited does not reuse a connection made another way.
+    pub via: Option<String>,
     /// 0 for the host's usual connection; 1, 2, ... for extra ones opened
     /// because the server refused more sessions on the others.
     pub shard: u32,
@@ -299,6 +302,25 @@ impl<S: Pooled, E: Clone + Send + 'static> Registry<S, E> {
         }
     }
 
+    /// A lease on the connection for `key` only when it is up and something
+    /// else (a terminal, files, a tunnel) holds it: never connects, so it
+    /// never asks the user anything, and never keeps a lingering connection
+    /// alive on its own. `None` while a connect is in progress.
+    pub fn existing(&self, key: &Key) -> Option<Lease<S, E>> {
+        let entry = lock(&self.inner.entries).get(key).cloned()?;
+        let slot = entry.slot.try_lock().ok()?;
+        let session = slot.as_ref().filter(|s| s.is_alive())?.clone();
+        drop(slot);
+        let mut state = lock(&entry.state);
+        if state.leases == 0 {
+            return None;
+        }
+        state.leases += 1;
+        state.epoch += 1;
+        drop(state);
+        Some(self.lease(entry, session))
+    }
+
     fn lease(&self, entry: Arc<Entry<S, E>>, session: S) -> Lease<S, E> {
         Lease {
             session: Some(session),
@@ -419,6 +441,7 @@ mod tests {
             host_id: host.into(),
             target: format!("u@{host}:22"),
             jump: vec![],
+            via: None,
             shard: 0,
         }
     }
@@ -462,6 +485,33 @@ mod tests {
         assert_eq!(made.load(Ordering::SeqCst), 1);
         assert_eq!(reg.opened(), 1);
         assert!(leases.iter().all(|n| *n == 1));
+    }
+
+    #[tokio::test]
+    async fn existing_never_connects() {
+        let reg: Reg = Registry::new(Duration::from_secs(30));
+        assert!(reg.existing(&key("a")).is_none());
+        let made = Arc::new(AtomicU64::new(0));
+        let closed = Arc::new(AtomicU64::new(0));
+        let first = reg
+            .acquire(key("a"), || {
+                let (made, closed) = (made.clone(), closed.clone());
+                async move { Ok(maker(made, closed, 0)) }
+            })
+            .await
+            .unwrap();
+        let again = reg.existing(&key("a")).expect("the connection is up");
+        assert_eq!(again.n, first.n);
+        assert_eq!(reg.connections().await[0].leases, 2);
+        // Lingering with nobody else on it: not lent out.
+        drop(again);
+        let alive = first.alive.clone();
+        drop(first);
+        assert!(reg.existing(&key("a")).is_none());
+        assert_eq!(reg.connections().await.len(), 1);
+        alive.store(false, Ordering::SeqCst);
+        assert!(reg.existing(&key("a")).is_none());
+        assert_eq!(reg.opened(), 1);
     }
 
     #[tokio::test]

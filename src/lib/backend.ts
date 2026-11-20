@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openUrl as openWithSystem, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { previewCancel, previewFiles, previewTransfer } from "./previewFiles";
 import {
   previewApplyImport,
@@ -19,6 +19,8 @@ import {
   previewSetFavorite,
   previewSnapshot,
 } from "./preview";
+import { previewMonitorSample, previewMonitorSignal } from "./previewMonitor";
+import { previewUpdateCheck, previewUpdateSetAuto, previewUpdateStatus } from "./previewUpdate";
 import { previewSession } from "./previewSession";
 import type { ExitReason } from "./terminalSession";
 import {
@@ -37,6 +39,7 @@ import type {
   ImportFormat,
 } from "./proto.gen";
 import { UNAVAILABLE, type PendingReports, type TelemetryStatus } from "./telemetry";
+import type { UpdateStatus } from "./update";
 
 export type HostSource = "saved" | "ssh_config";
 
@@ -66,8 +69,22 @@ export interface HostFields {
   engine?: EnginePreference | null;
   /** Opt-in: send the shell integration script after login. */
   shellIntegration: boolean;
+  /** An outbound proxy for the first hop; null or absent connects directly. Its password is a saved secret. */
+  proxy?: ProxyFields | null;
   /** Set for a serial port; the SSH fields are then unused. */
   serial?: SerialFields | null;
+}
+
+/** SOCKS5 (RFC 1928, with username and password) or HTTP CONNECT (with basic authentication). */
+export type ProxyKind = "socks5" | "http";
+
+/** Where a host's outbound proxy is. Mirrors `ProxySettings` in easyssh-core; the password is a saved secret. */
+export interface ProxyFields {
+  kind: ProxyKind;
+  host: string;
+  port: number;
+  /** The login; null or empty means no authentication. */
+  username?: string | null;
 }
 
 export type SerialParity = "none" | "odd" | "even";
@@ -200,13 +217,20 @@ export type {
 export type ImportSource = { kind: "file"; path: string } | { kind: "ssh_config" } | { kind: "service"; request: ServiceRequest };
 
 /** The services hosts can be imported from. */
-export type ServiceId = "control";
+export type ServiceId = "control" | "jumpserver";
 
 /** The plain settings of a service import (what the form remembers). */
 export interface ServiceForm {
   url: string;
   default_user: string;
   identity_file: string | null;
+  /** JumpServer only: */
+  access_key_id: string;
+  org_id: string;
+  gateway: boolean;
+  gateway_host: string;
+  gateway_port: number;
+  gateway_user: string;
 }
 
 /** What the form opens with: the saved settings, and whether a credential is saved in the vault. */
@@ -367,6 +391,12 @@ export async function attachSession(
   return sessionHandle(id, attached.engine, attached.engineReason);
 }
 
+/** Opens a web link in the default browser. Callers check it first (shouldOpenLink). */
+export async function openUrl(url: string): Promise<void> {
+  if (isTauri) await openWithSystem(url);
+  else window.open(url, "_blank", "noopener,noreferrer");
+}
+
 export async function copyText(text: string): Promise<void> {
   if (isTauri) await writeText(text);
   else await navigator.clipboard.writeText(text);
@@ -435,6 +465,44 @@ export async function openFiles(hostId: string): Promise<FilesHandle> {
     chmod: (path, mode, recursive) => invoke("sftp_chmod", { id, path, mode, recursive }),
     close: () => void invoke("sftp_close", { id }).catch(console.error),
   };
+}
+
+/** One raw monitor sample (see `src/lib/monitor.ts`). */
+export interface MonitorSample {
+  output: string;
+  /** Keepalive round trip; null when the server did not answer it. */
+  latency_ms: number | null;
+}
+
+/** Why a sample failed: `wrong_engine` (the host runs on OpenSSH),
+ *  `not_connected` (no terminal connection to read through), others. */
+export interface MonitorFailure {
+  code: string;
+  message: string;
+}
+
+export function monitorFailure(reason: unknown): MonitorFailure {
+  if (reason && typeof reason === "object" && "code" in reason) {
+    const { code, message } = reason as { code: unknown; message?: unknown };
+    return { code: String(code), message: String(message ?? "") };
+  }
+  return { code: "failed", message: String(reason) };
+}
+
+/** Reads the server's load, memory, network, disks and processes on the
+ *  connection the terminal already has. `detail` adds owners, command lines
+ *  and executables. */
+export async function monitorSample(hostId: string, detail: boolean): Promise<MonitorSample> {
+  if (!isTauri) return previewMonitorSample(detail);
+  return invoke<MonitorSample>("monitor_sample", { hostId, detail });
+}
+
+export type MonitorSignal = "TERM" | "KILL";
+
+/** Sends a signal to a process on the server, as the login user. */
+export async function monitorSignal(hostId: string, pid: number, signal: MonitorSignal): Promise<void> {
+  if (!isTauri) return previewMonitorSignal(pid);
+  await invoke("monitor_signal", { hostId, pid, signal });
 }
 
 export async function startTransfer(
@@ -584,6 +652,8 @@ export interface SecretsStatus {
   password: boolean;
   privateKey: boolean;
   passphrase: boolean;
+  /** The password of the host's outbound proxy. */
+  proxyPassword: boolean;
 }
 
 /** A field left out keeps the saved value; an empty string clears it. */
@@ -591,6 +661,7 @@ export interface SecretsInput {
   password?: string;
   privateKey?: string;
   passphrase?: string;
+  proxyPassword?: string;
 }
 
 /** The vault's state for Settings → Security. */
@@ -703,6 +774,7 @@ export async function secretsSet(hostId: string, input: SecretsInput): Promise<S
         password: input.password ?? null,
         privateKey: input.privateKey ?? null,
         passphrase: input.passphrase ?? null,
+        proxyPassword: input.proxyPassword ?? null,
       })
     : previewSecretsSet(hostId, input);
 }
@@ -761,8 +833,12 @@ export type TunnelStatus =
   | { state: "stopped" }
   | { state: "starting" }
   /** `port`: the port that listens (it differs from the saved one for a
-   *  tunnel saved with port 0, any free port). */
-  | { state: "running"; port?: number }
+   *  tunnel saved with port 0, any free port). `lastError`/`errorCount`:
+   *  connections the forward accepted but could not pass on (the target
+   *  refused, the server prohibits it). */
+  | { state: "running"; port?: number; lastError?: string; errorCount?: number }
+  /** The connection dropped; the forward is closed while it reconnects. */
+  | { state: "reconnecting"; message?: string }
   | { state: "failed"; message: string };
 
 export interface Tunnel {
@@ -869,6 +945,17 @@ const previewTunnels: Tunnel[] = [
     targetHost: "grafana.internal",
     targetPort: 3000,
     status: { state: "failed", message: "bind [127.0.0.1]:3000: Address already in use" },
+  },
+  {
+    id: "tunnel-4",
+    name: "内网 Redis",
+    hostId: "3",
+    kind: "local",
+    bindAddress: null,
+    bindPort: 16379,
+    targetHost: "redis.internal",
+    targetPort: 6379,
+    status: { state: "running", port: 16379, lastError: "redis.internal:6379: connect failed", errorCount: 2 },
   },
 ];
 
@@ -995,6 +1082,30 @@ export async function telemetryPending(): Promise<PendingReports> {
 export async function telemetryDeletePending(): Promise<number> {
   if (!isTauri) return 0;
   return invoke<number>("telemetry_delete_pending");
+}
+
+/* Update check (check and notify only); see update.ts and crates/easyssh-update. */
+
+export async function updateStatus(): Promise<UpdateStatus> {
+  if (!isTauri) return previewUpdateStatus();
+  return invoke<UpdateStatus>("update_status");
+}
+
+export async function updateSetAuto(on: boolean): Promise<UpdateStatus> {
+  if (!isTauri) return previewUpdateSetAuto(on);
+  return invoke<UpdateStatus>("update_set_auto", { on });
+}
+
+/** Rejects with the reason when the feed could not be fetched or verified. */
+export async function updateCheck(): Promise<UpdateStatus> {
+  if (!isTauri) return previewUpdateCheck();
+  return invoke<UpdateStatus>("update_check");
+}
+
+/** Opens the verified release in the browser; the backend names the URL. */
+export async function updateOpen(): Promise<void> {
+  if (!isTauri) return;
+  await invoke("update_open");
 }
 
 /** The Rust side scrubs `message` and `stack` and decides whether to keep them. */

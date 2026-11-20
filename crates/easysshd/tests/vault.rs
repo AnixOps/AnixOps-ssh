@@ -354,6 +354,49 @@ async fn remember_in_vault_saves_the_typed_password_once() {
 }
 
 #[tokio::test]
+async fn the_proxy_password_is_saved_like_a_secret_and_never_listed() {
+    let dir = TempDir::new().unwrap();
+    let s = start(dir.path()).await;
+    let host = endpoint_host("db", "alice", "db.example.test");
+    save_host(&s, &host).await;
+    let status = s
+        .call(
+            "secrets.set",
+            json!({"host_id": host.id, "proxy_password": "proxy-pass-unique"}),
+        )
+        .await
+        .unwrap();
+    proto::validate("SecretsStatusResult", &status).unwrap();
+    assert_eq!(status["proxy_password"], true);
+    assert_eq!(status["password"], false);
+    let again = s
+        .call("secrets.status", json!({"host_id": host.id}))
+        .await
+        .unwrap();
+    assert_eq!(again["proxy_password"], true);
+    // Neither the host list nor the status carries the value.
+    let list = s.call("hosts.list", json!({})).await.unwrap();
+    assert!(!list.to_string().contains("proxy-pass-unique"));
+    // An empty string clears it; a multi-line one is refused.
+    let e = s
+        .call(
+            "secrets.set",
+            json!({"host_id": host.id, "proxy_password": "a\nb"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e, "invalid_command");
+    let cleared = s
+        .call(
+            "secrets.set",
+            json!({"host_id": host.id, "proxy_password": ""}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleared["proxy_password"], false);
+}
+
+#[tokio::test]
 async fn a_locked_vault_asks_for_the_passphrase_and_then_answers() {
     let dir = TempDir::new().unwrap();
     let s = start(dir.path()).await;

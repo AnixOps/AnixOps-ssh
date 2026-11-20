@@ -86,6 +86,7 @@ fn target() -> Target {
         identity: None,
         jump: Vec::new(),
         saved_password: None,
+        proxy: None,
     }
 }
 
@@ -168,6 +169,7 @@ struct TransferEnd {
     status: String,
     error: Option<String>,
     progress: u64,
+    skipped: u64,
 }
 
 async fn run_transfer(
@@ -208,6 +210,7 @@ async fn run_transfer_with(
                         status: payload["status"].as_str().unwrap().to_owned(),
                         error: payload["error"].as_str().map(str::to_owned),
                         progress,
+                        skipped: payload["skipped"].as_u64().unwrap_or(0),
                     }
                 }
                 other => panic!("unexpected event {other}"),
@@ -422,6 +425,7 @@ async fn a_host_behind_a_jump_host_opens_through_it_with_its_own_questions() {
         identity: identity("bastion key"),
         jump: Vec::new(),
         saved_password: None,
+        proxy: None,
     };
     let behind = Target {
         host_id: "inner".into(),
@@ -432,6 +436,7 @@ async fn a_host_behind_a_jump_host_opens_through_it_with_its_own_questions() {
         identity: identity("inner key"),
         jump: vec![bastion],
         saved_password: None,
+        proxy: None,
     };
     let asked = Arc::new(Mutex::new(Vec::new()));
     let engine = engine(PW_PASSWORD, asked.clone());
@@ -470,6 +475,7 @@ impl SecretSource for PasswordVault {
             password: Some(easyssh_crypto::SecretText::new(self.0)),
             private_key: None,
             passphrase: None,
+            ..Default::default()
         })
     }
     fn secret_flags(&self, _: &str) -> Result<SecretFlags, VaultError> {
@@ -477,6 +483,7 @@ impl SecretSource for PasswordVault {
             password: true,
             private_key: false,
             passphrase: false,
+            ..Default::default()
         })
     }
 }
@@ -499,6 +506,7 @@ async fn a_jump_host_uses_its_own_saved_password_and_nobody_is_asked() {
         identity: None,
         jump: Vec::new(),
         saved_password: None,
+        proxy: None,
     };
     let behind = Target {
         host_id: "inner".into(),
@@ -509,6 +517,7 @@ async fn a_jump_host_uses_its_own_saved_password_and_nobody_is_asked() {
         identity: None,
         jump: vec![bastion],
         saved_password: None,
+        proxy: None,
     };
     let mut behind = easyssh_engine::with_saved_login(&vault, behind).expect("saved login");
     assert!(behind.jump[0].saved_password.is_some());
@@ -652,6 +661,31 @@ async fn a_dynamic_and_a_remote_forward_run_on_the_shared_connection() {
     engine.shutdown().await;
 }
 
+/// Waits until a `tunnel.status` event for `id` matches `wanted`; returns it.
+async fn tunnel_event(
+    events: &Mutex<Vec<(String, Value)>>,
+    id: &str,
+    what: &str,
+    wanted: impl Fn(&Value) -> bool,
+) -> Value {
+    within(what, async {
+        loop {
+            let found = events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(name, payload)| name == "tunnel.status" && payload["id"] == id)
+                .map(|(_, payload)| payload.clone())
+                .find(|payload| wanted(payload));
+            if let Some(payload) = found {
+                return payload;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+}
+
 /// A second connection as the same user, to prepare and inspect the remote
 /// side with shell commands.
 async fn pw_session(e2e: &E2e) -> Session {
@@ -672,6 +706,86 @@ async fn sh(session: &Session, command: &str) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     output.stdout_text()
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_forward_frees_its_port_when_the_connection_drops_and_comes_back() {
+    let events: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+    let engine = engine_with_events(PW_PASSWORD, Arc::default(), events.clone());
+    // The first attempt waits long enough to see the port closed meanwhile.
+    engine
+        .tunnels()
+        .set_policy(easyssh_engine::supervisor::ReconnectPolicy {
+            max_attempts: 5,
+            base: Duration::from_secs(2),
+            cap: Duration::from_secs(4),
+        });
+    let target = target();
+    let tunnel = Tunnel {
+        id: "e2e-comeback".into(),
+        name: "echo".into(),
+        host_id: target.host_id.clone(),
+        kind: TunnelKind::Local,
+        bind_address: None,
+        bind_port: 0,
+        target_host: Some("127.0.0.1".into()),
+        target_port: Some(ECHO_PORT),
+    };
+    let port = within("forward", engine.start_tunnel(&tunnel, &target))
+        .await
+        .expect("start the forward");
+    wait_for_port_open(port, Duration::from_secs(10)).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    echo_roundtrip(&mut stream, "before").await;
+    drop(stream);
+
+    // The connection goes away (as after sleep or a network change).
+    engine.forget_connection(&target).await;
+    let lost = tunnel_event(&events, "e2e-comeback", "reconnecting", |p| {
+        p["state"] == "reconnecting"
+    })
+    .await;
+    assert!(
+        lost["error"].as_str().is_some_and(|e| !e.is_empty()),
+        "{lost}"
+    );
+    // Nothing listens while there is no connection behind the port.
+    assert!(
+        TcpStream::connect(("127.0.0.1", port)).await.is_err(),
+        "port {port} still accepts connections with no SSH connection"
+    );
+
+    // It comes back on a new connection, on the same port.
+    let back = within("running again", async {
+        loop {
+            let states: Vec<Value> = events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(name, p)| name == "tunnel.status" && p["id"] == "e2e-comeback")
+                .map(|(_, p)| p.clone())
+                .collect();
+            let lost_at = states.iter().position(|p| p["state"] == "reconnecting");
+            if let Some(back) =
+                lost_at.and_then(|at| states[at..].iter().find(|p| p["state"] == "running"))
+            {
+                return back.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert_eq!(back["bind_port"], port);
+    wait_for_port_open(port, Duration::from_secs(10)).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    echo_roundtrip(&mut stream, "after").await;
+    drop(stream);
+    assert_eq!(engine.connections().await["opened"], 2);
+
+    engine.stop_tunnel("e2e-comeback").await;
+    wait_for_port_shut(port, Duration::from_secs(10)).await;
+    engine.shutdown().await;
 }
 
 #[tokio::test]
@@ -767,6 +881,49 @@ async fn a_cancelled_upload_leaves_the_original_intact_and_no_temporary_file() {
 
 #[tokio::test]
 #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_forward_to_a_closed_port_reports_why_its_connections_fail() {
+    let events: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+    let engine = engine_with_events(PW_PASSWORD, Arc::default(), events.clone());
+    let target = target();
+    let tunnel = Tunnel {
+        id: "e2e-refused".into(),
+        name: "nothing".into(),
+        host_id: target.host_id.clone(),
+        kind: TunnelKind::Local,
+        bind_address: None,
+        bind_port: 0,
+        // Nothing listens on port 1 of the server.
+        target_host: Some("127.0.0.1".into()),
+        target_port: Some(1),
+    };
+    let port = within("forward", engine.start_tunnel(&tunnel, &target))
+        .await
+        .expect("start the forward");
+    wait_for_port_open(port, Duration::from_secs(10)).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    // The server refuses the channel, so the connection just ends.
+    let mut buffer = [0u8; 16];
+    let _ = within("refused", stream.read(&mut buffer)).await;
+    let warned = tunnel_event(&events, "e2e-refused", "the failure", |p| {
+        p["channel_errors"].as_u64().is_some_and(|n| n >= 1)
+    })
+    .await;
+    assert_eq!(warned["state"], "running", "{warned}");
+    let reason = warned["last_channel_error"].as_str().unwrap_or_default();
+    assert!(reason.starts_with("127.0.0.1:1: "), "{reason}");
+    let row = engine.tunnels().list()["tunnels"][0].clone();
+    // The probe of wait_for_port_open was refused too.
+    assert!(row["channel_errors"].as_u64() >= Some(1), "{row}");
+    assert_eq!(
+        engine.tunnels().ui_status_of("e2e-refused")["lastError"],
+        reason
+    );
+    engine.stop_tunnel("e2e-refused").await;
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
 async fn a_failed_upload_leaves_the_original_intact_and_no_temporary_file() {
     let e2e = E2e::new();
     // Another user's file in the sticky /tmp: the upload can write its
@@ -849,5 +1006,187 @@ async fn a_failed_folder_download_keeps_the_files_it_finished() {
     names.sort();
     assert_eq!(names, ["a.txt"]);
     sh(&shell, &format!("rm -rf '{dir}'")).await;
+    engine.shutdown().await;
+}
+
+#[cfg(unix)]
+fn mode_and_mtime(path: &std::path::Path) -> (u32, u64) {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = std::fs::metadata(path).unwrap();
+    let mtime = metadata
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    (metadata.permissions().mode() & 0o777, mtime)
+}
+
+/// 2020-01-02 03:04:05 UTC.
+const OLD_MTIME: u64 = 1_577_934_245;
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn transfers_keep_permissions_and_modification_times() {
+    use std::os::unix::fs::PermissionsExt;
+    let e2e = E2e::new();
+    let shell = pw_session(&e2e).await;
+    let engine = engine(PW_PASSWORD, Arc::default());
+    let (sftp_id, home) = within("sftp", engine.open_files(&target()))
+        .await
+        .expect("open the files");
+    let entry = engine.files().get(&sftp_id).unwrap();
+    let dir = format!("{home}/{}", unique_name("e2e-modes"));
+    sh(&shell, &format!("mkdir '{dir}'")).await;
+
+    // Upload: an executable script with an old time.
+    let scratch = tempfile::tempdir().unwrap();
+    let local = scratch.path().join("run.sh");
+    std::fs::write(&local, "#!/bin/sh\necho hi\n").unwrap();
+    std::fs::set_permissions(&local, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&local)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(OLD_MTIME))
+        .unwrap();
+    let remote = format!("{dir}/run.sh");
+    let end = run_transfer(&engine, entry.clone(), true, local, remote.clone()).await;
+    assert_eq!(end.status, "completed", "{:?}", end.error);
+    assert_eq!(
+        sh(&shell, &format!("stat -c '%a %Y' '{remote}'"))
+            .await
+            .trim(),
+        format!("755 {OLD_MTIME}")
+    );
+
+    // Download: a private file with an old time.
+    sh(
+        &shell,
+        &format!(
+            "printf s > '{dir}/key' && chmod 600 '{dir}/key' && touch -d @{OLD_MTIME} '{dir}/key'"
+        ),
+    )
+    .await;
+    let back = scratch.path().join("key");
+    let end = run_transfer(
+        &engine,
+        entry.clone(),
+        false,
+        back.clone(),
+        format!("{dir}/key"),
+    )
+    .await;
+    assert_eq!(end.status, "completed", "{:?}", end.error);
+    assert_eq!(mode_and_mtime(&back), (0o600, OLD_MTIME));
+
+    sh(&shell, &format!("rm -r '{dir}'")).await;
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_folder_download_follows_links_and_keeps_odd_names() {
+    let e2e = E2e::new();
+    let shell = pw_session(&e2e).await;
+    let engine = engine(PW_PASSWORD, Arc::default());
+    let (sftp_id, home) = within("sftp", engine.open_files(&target()))
+        .await
+        .expect("open the files");
+    let entry = engine.files().get(&sftp_id).unwrap();
+    let dir = format!("{home}/{}", unique_name("e2e-links"));
+    sh(
+        &shell,
+        &format!(
+            "set -e; mkdir -p '{dir}/sub'; cd '{dir}'; printf script > run.sh; chmod 755 run.sh; \
+             printf log > 'a:b.log'; printf inner > sub/inner.txt; ln -s run.sh alias.sh; \
+             ln -s sub linkdir; ln -s . loop; ln -s nowhere broken"
+        ),
+    )
+    .await;
+
+    let scratch = tempfile::tempdir().unwrap();
+    let local = scratch.path().join("copy");
+    let end = run_transfer_with(
+        &engine,
+        entry.clone(),
+        false,
+        local.clone(),
+        dir.clone(),
+        true,
+    )
+    .await;
+    assert_eq!(end.status, "completed", "{:?}", end.error);
+    // The loop back to the folder itself and the broken link.
+    assert_eq!(end.skipped, 2);
+
+    let mut names: Vec<String> = std::fs::read_dir(&local)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["a_b.log", "alias.sh", "linkdir", "run.sh", "sub"]);
+    assert_eq!(std::fs::read(local.join("a_b.log")).unwrap(), b"log");
+    assert_eq!(std::fs::read(local.join("alias.sh")).unwrap(), b"script");
+    assert!(std::fs::symlink_metadata(local.join("alias.sh"))
+        .unwrap()
+        .is_file());
+    assert_eq!(
+        std::fs::read(local.join("linkdir/inner.txt")).unwrap(),
+        b"inner"
+    );
+    assert_eq!(
+        std::fs::read(local.join("sub/inner.txt")).unwrap(),
+        b"inner"
+    );
+    assert_eq!(mode_and_mtime(&local.join("run.sh")).0, 0o755);
+
+    // The phone's listing shows the odd name too.
+    let listing = entry.list_view(&dir).await.unwrap();
+    assert!(
+        listing.iter().any(|row| row["name"] == "a:b.log"),
+        "{listing:?}"
+    );
+
+    sh(&shell, &format!("rm -r '{dir}'")).await;
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_folder_upload_follows_links_without_going_round_in_circles() {
+    let e2e = E2e::new();
+    let shell = pw_session(&e2e).await;
+    let engine = engine(PW_PASSWORD, Arc::default());
+    let (sftp_id, home) = within("sftp", engine.open_files(&target()))
+        .await
+        .expect("open the files");
+    let entry = engine.files().get(&sftp_id).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let local = scratch.path().join("site");
+    std::fs::create_dir_all(local.join("assets")).unwrap();
+    std::fs::write(local.join("index.html"), "home").unwrap();
+    std::fs::write(local.join("assets/app.js"), "js").unwrap();
+    std::os::unix::fs::symlink("index.html", local.join("default.html")).unwrap();
+    std::os::unix::fs::symlink("assets", local.join("static")).unwrap();
+    std::os::unix::fs::symlink("..", local.join("assets/up")).unwrap();
+    std::os::unix::fs::symlink("missing", local.join("broken")).unwrap();
+
+    let remote = format!("{home}/{}", unique_name("e2e-site"));
+    let end = run_transfer_with(&engine, entry.clone(), true, local, remote.clone(), true).await;
+    assert_eq!(end.status, "completed", "{:?}", end.error);
+    // `assets/up` and `static/up` lead back up; `broken` points nowhere.
+    assert_eq!(end.skipped, 3);
+    assert_eq!(
+        sh(&shell, &format!("cd '{remote}' && find . -type f | sort")).await,
+        "./assets/app.js\n./default.html\n./index.html\n./static/app.js\n"
+    );
+    assert_eq!(
+        sh(&shell, &format!("find '{remote}' -type l | wc -l"))
+            .await
+            .trim(),
+        "0"
+    );
+    sh(&shell, &format!("rm -r '{remote}'")).await;
     engine.shutdown().await;
 }
