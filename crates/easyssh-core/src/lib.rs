@@ -6,6 +6,7 @@
 
 pub mod config;
 pub mod domain;
+pub mod edit;
 pub mod openssh;
 pub mod process;
 pub mod remote;

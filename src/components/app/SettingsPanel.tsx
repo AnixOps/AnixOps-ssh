@@ -8,6 +8,7 @@ import { VaultSettings } from "@/components/app/VaultSettings";
 import { CircleAlert, CircleCheck, Eye, EyeOff, Minus, Plus, RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { SettingsRow, SettingsGroup } from "@/components/ui/settings";
 import { Segmented } from "@/components/ui/segmented";
@@ -43,8 +44,9 @@ export function SettingsPanel({
   const [prefs, setPrefs] = useState(completionPrefs());
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState("");
+  const [editor, setEditor] = useState(settings().editorCommand);
 
-  useEffect(() => onSettings(setCurrent), []);
+  useEffect(() => onSettings((next) => (setCurrent(next), setEditor(next.editorCommand))), []);
   useEffect(() => onCompletionPrefs(setPrefs), []);
   useEffect(() => {
     if (isTauri) getVersion().then(setVersion).catch(console.error);
@@ -135,6 +137,21 @@ export function SettingsPanel({
               />
             </SettingsRow>
           )}
+        </SettingsGroup>
+
+        <SettingsGroup title={t.files}>
+          <SettingsRow label={t.editorCommand} hint={t.editorCommandHint}>
+            <Input
+              value={editor}
+              onChange={(event) => setEditor(event.target.value)}
+              onBlur={() => editor.trim() !== current.editorCommand && update({ editorCommand: editor.trim() })}
+              onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
+              placeholder={t.editorCommandPlaceholder}
+              aria-label={t.editorCommand}
+              spellCheck={false}
+              className="h-7 w-56 font-mono text-callout"
+            />
+          </SettingsRow>
         </SettingsGroup>
 
         <SettingsGroup title={t.completion}>

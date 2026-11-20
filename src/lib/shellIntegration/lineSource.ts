@@ -23,6 +23,7 @@ export class ShellIntegrationLineSource implements LineSource {
   private running = false;
   private directory: string | undefined;
   private listeners: ((line: string) => void)[] = [];
+  private changeListeners: (() => void)[] = [];
 
   constructor(probe: (() => CursorPosition | null) | null = null) {
     this.typed = new KeystrokeLineSource(probe);
@@ -42,6 +43,7 @@ export class ShellIntegrationLineSource implements LineSource {
     switch (event.kind) {
       case "ready":
         this.active = true;
+        this.changed();
         break;
       case "promptStart":
         this.running = false;
@@ -54,11 +56,21 @@ export class ShellIntegrationLineSource implements LineSource {
         break;
       case "cwd":
         this.directory = event.path;
+        this.changed();
         break;
       case "commandEnd":
       case "promptEnd":
         break;
     }
+  }
+
+  /** Called when the shell reports itself or a new working directory. */
+  onChange(listener: () => void): void {
+    this.changeListeners.push(listener);
+  }
+
+  private changed() {
+    for (const listener of this.changeListeners) listener();
   }
 
   private commit(line: string) {

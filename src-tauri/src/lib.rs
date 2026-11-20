@@ -12,6 +12,8 @@ mod backup;
 #[cfg(desktop)]
 mod daemon;
 #[cfg(desktop)]
+mod edit;
+#[cfg(desktop)]
 mod files;
 #[cfg(desktop)]
 mod hosts;
@@ -71,6 +73,7 @@ fn desktop_run() {
         .manage(daemon::DaemonState::default())
         .manage(sessions::Sessions::default())
         .manage(files::Files::default())
+        .manage(edit::Edits::default())
         .manage(askpass::Askpass::default())
         .manage(tunnels::Tunnels::default())
         .manage(ai::Ai::default())
@@ -127,6 +130,10 @@ fn desktop_run() {
             files::sftp_close,
             files::transfer_start,
             files::transfer_cancel,
+            edit::edit_prepare,
+            edit::edit_open,
+            edit::edit_watch,
+            edit::edit_stop,
             askpass::askpass_reply,
             askpass::askpass_unlock,
             sync::sync_call,
@@ -161,6 +168,7 @@ fn desktop_run() {
         ])
         .setup(|app| {
             daemon::start(app.handle());
+            edit::clean_all(app.handle());
             telemetry::start_background();
             Ok(())
         })

@@ -9,6 +9,10 @@ export interface Settings {
   terminalScrollback: number;
   /** macOS: Option sends Meta (Esc prefix) instead of typing layout characters. */
   terminalOptionAsMeta: boolean;
+  /** The command "Open in editor" starts with the file appended; empty uses the system's default application. */
+  editorCommand: string;
+  /** The files pane shows the folder the terminal is in (needs shell integration). */
+  followTerminalFolder: boolean;
   /** The SSH engine for hosts that follow the global setting: the built-in
    * engine unless OpenSSH was chosen (an advanced option kept for compatibility). */
   sshEngine: SshEngine;
@@ -23,6 +27,8 @@ let current: Settings = {
   terminalFontSize: 13,
   terminalScrollback: 10000,
   terminalOptionAsMeta: false,
+  editorCommand: "",
+  followTerminalFolder: false,
   sshEngine: "russh",
   crashReports: null,
   usageStats: false,

@@ -15,6 +15,8 @@ import {
   Info,
   Pencil,
   RotateCw,
+  SquarePen,
+  SquareTerminal,
   Trash2,
   Upload,
   X,
@@ -30,6 +32,10 @@ import { Menu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   cancelTransfer,
+  editOpen,
+  editPrepare,
+  editStop,
+  editWatch,
   isTauri,
   openFiles,
   pickUploads,
@@ -66,6 +72,18 @@ import {
 } from "@/lib/transferQueue";
 import { baseName, formatSize, locate, localName, parentPath, resolvePath, uploadConflicts } from "@/lib/remotePath";
 import { cn } from "@/lib/utils";
+import {
+  checkEditable,
+  editConflict,
+  editKey,
+  FOLLOW_DEBOUNCE_MS,
+  isEditableName,
+  stampOf,
+  type EditingFile,
+  type RemoteStamp,
+} from "@/lib/remoteEdit";
+import { onSettings, settings, updateSettings } from "@/lib/settings";
+import { followTarget, onTerminalCwd, terminalCwd } from "@/lib/terminalCwd";
 
 interface TransferItem {
   /** The pane's own id; `backendId` is the one the backend gave it once started. */
@@ -85,6 +103,8 @@ interface TransferItem {
   total: number | null;
   rate?: Rate;
   message?: string;
+  /** Set when the transfer belongs to a file opened in an editor: the download that opens it or the upload of a save. */
+  edit?: { key: string; step: "open" | "save" };
 }
 
 type Editing = { kind: "mkdir"; value: string } | { kind: "rename"; from: string; value: string };
@@ -135,6 +155,15 @@ export function FilesPane({
   /** Items cancelled while their start call was still on its way. */
   const cancelAsked = useRef(new Set<string>());
   const cwdRef = useRef("");
+  /** Files opened in an editor, and what stops listening for their saves. */
+  const [edits, setEdits] = useState<EditingFile[]>([]);
+  const editsRef = useRef<EditingFile[]>([]);
+  editsRef.current = edits;
+  const stopListening = useRef(new Map<string, () => void>());
+  /** Saves that came in while the previous one was still uploading. */
+  const savedAgain = useRef(new Set<string>());
+  const [follow, setFollow] = useState(settings().followTerminalFolder);
+  const [terminal, setTerminal] = useState(() => terminalCwd(hostId));
   /** The listing of `cwdRef`, for checking what an upload would replace. */
   const entriesRef = useRef<RemoteFile[]>([]);
 
@@ -228,13 +257,18 @@ export function FilesPane({
         } else if (event.kind === "done") {
           settle((current) => ({ state: "done", bytes: current.total ?? current.bytes }));
           if (item.upload && handle && cwdRef.current === item.dir) void navigate(handle, item.dir);
+          if (item.edit) editEnded.current(item.edit, "done");
         } else if (event.kind === "failed") {
           settle(() => ({ state: "failed", message: failureMessage(item.remote, event.message) }));
-        } else settle(() => ({ state: "cancelled" }));
+          if (item.edit) editEnded.current(item.edit, "failed");
+        } else {
+          settle(() => ({ state: "cancelled" }));
+          if (item.edit) editEnded.current(item.edit, "failed");
+        }
       };
       try {
         const started = await startTransfer(
-          { hostId, upload: item.upload, remote: item.target, local: item.upload ? item.local : undefined },
+          { hostId, upload: item.upload, remote: item.target, local: item.upload || item.edit ? item.local : undefined },
           onEvent,
         );
         updateTransfer(item.id, { backendId: started.id });
@@ -259,7 +293,13 @@ export function FilesPane({
   }, [transfers, begin]);
 
   const transfer = useCallback(
-    (upload: boolean, remote: string, local: string | undefined, total: number | null) => {
+    (
+      upload: boolean,
+      remote: string,
+      local: string | undefined,
+      total: number | null,
+      edit?: { key: string; step: "open" | "save" },
+    ) => {
       const source = upload ? (local ?? "") : remote;
       const item: TransferItem = {
         id: `transfer-${++queued.current}`,
@@ -272,11 +312,15 @@ export function FilesPane({
         state: "queued",
         bytes: 0,
         total,
+        edit,
       };
       setTransfers((current) => [...current, item]);
     },
     [],
   );
+
+  /** Set below, once the edit helpers exist; `begin` is older than they are. */
+  const editEnded = useRef<(edit: { key: string; step: "open" | "save" }, result: "done" | "failed") => void>(() => {});
 
   const cancelItem = (item: TransferItem) => {
     if (item.state === "running") {
@@ -284,6 +328,7 @@ export function FilesPane({
       else cancelAsked.current.add(item.id);
     }
     updateTransfer(item.id, { state: "cancelled" });
+    if (item.edit) editEnded.current(item.edit, "failed");
   };
 
   const retryItem = (item: TransferItem) => {
@@ -328,6 +373,144 @@ export function FilesPane({
     });
     return () => void unlisten.then((stop) => stop());
   }, [active, handle, uploadPaths]);
+
+  const patchEdit = useCallback((key: string, patch: Partial<EditingFile>) => {
+    setEdits((current) => current.map((file) => (file.key === key ? { ...file, ...patch } : file)));
+  }, []);
+
+  /** The remote file as it is now, for comparing with what was downloaded. */
+  const remoteStamp = async (files: FilesHandle, dir: string, name: string): Promise<RemoteStamp | null> => {
+    const found = (await files.list(dir)).find((entry) => entry.name === name && entry.kind !== "directory");
+    return found ? stampOf(found) : null;
+  };
+
+  /** Stops watching a file, deletes its local copy and drops it from the list. */
+  const stopEdit = useCallback((file: EditingFile) => {
+    stopListening.current.get(file.key)?.();
+    stopListening.current.delete(file.key);
+    savedAgain.current.delete(file.key);
+    void editStop(file.key, file.local).catch(console.error);
+    setEdits((current) => current.filter((candidate) => candidate.key !== file.key));
+  }, []);
+
+  /** Uploads the saved copy, after asking when the remote file changed meanwhile. */
+  const saveEdit = async (key: string) => {
+    const file = editsRef.current.find((candidate) => candidate.key === key);
+    if (!file || !handle) return;
+    if (file.busy) {
+      savedAgain.current.add(key);
+      return;
+    }
+    patchEdit(key, { busy: "upload" });
+    try {
+      const conflict = editConflict(file.base, await remoteStamp(handle, file.dir, file.name));
+      if (conflict === "changed" || conflict === "gone") {
+        const gone = conflict === "gone";
+        const go = await confirm({
+          title: (gone ? t.editGoneTitle : t.editConflictTitle).replace("{name}", file.name),
+          body: gone ? t.editGoneBody : t.editConflictBody,
+          verb: gone ? t.editRecreate : t.editOverwrite,
+          destructive: !gone,
+        });
+        if (!go) {
+          patchEdit(key, { busy: null });
+          return;
+        }
+      }
+      transfer(true, file.dir, file.local, null, { key, step: "save" });
+    } catch (reason) {
+      patchEdit(key, { busy: null });
+      setActionError(`${file.remote}: ${String(reason)}`);
+    }
+  };
+  const saveRef = useRef(saveEdit);
+  saveRef.current = saveEdit;
+
+  editEnded.current = (edit, result) => {
+    const file = editsRef.current.find((candidate) => candidate.key === edit.key);
+    if (!file) return;
+    if (edit.step === "open") {
+      if (result === "failed") return stopEdit(file);
+      patchEdit(edit.key, { busy: null });
+      void (async () => {
+        try {
+          stopListening.current.set(
+            edit.key,
+            await editWatch(edit.key, file.local, () => void saveRef.current(edit.key)),
+          );
+          await editOpen(file.local);
+        } catch (reason) {
+          setActionError(`${t.editFailed.replace("{name}", file.name)}${String(reason)}`);
+          stopEdit(file);
+        }
+      })();
+      return;
+    }
+    // A save: what the remote file looks like now is the new base for the next conflict check.
+    void (async () => {
+      let base = file.base;
+      if (result === "done" && handle) base = (await remoteStamp(handle, file.dir, file.name).catch(() => null)) ?? base;
+      patchEdit(edit.key, { busy: null, base });
+      if (savedAgain.current.delete(edit.key)) void saveRef.current(edit.key);
+    })();
+  };
+
+  /** Downloads the file to a copy of its own, opens it in the editor and uploads it again on every save. */
+  const openInEditor = async (entry: RemoteFile) => {
+    if (!handle) return;
+    const check = checkEditable(entry);
+    if (check === "not-file") return setActionError(t.editNotFile);
+    if (check === "too-large") return setActionError(t.editTooLarge.replace("{name}", entry.name));
+    if (!isEditableName(entry.name)) {
+      return setActionError(`${t.editFailed.replace("{name}", entry.name)}${t.renameInvalid}`);
+    }
+    const remote = joinPath(cwd, entry.name);
+    const key = editKey(hostId, remote);
+    const existing = editsRef.current.find((file) => file.key === key);
+    if (existing) {
+      if (!existing.busy) void editOpen(existing.local).catch((reason) => setActionError(String(reason)));
+      return;
+    }
+    try {
+      const local = await editPrepare(hostId, remote);
+      setEdits((current) => [
+        ...current,
+        { key, remote, dir: cwd, name: entry.name, local, base: stampOf(entry), busy: "download" },
+      ]);
+      transfer(false, remote, local, entry.size, { key, step: "open" });
+    } catch (reason) {
+      setActionError(`${t.editFailed.replace("{name}", entry.name)}${String(reason)}`);
+    }
+  };
+
+  // The pane going away ends every edit: no watcher or copy outlives it.
+  useEffect(
+    () => () => {
+      for (const file of editsRef.current) {
+        stopListening.current.get(file.key)?.();
+        void editStop(file.key, file.local).catch(console.error);
+      }
+      stopListening.current.clear();
+    },
+    [],
+  );
+
+  useEffect(() => onSettings((next) => setFollow(next.followTerminalFolder)), []);
+  useEffect(() => onTerminalCwd(hostId, setTerminal), [hostId]);
+  useEffect(() => setTerminal(terminalCwd(hostId)), [hostId]);
+
+  // Follows the terminal's folder once it has stayed put for a moment. The
+  // pane's own folder is read when the timer fires, so browsing elsewhere is
+  // only undone by the terminal's next move.
+  useEffect(() => {
+    if (!handle) return;
+    if (!followTarget({ enabled: follow, state: terminal, shown: "" })) return;
+    const timer = setTimeout(() => {
+      const target = followTarget({ enabled: follow, state: terminal, shown: cwdRef.current });
+      if (target) void navigate(handle, target, false, () => {});
+    }, FOLLOW_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [follow, terminal, handle, navigate]);
 
   const open = (entry: RemoteFile) => {
     if (!handle) return;
@@ -511,7 +694,7 @@ export function FilesPane({
         </>
       }
     >
-      <div className="px-3 pt-2 pb-2">
+      <div className="flex items-center gap-1 px-3 pt-2 pb-2">
         <Input
           value={pathInput}
           onChange={(event) => setPathInput(event.target.value)}
@@ -522,8 +705,23 @@ export function FilesPane({
           }}
           aria-label={t.path}
           spellCheck={false}
-          className="h-8 font-mono text-callout"
+          className="h-8 min-w-0 flex-1 font-mono text-callout"
         />
+        <Tooltip label={terminal.integration ? t.followTerminalOn : t.followTerminalNeedsIntegration}>
+          <span className="inline-flex">
+            <Button
+              variant="quiet"
+              size="icon-sm"
+              aria-label={t.followTerminal}
+              aria-pressed={follow && terminal.integration}
+              disabled={!terminal.integration}
+              className={cn(follow && terminal.integration && "bg-accent-soft text-(--accent)")}
+              onClick={() => void updateSettings({ followTerminalFolder: !follow }).catch((reason) => setActionError(String(reason)))}
+            >
+              <SquareTerminal />
+            </Button>
+          </span>
+        </Tooltip>
       </div>
 
       {actionError && (
@@ -604,6 +802,7 @@ export function FilesPane({
               onOpen={() => open(entry)}
               onMove={(step, extend) => move(entry.name, step, extend)}
               onDownload={() => downloadEntries(targetsOf(selection, entry.name))}
+              onEdit={entry.kind === "directory" ? undefined : () => void openInEditor(entry)}
               onRename={() => setEditing({ kind: "rename", from: entry.name, value: entry.name })}
               onProperties={() => setProperties(entry)}
               onDelete={() => void removeEntries(targetsOf(selection, entry.name))}
@@ -620,6 +819,28 @@ export function FilesPane({
           </div>
         )}
       </div>
+
+      {edits.length > 0 && (
+        <section className="shrink-0 border-t px-2 pt-2 pb-2" aria-label={t.editingFiles}>
+          <h3 className="px-2 pb-1 text-callout text-label-2">{t.editingFiles}</h3>
+          <ul className="space-y-0.5">
+            {edits.map((file) => (
+              <li key={file.key} className="flex items-center gap-2 rounded-xs px-2 py-0.5 text-callout">
+                <SquarePen className="size-4 shrink-0 text-(--accent)" strokeWidth={1.5} />
+                <span className="min-w-0 flex-1 truncate" title={file.remote}>
+                  {file.name}
+                </span>
+                <span className="shrink-0 text-label-3">
+                  {file.busy === "download" ? t.editBusyDownload : file.busy === "upload" ? t.editBusyUpload : t.editWatching}
+                </span>
+                <IconButton label={t.stopEditing} onClick={() => stopEdit(file)}>
+                  <X />
+                </IconButton>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {transfers.length > 0 && (
         <section className="max-h-56 shrink-0 overflow-y-auto border-t px-2 pt-2 pb-3">
@@ -730,6 +951,7 @@ function EntryRow({
   onOpen,
   onMove,
   onDownload,
+  onEdit,
   onRename,
   onProperties,
   onDelete,
@@ -740,6 +962,8 @@ function EntryRow({
   onOpen: () => void;
   onMove: (step: 1 | -1, extend: boolean) => void;
   onDownload: () => void;
+  /** Absent for a folder. */
+  onEdit?: () => void;
   onRename: () => void;
   onProperties: () => void;
   onDelete: () => void;
@@ -783,6 +1007,7 @@ function EntryRow({
         <Menu
           label={t.more}
           items={[
+            ...(onEdit ? [{ key: "edit", label: t.openInEditor, icon: <SquarePen />, onSelect: onEdit }] : []),
             { key: "rename", label: t.rename, icon: <Pencil />, shortcut: shortcutHint("rename"), onSelect: onRename },
             { key: "properties", label: t.properties, icon: <Info />, shortcut: shortcutHint("properties"), onSelect: onProperties },
             "separator",

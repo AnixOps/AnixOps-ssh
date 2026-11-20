@@ -77,3 +77,15 @@ describe("ShellIntegrationLineSource once the shell is ready", () => {
     expect(source.line()).toBe("ls");
   });
 });
+
+describe("ShellIntegrationLineSource change notice", () => {
+  it("fires when the shell reports itself and when the folder changes", () => {
+    const source = new ShellIntegrationLineSource();
+    let count = 0;
+    source.onChange(() => count++);
+    source.handle({ kind: "ready" });
+    source.handle({ kind: "cwd", path: "/srv" });
+    expect(count).toBe(2);
+    expect(source.cwd()).toBe("/srv");
+  });
+});

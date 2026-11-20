@@ -118,7 +118,7 @@ export async function previewTransfer(
       timers.delete(id);
       if (request.upload) {
         const siblings = (tree[request.remote] ??= []);
-        siblings.push(file(nameOf(remote), 18233, "Oct 14 09:30"));
+        if (!siblings.some((entry) => entry.name === nameOf(remote))) siblings.push(file(nameOf(remote), 18233, "Oct 14 09:30"));
       }
       onEvent({ kind: "done" });
     } else {

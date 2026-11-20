@@ -36,6 +36,7 @@ import { commandNames, loadSpec } from "@/lib/completion/specs";
 import { commandOutput, lastLines } from "@/lib/ai/buffer";
 import type { ContextSource } from "@/lib/ai/context";
 import { attachShellIntegration, type ShellIntegrationHandle } from "@/lib/shellIntegration/attach";
+import { clearTerminalCwd, publishTerminalCwd } from "@/lib/terminalCwd";
 import { ShellIntegrationLineSource } from "@/lib/shellIntegration/lineSource";
 import { pasteNeedsConfirm, type BroadcastScope, targetsFor } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
@@ -148,6 +149,11 @@ export function TerminalView({
       return { x: cursor.x, y: cursor.absoluteY, cols: cursor.cols };
     });
     const integration = attachShellIntegration(terminal, lineSource);
+    // The files pane can follow this terminal's folder.
+    const cwdOwner = Symbol("terminal");
+    if (hostId) {
+      lineSource.onChange(() => publishTerminalCwd(hostId, cwdOwner, { integration: lineSource.isActive(), cwd: lineSource.cwd() }));
+    }
     integrationRef.current = integration;
     const controller = new CompletionController({
       source: lineSource,
@@ -393,6 +399,7 @@ export function TerminalView({
       stopView();
       stopPrefs();
       integration.dispose();
+      if (hostId) clearTerminalCwd(hostId, cwdOwner);
       integrationRef.current = null;
       writeParsed.dispose();
       bufferChange.dispose();
