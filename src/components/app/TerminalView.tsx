@@ -9,6 +9,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CompletionPopup, type PopupPlacement } from "@/components/app/CompletionPopup";
 import { AskAiPanel, ASK_AI_WIDTH } from "@/components/app/AskAiPanel";
+import { useAiReady } from "@/lib/aiBackend";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasteConfirm, BroadcastBadge } from "@/components/app/PaneOverlays";
@@ -94,6 +95,8 @@ export function TerminalView({
   const endedRef = useRef(false);
   const integrationRef = useRef<ShellIntegrationHandle | null>(null);
   const [askOpen, setAskOpen] = useState(false);
+  // Hidden until AI is on and configured, so it cannot be hit by accident.
+  const aiReady = useAiReady();
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
   const findInputRef = useRef<HTMLInputElement>(null);
@@ -508,7 +511,7 @@ export function TerminalView({
         />
       )}
 
-      {!askOpen && (
+      {aiReady && !askOpen && (
         <div className="absolute top-3 right-4 z-dropdown">
           <Tooltip label={t.askAi}>
             <Button variant="quiet" size="icon-sm" aria-label={t.askAi} onClick={() => setAskOpen(true)}>
@@ -535,7 +538,7 @@ export function TerminalView({
           initial={{ opacity: 0, y: -6 }}
           animate={{ opacity: 1, y: 0, transition: { duration: duration.toggle, ease: ease.emphasized } }}
           exit={{ opacity: 0, y: -6, transition: leave }}
-          style={{ right: askOpen ? `calc(${ASK_AI_WIDTH} + 1rem)` : "3.25rem" }}
+          style={{ right: askOpen ? `calc(${ASK_AI_WIDTH} + 1rem)` : aiReady ? "3.25rem" : "1rem" }}
           className="material-bar absolute top-3 z-dropdown flex items-center gap-1 rounded-sm p-1 shadow-2 ring-1 ring-separator"
         >
           <Input
