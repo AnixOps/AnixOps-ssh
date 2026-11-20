@@ -772,7 +772,9 @@ export type TunnelKind = "local" | "remote" | "dynamic";
 export type TunnelStatus =
   | { state: "stopped" }
   | { state: "starting" }
-  | { state: "running" }
+  /** `port`: the port that listens (it differs from the saved one for a
+   *  tunnel saved with port 0, any free port). */
+  | { state: "running"; port?: number }
   | { state: "failed"; message: string };
 
 export interface Tunnel {
@@ -856,7 +858,7 @@ const previewTunnels: Tunnel[] = [
     bindPort: 15432,
     targetHost: "127.0.0.1",
     targetPort: 5432,
-    status: { state: "running" },
+    status: { state: "running", port: 15432 },
   },
   {
     id: "tunnel-2",

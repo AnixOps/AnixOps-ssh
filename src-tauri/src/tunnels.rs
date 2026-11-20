@@ -4,7 +4,7 @@
 use crate::askpass;
 use crate::daemon::{self, DaemonState};
 use crate::hosts::{self, load_config, open_store};
-use easyssh_core::tunnel::spawn_tunnel;
+use easyssh_core::tunnel::{bare_host, spawn_tunnel};
 use easyssh_core::{OpenSsh, Tunnel, TunnelKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -25,8 +25,15 @@ const REMOTE_SETTLE: Duration = Duration::from_secs(3);
 pub enum TunnelStatus {
     Stopped,
     Starting,
-    Running,
-    Failed { message: String },
+    Running {
+        /// The port that listens, when known; it differs from the saved one
+        /// for a tunnel saved with port 0 (any free port).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+    },
+    Failed {
+        message: String,
+    },
 }
 
 #[derive(Clone, Serialize)]
@@ -112,7 +119,9 @@ pub fn remote_status(app: &AppHandle, status: easysshd::link::TunnelStatus) {
     let tunnels = app.state::<Tunnels>();
     let next = match status.state.as_str() {
         "starting" => TunnelStatus::Starting,
-        "running" => TunnelStatus::Running,
+        "running" => TunnelStatus::Running {
+            port: status.bind_port,
+        },
         "stopped" => TunnelStatus::Stopped,
         _ => TunnelStatus::Failed {
             message: status
@@ -122,7 +131,7 @@ pub fn remote_status(app: &AppHandle, status: easysshd::link::TunnelStatus) {
     };
     if let Ok(mut remote) = tunnels.remote.lock() {
         match next {
-            TunnelStatus::Starting | TunnelStatus::Running => {
+            TunnelStatus::Starting | TunnelStatus::Running { .. } => {
                 remote.insert(status.id.clone());
             }
             _ => {
@@ -175,9 +184,11 @@ pub fn tunnels_list(tunnels: State<'_, Tunnels>) -> Result<Vec<TunnelView>, Stri
         .collect())
 }
 
+/// A field without surrounding space, and an IPv6 address without the
+/// brackets it may have been typed in (`[::1]`); `None` when empty.
 fn trimmed(value: Option<String>) -> Option<String> {
     value
-        .map(|value| value.trim().to_owned())
+        .map(|value| bare_host(&value).to_owned())
         .filter(|value| !value.is_empty())
 }
 
@@ -314,7 +325,13 @@ fn watch(
                 None => started.elapsed() >= REMOTE_SETTLE,
             };
             if up {
-                emit(app, id, TunnelStatus::Running);
+                emit(
+                    app,
+                    id,
+                    TunnelStatus::Running {
+                        port: (tunnel.bind_port != 0).then_some(tunnel.bind_port),
+                    },
+                );
             }
         }
         std::thread::sleep(Duration::from_millis(300));
@@ -341,12 +358,14 @@ fn watch(
     emit(app, id, status);
 }
 
-/// The local address to probe for local and SOCKS forwards.
+/// The local address to probe for local and SOCKS forwards. `None` for a
+/// remote forward and for port 0, whose port `ssh` does not tell: those
+/// count as running once `ssh` stayed up for a moment.
 fn probe_address(tunnel: &Tunnel) -> Option<SocketAddr> {
-    if tunnel.kind == TunnelKind::Remote {
+    if tunnel.kind == TunnelKind::Remote || tunnel.bind_port == 0 {
         return None;
     }
-    let host = match tunnel.bind_address.as_deref() {
+    let host = match tunnel.bind_address.as_deref().map(bare_host) {
         None | Some("") | Some("*") | Some("0.0.0.0") | Some("localhost") => "127.0.0.1",
         Some("::") => "::1",
         Some(host) => host,
@@ -407,5 +426,33 @@ mod tests {
         assert_eq!(probe_address(&tunnel), Some(([127, 0, 0, 1], 1080).into()));
         tunnel.kind = TunnelKind::Remote;
         assert_eq!(probe_address(&tunnel), None);
+        tunnel.kind = TunnelKind::Local;
+        tunnel.bind_address = Some("[::1]".into());
+        assert_eq!(
+            probe_address(&tunnel),
+            Some((std::net::Ipv6Addr::LOCALHOST, 1080).into())
+        );
+        tunnel.bind_port = 0;
+        assert_eq!(probe_address(&tunnel), None);
+    }
+
+    #[test]
+    fn saved_addresses_lose_their_brackets() {
+        assert_eq!(trimmed(Some(" [::1] ".into())).as_deref(), Some("::1"));
+        assert_eq!(trimmed(Some("db".into())).as_deref(), Some("db"));
+        assert_eq!(trimmed(Some("  ".into())), None);
+        assert_eq!(trimmed(None), None);
+    }
+
+    #[test]
+    fn a_running_status_names_its_port() {
+        assert_eq!(
+            serde_json::to_value(TunnelStatus::Running { port: Some(40123) }).unwrap(),
+            serde_json::json!({"state": "running", "port": 40123})
+        );
+        assert_eq!(
+            serde_json::to_value(TunnelStatus::Running { port: None }).unwrap(),
+            serde_json::json!({"state": "running"})
+        );
     }
 }
