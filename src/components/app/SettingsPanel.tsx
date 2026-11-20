@@ -226,9 +226,9 @@ export function SettingsPanel({
               !status
                 ? "…"
                 : status.agent === "ready"
-                  ? `${status.agentKeys.length} ${t.agentReady}`
+                  ? `${status.agentKeys.length} ${t.agentReady}${status.agentKind === "pageant" ? ` · ${t.agentPageant}` : status.agentKind === "openssh" ? ` · ${t.agentOpenSsh}` : ""}`
                   : status.agent === "empty"
-                    ? t.agentEmpty
+                    ? `${t.agentEmpty}${status.agentKind === "pageant" ? ` · ${t.agentPageant}` : status.agentKind === "openssh" ? ` · ${t.agentOpenSsh}` : ""}`
                     : t.agentUnavailable
             }
           />
