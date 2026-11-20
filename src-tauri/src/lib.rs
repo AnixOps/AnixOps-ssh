@@ -45,6 +45,8 @@ mod tunnels;
 mod update;
 #[cfg(desktop)]
 mod vault;
+#[cfg(desktop)]
+mod webview_chrome;
 
 #[cfg(mobile)]
 mod mobile;
@@ -208,6 +210,7 @@ fn desktop_run() {
                     eprintln!("cannot register the anixops-ssh:// scheme: {error}");
                 }
             }
+            webview_chrome::lock_down(app);
             daemon::start(app.handle());
             edit::clean_all(app.handle());
             telemetry::start_background();

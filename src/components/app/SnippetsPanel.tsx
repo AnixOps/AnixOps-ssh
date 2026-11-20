@@ -115,6 +115,7 @@ export function SnippetsPanel({ activeKey }: { activeKey: string | null }) {
             <motion.div
               key={snippet.id}
               {...appear}
+              data-context-row
               className="group relative rounded-sm px-2 py-2 hover:bg-fill-1"
             >
               <button
@@ -134,6 +135,7 @@ export function SnippetsPanel({ activeKey }: { activeKey: string | null }) {
                 </SmallButton>
                 <Menu
                   label={t.more}
+                  contextRow
                   items={[
                     { key: "edit", label: t.edit, icon: <Pencil />, onSelect: () => setDraft({ ...snippet }) },
                     "separator",

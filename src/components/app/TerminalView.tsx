@@ -5,7 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { CaseSensitive, ChevronDown, ChevronUp, ClipboardPaste, Copy, Eraser, LoaderCircle, Regex, RotateCw, Search, Sparkles, SquareArrowOutUpRight, Unplug, WholeWord, X } from "lucide-react";
+import { CaseSensitive, ChevronDown, ChevronUp, ClipboardPaste, Copy, Eraser, LoaderCircle, Regex, RotateCw, Search, Sparkles, SquareArrowOutUpRight, TextSelect, Unplug, WholeWord, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CompletionPopup, type PopupPlacement } from "@/components/app/CompletionPopup";
@@ -765,6 +765,12 @@ export function TerminalView({
       icon: <ClipboardPaste />,
       shortcut: shortcutHint("paste"),
       onSelect: () => actionsRef.current.paste(),
+    },
+    {
+      key: "select-all",
+      label: t.selectAll,
+      icon: <TextSelect />,
+      onSelect: () => terminalRef.current?.selectAll(),
     },
     {
       key: "find",
