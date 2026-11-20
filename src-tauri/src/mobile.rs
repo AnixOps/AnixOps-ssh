@@ -411,6 +411,20 @@ async fn sftp_rename(
 }
 
 #[tauri::command]
+async fn sftp_chmod(
+    state: State<'_, Mobile>,
+    id: String,
+    path: String,
+    mode: u32,
+    recursive: bool,
+) -> Result<(), String> {
+    sftp_entry(&state, &id)?
+        .chmod(&path, mode, recursive)
+        .await
+        .map_err(files_error)
+}
+
+#[tauri::command]
 async fn sftp_close(state: State<'_, Mobile>, id: String) -> Result<(), String> {
     state.engine.files().close(&id).await;
     Ok(())
@@ -799,6 +813,7 @@ pub fn run() {
             sftp_mkdir,
             sftp_remove,
             sftp_rename,
+            sftp_chmod,
             sftp_close,
             transfer_start,
             transfer_cancel,

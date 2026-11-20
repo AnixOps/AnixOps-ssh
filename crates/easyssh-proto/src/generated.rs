@@ -1739,16 +1739,28 @@ pub struct SessionWriteParams {
     pub data: ::std::string::String,
     pub session_id: ::std::string::String,
 }
+///Command `sftp.chmod` payload. `mode` holds the permission bits (`0o755` style, with setuid, setgid and sticky). `recursive` applies it to everything inside a folder too; links are skipped, never followed.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SftpChmodParams {
+    pub mode: i64,
+    pub path: ::std::string::String,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub recursive: ::std::option::Option<bool>,
+    pub sftp_id: ::std::string::String,
+}
 ///Command `sftp.close` payload.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct SftpCloseParams {
     pub sftp_id: ::std::string::String,
 }
-///`modified` is Unix seconds.
+///`modified` is Unix seconds. `uid` and `gid` are present when the server sent them.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct SftpEntry {
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub gid: ::std::option::Option<u64>,
     pub kind: SftpEntryKind,
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub modified: ::std::option::Option<u64>,
@@ -1756,6 +1768,8 @@ pub struct SftpEntry {
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub permissions: ::std::option::Option<u64>,
     pub size: u64,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub uid: ::std::option::Option<u64>,
 }
 ///`SftpEntryKind`
 #[derive(

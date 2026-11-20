@@ -129,7 +129,7 @@ pub fn entry_json(entry: &DirEntry) -> Value {
         EntryKind::Symlink => "symlink",
         EntryKind::Other => "other",
     };
-    json!({
+    let mut json = json!({
         "name": entry.name,
         "kind": kind,
         "size": entry.stat.size,
@@ -139,7 +139,14 @@ pub fn entry_json(entry: &DirEntry) -> Value {
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs()),
         "permissions": entry.stat.permissions,
-    })
+    });
+    if let Some(uid) = entry.stat.uid {
+        json["uid"] = json!(uid);
+    }
+    if let Some(gid) = entry.stat.gid {
+        json["gid"] = json!(gid);
+    }
+    json
 }
 
 /// `ls -l` style permissions: `drwxr-xr-x`.
@@ -152,10 +159,24 @@ pub fn mode_string(kind: EntryKind, permissions: Option<u32>) -> String {
     });
     let bits = permissions.unwrap_or(0);
     for (index, symbol) in "rwxrwxrwx".chars().enumerate() {
-        text.push(if bits & (1 << (8 - index)) != 0 {
-            symbol
-        } else {
-            '-'
+        let set = bits & (1 << (8 - index)) != 0;
+        // Setuid, setgid and sticky replace the execute column, as in `ls -l`.
+        let special = match index {
+            2 => Some(('s', 'S', 0o4000)),
+            5 => Some(('s', 'S', 0o2000)),
+            8 => Some(('t', 'T', 0o1000)),
+            _ => None,
+        };
+        text.push(match special {
+            Some((on, off, bit)) if bits & bit != 0 => {
+                if set {
+                    on
+                } else {
+                    off
+                }
+            }
+            _ if set => symbol,
+            _ => '-',
         });
     }
     text
@@ -958,6 +979,16 @@ impl SftpEntry {
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), SshError> {
         self.sftp.rename(from, to).await
     }
+
+    /// Sets the permission bits of `path`, and of everything in it when
+    /// `recursive` is set.
+    pub async fn chmod(&self, path: &str, mode: u32, recursive: bool) -> Result<(), SshError> {
+        if recursive {
+            self.sftp.set_permissions_all(path, mode).await
+        } else {
+            self.sftp.set_stat(path, Some(mode), None).await
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1052,6 +1083,10 @@ mod tests {
         assert_eq!(mode_string(EntryKind::File, Some(0o640)), "-rw-r-----");
         assert_eq!(mode_string(EntryKind::File, None), "----------");
         assert_eq!(mode_string(EntryKind::Symlink, Some(0o777)), "lrwxrwxrwx");
+        assert_eq!(mode_string(EntryKind::File, Some(0o4755)), "-rwsr-xr-x");
+        assert_eq!(mode_string(EntryKind::File, Some(0o4644)), "-rwSr--r--");
+        assert_eq!(mode_string(EntryKind::Dir, Some(0o1777)), "drwxrwxrwt");
+        assert_eq!(mode_string(EntryKind::Dir, Some(0o2750)), "drwxr-s---");
         let row = remote_file_json(&DirEntry {
             name: "a.txt".into(),
             stat: easyssh_ssh::FileStat {

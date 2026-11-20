@@ -1,3 +1,4 @@
+import { formatSymbolic } from "./filePermissions";
 import type {
   FilesHandle,
   RemoteFile,
@@ -13,6 +14,8 @@ const dir = (name: string, modified = "Oct 14 09:12"): RemoteFile => ({
   size: 4096,
   modified,
   permissions: "drwxr-xr-x",
+  owner: "deploy",
+  group: "deploy",
 });
 const file = (name: string, size: number, modified = "Oct 13 18:40"): RemoteFile => ({
   name,
@@ -20,6 +23,8 @@ const file = (name: string, size: number, modified = "Oct 13 18:40"): RemoteFile
   size,
   modified,
   permissions: "-rw-r--r--",
+  owner: "deploy",
+  group: "deploy",
 });
 
 const tree: Record<string, RemoteFile[]> = {
@@ -58,10 +63,34 @@ export function previewFiles(): FilesHandle {
     async remove(path) {
       const siblings = tree[parentOf(path)] ?? [];
       tree[parentOf(path)] = siblings.filter((entry) => entry.name !== nameOf(path));
+      for (const key of Object.keys(tree)) if (key === path || key.startsWith(`${path}/`)) delete tree[key];
     },
     async rename(from, to) {
       const entry = tree[parentOf(from)]?.find((candidate) => candidate.name === nameOf(from));
-      if (entry) entry.name = nameOf(to);
+      if (!entry) throw new Error(`${from}: No such file`);
+      // Like the servers: a missing folder or an existing target is an error.
+      const target = tree[parentOf(to)];
+      if (!target) throw new Error(`${parentOf(to)}: No such file or directory`);
+      if (target.some((candidate) => candidate.name === nameOf(to))) throw new Error(`${to}: File exists`);
+      tree[parentOf(from)] = tree[parentOf(from)].filter((candidate) => candidate !== entry);
+      entry.name = nameOf(to);
+      target.push(entry);
+      for (const key of Object.keys(tree)) {
+        if (key === from || key.startsWith(`${from}/`)) {
+          tree[to + key.slice(from.length)] = tree[key];
+          delete tree[key];
+        }
+      }
+    },
+    async chmod(path, mode, recursive) {
+      const apply = (entry: RemoteFile, folder: string) => {
+        if (entry.kind === "symlink") return;
+        entry.permissions = (entry.kind === "directory" ? "d" : "-") + formatSymbolic(mode);
+        if (recursive && entry.kind === "directory") for (const child of tree[`${folder}/${entry.name}`] ?? []) apply(child, `${folder}/${entry.name}`);
+      };
+      const entry = tree[parentOf(path)]?.find((candidate) => candidate.name === nameOf(path));
+      if (!entry) throw new Error(`${path}: No such file`);
+      apply(entry, parentOf(path));
     },
     close() {},
   };

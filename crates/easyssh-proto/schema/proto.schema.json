@@ -3394,6 +3394,14 @@
               "type": "null"
             }
           ]
+        },
+        "uid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gid": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "required": [
@@ -3404,7 +3412,7 @@
         "permissions"
       ],
       "additionalProperties": false,
-      "description": "`modified` is Unix seconds."
+      "description": "`modified` is Unix seconds. `uid` and `gid` are present when the server sent them."
     },
     "SftpOpenParams": {
       "type": "object",
@@ -3591,6 +3599,32 @@
       ],
       "additionalProperties": false,
       "description": "Command `sftp.rename` payload."
+    },
+    "SftpChmodParams": {
+      "type": "object",
+      "properties": {
+        "sftp_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4095
+        },
+        "recursive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sftp_id",
+        "path",
+        "mode"
+      ],
+      "additionalProperties": false,
+      "description": "Command `sftp.chmod` payload. `mode` holds the permission bits (`0o755` style, with setuid, setgid and sticky). `recursive` applies it to everything inside a folder too; links are skipped, never followed."
     },
     "SftpCloseParams": {
       "type": "object",
