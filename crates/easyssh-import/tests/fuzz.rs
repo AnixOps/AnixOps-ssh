@@ -29,6 +29,7 @@ fn parsers() -> Vec<Parser> {
         ("xshell", xshell::parse),
         ("finalshell", finalshell::parse),
         ("termius", termius::parse),
+        ("ansible", ansible::parse),
         ("csv", csv_format::parse),
         ("auto", import_auto),
     ]
@@ -43,6 +44,7 @@ fn detectors() -> Vec<fn(&[u8]) -> bool> {
         xshell::detect,
         finalshell::detect,
         termius::detect,
+        ansible::detect,
         csv_format::detect,
     ]
 }
@@ -77,6 +79,8 @@ fn fixtures() -> Vec<Vec<u8>> {
         "finalshell.json",
         "termius.csv",
         "termius.json",
+        "ansible/inventory.yml",
+        "ansible/inventory.ini",
         "hosts.csv",
     ] {
         out.push(std::fs::read(dir.join(name)).unwrap());

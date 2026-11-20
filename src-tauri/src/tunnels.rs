@@ -1,11 +1,17 @@
 //! Port-forwarding tunnels: saved in the config, run as `ssh -N`, and
 //! reported to the frontend through the `tunnel-status` event.
+//!
+//! Hosts on the built-in engine run their tunnels in the daemon, which keeps
+//! them up across dropped connections. An `ssh -N` that exits after it was
+//! up (the connection dropped) is started again with growing delays, the
+//! same [`ReconnectPolicy`] the built-in engine uses.
 
 use crate::askpass;
 use crate::daemon::{self, DaemonState};
 use crate::hosts::{self, load_config, open_store};
 use easyssh_core::tunnel::{bare_host, spawn_tunnel};
 use easyssh_core::{OpenSsh, Tunnel, TunnelKind};
+use easyssh_engine::supervisor::ReconnectPolicy;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -30,10 +36,45 @@ pub enum TunnelStatus {
         /// for a tunnel saved with port 0 (any free port).
         #[serde(skip_serializing_if = "Option::is_none")]
         port: Option<u16>,
+        /// Why the last connection through the forward could not be passed
+        /// on (the tunnel itself keeps running).
+        #[serde(rename = "lastError", skip_serializing_if = "Option::is_none")]
+        last_error: Option<String>,
+        #[serde(rename = "errorCount", skip_serializing_if = "is_zero")]
+        error_count: u64,
+    },
+    /// The connection dropped; a new one is being made.
+    Reconnecting {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
     Failed {
         message: String,
     },
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+impl TunnelStatus {
+    fn running(port: Option<u16>) -> TunnelStatus {
+        TunnelStatus::Running {
+            port,
+            last_error: None,
+            error_count: 0,
+        }
+    }
+
+    /// Whether the tunnel is up or on its way (the switch shows it on).
+    fn is_active(&self) -> bool {
+        matches!(
+            self,
+            TunnelStatus::Starting
+                | TunnelStatus::Running { .. }
+                | TunnelStatus::Reconnecting { .. }
+        )
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -117,29 +158,88 @@ pub(crate) fn emit(app: &AppHandle, id: &str, status: TunnelStatus) {
 /// A status the daemon reported for one of its tunnels.
 pub fn remote_status(app: &AppHandle, status: easysshd::link::TunnelStatus) {
     let tunnels = app.state::<Tunnels>();
-    let next = match status.state.as_str() {
+    let next = daemon_status(&status);
+    if let Ok(mut remote) = tunnels.remote.lock() {
+        if next.is_active() {
+            remote.insert(status.id.clone());
+        } else {
+            remote.remove(&status.id);
+        }
+    }
+    emit(app, &status.id, next);
+}
+
+fn daemon_status(status: &easysshd::link::TunnelStatus) -> TunnelStatus {
+    match status.state.as_str() {
         "starting" => TunnelStatus::Starting,
         "running" => TunnelStatus::Running {
             port: status.bind_port,
+            last_error: status
+                .last_channel_error
+                .clone()
+                .filter(|_| status.channel_errors > 0),
+            error_count: status.channel_errors,
+        },
+        "reconnecting" => TunnelStatus::Reconnecting {
+            message: status.error.clone(),
         },
         "stopped" => TunnelStatus::Stopped,
         _ => TunnelStatus::Failed {
             message: status
                 .error
+                .clone()
                 .unwrap_or_else(|| "the tunnel stopped".to_owned()),
         },
-    };
-    if let Ok(mut remote) = tunnels.remote.lock() {
-        match next {
-            TunnelStatus::Starting | TunnelStatus::Running { .. } => {
-                remote.insert(status.id.clone());
-            }
-            _ => {
-                remote.remove(&status.id);
-            }
-        }
     }
-    emit(app, &status.id, next);
+}
+
+/// After the link to the daemon came back: the daemon may have restarted
+/// and lost its tunnels, so ask it which run and mark the rest stopped.
+pub fn resync_remote(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let Some(link) = app.state::<DaemonState>().link() else {
+            return;
+        };
+        let rows: Vec<easysshd::link::TunnelStatus> = link
+            .request("tunnel.list", serde_json::json!({}))
+            .await
+            .ok()
+            .and_then(|answer| answer["tunnels"].as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .map(easysshd::link::TunnelStatus::from_payload)
+            .collect();
+        let known: Vec<String> = app
+            .state::<Tunnels>()
+            .remote
+            .lock()
+            .map(|remote| remote.iter().cloned().collect())
+            .unwrap_or_default();
+        for id in stale_tunnels(&known, &rows) {
+            if let Ok(mut remote) = app.state::<Tunnels>().remote.lock() {
+                remote.remove(&id);
+            }
+            emit(&app, &id, TunnelStatus::Stopped);
+        }
+        for row in rows {
+            remote_status(&app, row);
+        }
+    });
+}
+
+/// The tunnels the app believes run in the daemon that the daemon does not
+/// run (any more).
+fn stale_tunnels(known: &[String], rows: &[easysshd::link::TunnelStatus]) -> Vec<String> {
+    known
+        .iter()
+        .filter(|id| {
+            !rows
+                .iter()
+                .any(|row| &row.id == *id && daemon_status(row).is_active())
+        })
+        .cloned()
+        .collect()
 }
 
 /// Stops the daemon's tunnels when the app exits (they belong to the app).
@@ -269,10 +369,28 @@ pub async fn tunnel_start(app: AppHandle, id: String) -> Result<(), String> {
             Err(error) => return Err(error.message),
         }
     }
+    let (child, errors) = spawn(&app, &tunnel)?;
+    let running = Arc::new(RunningTunnel {
+        child: Mutex::new(child),
+        stopping: AtomicBool::new(false),
+    });
+    tunnels
+        .running
+        .lock()
+        .map_err(lock_error)?
+        .insert(id.clone(), running.clone());
+    emit(&app, &id, TunnelStatus::Starting);
+    std::thread::spawn(move || watch(&app, &id, &tunnel, &running, errors));
+    Ok(())
+}
+
+/// Starts `ssh -N` for `tunnel`; its standard error is collected in the
+/// returned string.
+fn spawn(app: &AppHandle, tunnel: &Tunnel) -> Result<(Child, Arc<Mutex<String>>), String> {
     let connection = hosts::connection(&tunnel.host_id)?;
-    let env = askpass::env_for(&app, &connection.name, Some(&connection.id))?;
+    let env = askpass::env_for(app, &connection.name, Some(&connection.id))?;
     let mut child =
-        spawn_tunnel(&OpenSsh, &connection, &tunnel, &env).map_err(|error| error.to_string())?;
+        spawn_tunnel(&OpenSsh, &connection, tunnel, &env).map_err(|error| error.to_string())?;
     let stderr = child.stderr.take();
     let errors = Arc::new(Mutex::new(String::new()));
     let collected = errors.clone();
@@ -285,28 +403,106 @@ pub async fn tunnel_start(app: AppHandle, id: String) -> Result<(), String> {
             }
         }
     });
-    let running = Arc::new(RunningTunnel {
-        child: Mutex::new(child),
-        stopping: AtomicBool::new(false),
-    });
-    tunnels
-        .running
-        .lock()
-        .map_err(lock_error)?
-        .insert(id.clone(), running.clone());
-    emit(&app, &id, TunnelStatus::Starting);
-    std::thread::spawn(move || watch(&app, &id, &tunnel, &running, &errors));
-    Ok(())
+    Ok((child, errors))
 }
 
-/// Follows a tunnel until its process exits, reporting when it is up.
+/// Sleeps for `delay` unless the tunnel is stopped meanwhile (`false`).
+fn wait_unless_stopped(delay: Duration, running: &RunningTunnel) -> bool {
+    let until = Instant::now() + delay;
+    while Instant::now() < until {
+        if running.stopping.load(Ordering::Relaxed) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    !running.stopping.load(Ordering::Relaxed)
+}
+
+/// Follows a tunnel until it is stopped or given up, starting `ssh` again
+/// when the connection drops.
 fn watch(
     app: &AppHandle,
     id: &str,
     tunnel: &Tunnel,
     running: &RunningTunnel,
-    errors: &Mutex<String>,
+    mut errors: Arc<Mutex<String>>,
 ) {
+    let policy = ReconnectPolicy::default();
+    let mut attempt = 0u32;
+    let status = loop {
+        let (exit, was_up) = follow(app, id, tunnel, running);
+        // Give the standard-error reader a moment to finish.
+        std::thread::sleep(Duration::from_millis(100));
+        if running.stopping.load(Ordering::Relaxed) {
+            break TunnelStatus::Stopped;
+        }
+        let detail = errors
+            .lock()
+            .map(|text| text.trim().to_owned())
+            .unwrap_or_default();
+        let mut message = match exit {
+            _ if !detail.is_empty() => detail,
+            Some(status) => format!("ssh exited with {status}"),
+            None => "ssh stopped".to_owned(),
+        };
+        if was_up {
+            attempt = 0;
+        } else if attempt == 0 {
+            // It never came up: a wrong password or a port in use, which
+            // starting it again will not fix.
+            break TunnelStatus::Failed { message };
+        }
+        let respawned = loop {
+            if attempt >= policy.max_attempts {
+                break false;
+            }
+            attempt += 1;
+            emit(
+                app,
+                id,
+                TunnelStatus::Reconnecting {
+                    message: Some(message.clone()),
+                },
+            );
+            if !wait_unless_stopped(policy.delay(attempt), running) {
+                break false;
+            }
+            match spawn(app, tunnel) {
+                Ok((child, collected)) => {
+                    if let Ok(mut slot) = running.child.lock() {
+                        *slot = child;
+                        // Stopped while it was starting: end the new one too.
+                        if running.stopping.load(Ordering::Relaxed) {
+                            let _ = slot.kill();
+                        }
+                    }
+                    errors = collected;
+                    break true;
+                }
+                Err(error) => message = error,
+            }
+        };
+        if running.stopping.load(Ordering::Relaxed) {
+            break TunnelStatus::Stopped;
+        }
+        if !respawned {
+            break TunnelStatus::Failed { message };
+        }
+    };
+    if let Ok(mut running) = app.state::<Tunnels>().running.lock() {
+        running.remove(id);
+    }
+    emit(app, id, status);
+}
+
+/// Follows one `ssh` process until it exits, reporting when it is up.
+/// Returns how it exited and whether it was up.
+fn follow(
+    app: &AppHandle,
+    id: &str,
+    tunnel: &Tunnel,
+    running: &RunningTunnel,
+) -> (Option<std::process::ExitStatus>, bool) {
     let started = Instant::now();
     let probe = probe_address(tunnel);
     let mut up = false;
@@ -328,34 +524,13 @@ fn watch(
                 emit(
                     app,
                     id,
-                    TunnelStatus::Running {
-                        port: (tunnel.bind_port != 0).then_some(tunnel.bind_port),
-                    },
+                    TunnelStatus::running((tunnel.bind_port != 0).then_some(tunnel.bind_port)),
                 );
             }
         }
         std::thread::sleep(Duration::from_millis(300));
     };
-    if let Ok(mut running) = app.state::<Tunnels>().running.lock() {
-        running.remove(id);
-    }
-    // Give the standard-error reader a moment to finish.
-    std::thread::sleep(Duration::from_millis(100));
-    let status = if running.stopping.load(Ordering::Relaxed) {
-        TunnelStatus::Stopped
-    } else {
-        let detail = errors
-            .lock()
-            .map(|text| text.trim().to_owned())
-            .unwrap_or_default();
-        let message = match exit {
-            _ if !detail.is_empty() => detail,
-            Some(status) => format!("ssh exited with {status}"),
-            None => "ssh stopped".to_owned(),
-        };
-        TunnelStatus::Failed { message }
-    };
-    emit(app, id, status);
+    (exit, up)
 }
 
 /// The local address to probe for local and SOCKS forwards. `None` for a
@@ -447,12 +622,67 @@ mod tests {
     #[test]
     fn a_running_status_names_its_port() {
         assert_eq!(
-            serde_json::to_value(TunnelStatus::Running { port: Some(40123) }).unwrap(),
+            serde_json::to_value(TunnelStatus::running(Some(40123))).unwrap(),
             serde_json::json!({"state": "running", "port": 40123})
         );
         assert_eq!(
-            serde_json::to_value(TunnelStatus::Running { port: None }).unwrap(),
+            serde_json::to_value(TunnelStatus::running(None)).unwrap(),
             serde_json::json!({"state": "running"})
         );
+    }
+
+    fn row(id: &str, state: &str) -> easysshd::link::TunnelStatus {
+        easysshd::link::TunnelStatus::from_payload(&serde_json::json!({
+            "id": id,
+            "state": state,
+        }))
+    }
+
+    #[test]
+    fn tunnels_the_daemon_no_longer_runs_are_stale() {
+        let known = vec!["a".to_owned(), "b".to_owned(), "c".to_owned()];
+        let rows = [
+            row("a", "running"),
+            row("b", "failed"),
+            row("d", "reconnecting"),
+        ];
+        assert_eq!(stale_tunnels(&known, &rows), ["b", "c"]);
+        assert_eq!(stale_tunnels(&known, &[]).len(), 3);
+    }
+
+    #[test]
+    fn statuses_reach_the_ui_in_its_shape() {
+        let json = |status: &TunnelStatus| serde_json::to_value(status).unwrap();
+        assert_eq!(
+            json(&TunnelStatus::running(None)),
+            serde_json::json!({"state": "running"})
+        );
+        let warned = daemon_status(&easysshd::link::TunnelStatus::from_payload(
+            &serde_json::json!({
+                "id": "t",
+                "state": "running",
+                "bind_port": 40123,
+                "channel_errors": 2,
+                "last_channel_error": "127.0.0.1:1: connect failed",
+            }),
+        ));
+        assert_eq!(
+            json(&warned),
+            serde_json::json!({
+                "state": "running",
+                "port": 40123,
+                "lastError": "127.0.0.1:1: connect failed",
+                "errorCount": 2,
+            })
+        );
+        let lost = daemon_status(&easysshd::link::TunnelStatus::from_payload(
+            &serde_json::json!({"id": "t", "state": "reconnecting", "error": "lost"}),
+        ));
+        assert_eq!(
+            json(&lost),
+            serde_json::json!({"state": "reconnecting", "message": "lost"})
+        );
+        assert!(lost.is_active());
+        assert!(!TunnelStatus::Stopped.is_active());
     }
 }

@@ -20,9 +20,9 @@ pub mod workspace;
 pub use config::{ConfigStore, MigrationReport};
 pub use domain::{
     AppConfig, CommandSnippet, Connection, ConnectionTarget, DisplayDensity, EnginePreference,
-    ExperimentalFeatures, Group, Locale, SerialFlowControl, SerialParity, SerialSettings,
-    SessionRecord, SidebarNavigation, SidebarPreferences, SshEngine, TelemetryPreferences,
-    TerminalPreferences, Theme, Workspace,
+    ExperimentalFeatures, Group, Locale, ProxyKind, ProxySettings, SerialFlowControl, SerialParity,
+    SerialSettings, SessionRecord, SidebarNavigation, SidebarPreferences, SshEngine,
+    TelemetryPreferences, TerminalPreferences, Theme, Workspace,
 };
 pub use openssh::{AgentDiagnostics, ExternalTerminal, OpenSsh, OpenSshError, SshInvocation};
 pub use remote::{

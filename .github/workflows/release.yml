@@ -89,6 +89,8 @@ jobs:
           # Telemetry endpoints (docs/telemetry.md); empty means the build collects nothing.
           EASYSSH_SENTRY_DSN: ${{ secrets.EASYSSH_SENTRY_DSN }}
           EASYSSH_USAGE_URL: ${{ secrets.EASYSSH_USAGE_URL }}
+          # Trusted update feed keys (public, comma separated); empty means the build does not check for updates.
+          EASYSSH_UPDATE_PUBLIC_KEYS: ${{ vars.EASYSSH_UPDATE_PUBLIC_KEYS }}
         run: |
           if [ "$RUNNER_OS" = "macOS" ] && [ -n "$APPLE_CERTIFICATE" ]; then
             printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
@@ -330,9 +332,68 @@ jobs:
           echo "### iOS job failed" >> "$GITHUB_STEP_SUMMARY"
           echo "The desktop release is not affected. Re-run this job after fixing the cause; see the log above." >> "$GITHUB_STEP_SUMMARY"
 
+  # The signed update feeds (RELEASING.md, "Update feed"): one
+  # anixops-ssh-<os>.appcast.json per desktop platform, in the anix-kit
+  # anixops-appcast-v1 format, attached to the release before it is published.
+  # Without the signing secret the job is skipped with a warning, and a
+  # failure here never blocks the release (publish does not need it to pass).
+  update-feed:
+    name: Update feeds
+    needs: build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Is signing configured
+        id: signing
+        env:
+          KEY: ${{ secrets.ANIXOPS_UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::ANIXOPS_UPDATE_SIGNING_KEY is not set: no update feeds were built or attached (RELEASING.md, Update feed)."
+            echo "### Update feeds: skipped (secret ANIXOPS_UPDATE_SIGNING_KEY is not set)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/setup-go@v5
+        if: steps.signing.outputs.signed == 'true'
+        with:
+          # anix-kit needs Go 1.26; the toolchain it names is fetched if newer.
+          go-version: "1.26"
+          cache: false
+      - name: Build, sign and attach the feeds
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          ANIXOPS_UPDATE_SIGNING_KEY: ${{ secrets.ANIXOPS_UPDATE_SIGNING_KEY }}
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/update-signing-key.pem"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$ANIXOPS_UPDATE_SIGNING_KEY" > "$key"
+          mkdir assets
+          gh release download "$TAG" --dir assets --pattern '*-setup.exe' --pattern '*.dmg' --pattern '*.AppImage'
+          ls -la assets
+          # Sequence: unix time of this run, so a re-run is newer than the run before.
+          KEY_FILE="$key" SEQUENCE="$(date +%s)" scripts/build-update-feeds.sh "$TAG" assets feeds
+          ls -la feeds
+          gh release upload "$TAG" feeds/*.appcast.json --clobber
+          {
+            echo "### Update feeds attached"
+            echo
+            for feed in feeds/*.appcast.json; do echo "- $(basename "$feed")"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+
   publish:
     name: Publish release
-    needs: build
+    needs: [build, update-feed]
+    # A failed or skipped feed job does not hold the release back.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

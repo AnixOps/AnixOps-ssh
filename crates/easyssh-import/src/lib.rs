@@ -8,6 +8,7 @@
 //! [`import_auto`] picks a format with the `detect` functions.
 
 mod adapter;
+pub mod ansible;
 mod archive;
 pub mod csv_format;
 pub mod finalshell;
@@ -34,19 +35,21 @@ pub enum Format {
     Xshell,
     FinalShell,
     Termius,
+    Ansible,
     Csv,
     OpenSsh,
 }
 
 impl Format {
     /// Every format, in detection order.
-    pub const ALL: [Format; 8] = [
+    pub const ALL: [Format; 9] = [
         Format::Putty,
         Format::SecureCrt,
         Format::MobaXterm,
         Format::Xshell,
         Format::FinalShell,
         Format::Termius,
+        Format::Ansible,
         Format::Csv,
         Format::OpenSsh,
     ];
@@ -60,6 +63,7 @@ impl Format {
             Format::Xshell => "xshell",
             Format::FinalShell => "finalshell",
             Format::Termius => "termius",
+            Format::Ansible => "ansible",
             Format::Csv => "csv",
             Format::OpenSsh => "openssh",
         }
@@ -82,6 +86,7 @@ const ORDER: &[(Format, Detector)] = &[
     (Format::Xshell, xshell::detect),
     (Format::FinalShell, finalshell::detect),
     (Format::Termius, termius::detect),
+    (Format::Ansible, ansible::detect),
     (Format::Csv, csv_format::detect),
     (Format::OpenSsh, openssh::detect),
 ];
@@ -103,6 +108,7 @@ pub fn import_as(format: Format, bytes: &[u8], base_dir: Option<&Path>) -> Impor
         Format::Xshell => xshell::parse(bytes),
         Format::FinalShell => finalshell::parse(bytes),
         Format::Termius => termius::parse(bytes),
+        Format::Ansible => ansible::parse(bytes),
         Format::Csv => csv_format::parse(bytes),
         Format::OpenSsh => match base_dir {
             Some(dir) => openssh::parse_with_base(bytes, dir),

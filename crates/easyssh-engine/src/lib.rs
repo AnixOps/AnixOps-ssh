@@ -20,6 +20,7 @@
 //!   tunnels (shared with the daemon).
 //! - [`files`]: SFTP sessions and the transfer queue (shared with the daemon).
 //! - [`tunnels`]: forwards on the shared connection (shared with the daemon).
+//! - [`monitor`]: the server monitor sample (shared with the daemon).
 //! - [`sync`]: the account, devices and the sync loop (shared with the daemon).
 //! - [`Engine`]: puts them together for the app: opens shells, file sessions
 //!   and tunnels on leases of the shared connection.
@@ -31,6 +32,7 @@ pub mod hosts;
 pub mod known_hosts;
 pub mod local_files;
 pub mod login;
+pub mod monitor;
 pub mod prompts;
 pub mod registry;
 mod shell;
@@ -43,7 +45,7 @@ use easyssh_ssh::{Error as SshError, Session};
 use std::sync::Arc;
 
 pub use events::{EventSink, Events};
-pub use login::{saved_login, with_saved_login, SavedLogin, SavedPassword};
+pub use login::{saved_login, saved_proxy, with_saved_login, SavedLogin, SavedPassword};
 pub use shell::{error_code, Engine, OpenError, ShellSink, Target};
 pub use utf8::Utf8Stream;
 
