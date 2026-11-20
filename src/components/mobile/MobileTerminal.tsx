@@ -11,6 +11,7 @@ import { attachTerminalTouch, type TouchController, type TouchOverlay } from "@/
 import { Button } from "@/components/ui/button";
 import { openSession, isTauri, type Host, type SessionEvent, type SessionHandle } from "@/lib/backend";
 import { snippetBytes } from "@/lib/barLayout";
+import { binaryInput } from "@/lib/terminalBytes";
 import { BackgroundPolicy, resumeAction } from "@/lib/backgroundPolicy";
 import { watchLifecycle } from "@/lib/mobileVault";
 import { t } from "@/lib/i18n";
@@ -178,6 +179,8 @@ export function MobileTerminal({
       });
     }
     terminal.onData(typed);
+    // Mouse reports in the original encoding come as binary, not as typed text.
+    terminal.onBinary((data) => send(binaryInput(data)));
     // XTGETTCAP: Neovim and others ask whether 24-bit colour and undercurl work.
     const capabilities = terminal.parser.registerDcsHandler({ intermediates: "+", final: "q" }, (data) => {
       sendRaw(capabilityReply(data));

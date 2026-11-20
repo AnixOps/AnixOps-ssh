@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capabilityReply, OSC52_MAX_BYTES, parseOsc52, sanitizeTitle, shouldOpenLink, TITLE_MAX } from "./terminalInput";
+import { capabilityReply, mouseTrackingRequest, OSC52_MAX_BYTES, parseOsc52, sanitizeTitle, shouldOpenLink, TITLE_MAX } from "./terminalInput";
 
 const ctrl = { ctrlKey: true, metaKey: false };
 const cmd = { ctrlKey: false, metaKey: true };
@@ -85,5 +85,15 @@ describe("XTGETTCAP replies", () => {
     expect(capabilityReply(hex("kbs"))).toBe(`\x1bP0+r${hex("kbs")}\x1b\\`);
     expect(capabilityReply("zz")).toBe("\x1bP0+rzz\x1b\\");
     expect(capabilityReply("")).toBe("");
+  });
+});
+
+describe("mouse tracking requests", () => {
+  it("names the last tracking mode and whether that is all", () => {
+    expect(mouseTrackingRequest([1002])).toEqual({ mode: 1002, only: true });
+    expect(mouseTrackingRequest([1000, 1003])).toEqual({ mode: 1003, only: true });
+    expect(mouseTrackingRequest([1049, 1000])).toEqual({ mode: 1000, only: false });
+    expect(mouseTrackingRequest([1006])).toEqual({ mode: null, only: false });
+    expect(mouseTrackingRequest([[1000]])).toEqual({ mode: 1000, only: true });
   });
 });

@@ -116,3 +116,22 @@ export function capabilityReply(payload: string): string {
     })
     .join("");
 }
+
+/** DEC private modes that turn mouse tracking on (X10, normal, button-event,
+ *  any-event). The encodings (1006 SGR and the like) only change the format. */
+export const MOUSE_TRACKING_MODES: readonly number[] = [9, 1000, 1002, 1003];
+
+/** What a `CSI ? Pm h` or `l` does to mouse tracking: the mode it names
+ *  last (`null` when none), and whether it names nothing else, so it can be
+ *  dropped as a whole when programs may not use the mouse. */
+export function mouseTrackingRequest(params: readonly (number | number[])[]): {
+  mode: number | null;
+  only: boolean;
+} {
+  const modes = params.map((param) => (typeof param === "number" ? param : param[0]));
+  const tracking = modes.filter((mode) => MOUSE_TRACKING_MODES.includes(mode));
+  return {
+    mode: tracking.length > 0 ? tracking[tracking.length - 1] : null,
+    only: tracking.length > 0 && tracking.length === modes.length,
+  };
+}

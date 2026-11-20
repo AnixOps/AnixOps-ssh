@@ -69,6 +69,13 @@ export function bytesToText(bytes: ArrayLike<number>): string {
   return out;
 }
 
+/** xterm.js's binary input (mouse reports in the original X10 encoding, one
+ *  character per byte, coordinates past column 95 above 0x7f) as text for
+ *  `session.write`, so those bytes are sent as they are and not as UTF-8. */
+export function binaryInput(data: string): string {
+  return bytesToText(Array.from(data, (char) => char.charCodeAt(0) & 0xff));
+}
+
 /** Output for xterm: escaped bytes (undecodable garbage) show as U+FFFD. */
 export function displayText(text: string): string {
   return text.replace(/[\u{100080}-\u{1000ff}]/gu, "\ufffd");

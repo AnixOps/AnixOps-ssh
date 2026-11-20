@@ -61,7 +61,8 @@ import { animationFrameSchedule, OutputBuffer } from "@/lib/outputBuffer";
 import { onSettings, settings } from "@/lib/settings";
 import { appShortcut, isMac } from "@/lib/shortcuts";
 import { shortcutHint } from "@/lib/shortcutTable";
-import { capabilityReply, parseOsc52, sanitizeTitle, shouldOpenLink } from "@/lib/terminalInput";
+import { capabilityReply, mouseTrackingRequest, parseOsc52, sanitizeTitle, shouldOpenLink } from "@/lib/terminalInput";
+import { binaryInput } from "@/lib/terminalBytes";
 import { registerTerminal, terminalFor } from "@/lib/terminals";
 import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { exitTitle, RESIZE_DEBOUNCE_MS, TERMINAL_RESET, trailingDebounce, type SessionEnd } from "@/lib/terminalSession";
@@ -353,6 +354,38 @@ export function TerminalView({
       sessionRef.current?.write(data);
       if (typing) for (const id of receivers()) terminalFor(id)?.write(data);
     });
+    // Mouse reports in the original X10 encoding (Vim, mc and others that do
+    // not ask for SGR) arrive as binary; they go to this pane only.
+    const binary = terminal.onBinary((data) => {
+      if (endedRef.current || transfer.input(data)) return;
+      sessionRef.current?.write(binaryInput(data));
+    });
+    // "Let programs use the mouse" off: requests to turn on mouse tracking are
+    // dropped, so a click always selects. The last one is remembered, to be
+    // applied if the setting is turned back on while the program runs.
+    let requestedMouse: number | null = null;
+    let localMouseWrites = 0;
+    const mouseOn = terminal.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
+      const request = mouseTrackingRequest(params);
+      if (request.mode === null) return false;
+      if (localMouseWrites === 0) requestedMouse = request.mode;
+      return request.only && !settings().terminalMouseReporting;
+    });
+    const mouseOff = terminal.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
+      if (localMouseWrites === 0 && mouseTrackingRequest(params).mode !== null) requestedMouse = null;
+      return false;
+    });
+    const writeMouseMode = (sequence: string) => {
+      localMouseWrites += 1;
+      terminal.write(sequence, () => (localMouseWrites -= 1));
+    };
+    let mouseReporting = settings().terminalMouseReporting;
+    const stopMouseSetting = onSettings((next) => {
+      if (next.terminalMouseReporting === mouseReporting) return;
+      mouseReporting = next.terminalMouseReporting;
+      if (!mouseReporting && terminal.modes.mouseTrackingMode !== "none") writeMouseMode("\x1b[?1000l");
+      else if (mouseReporting && requestedMouse !== null) writeMouseMode(`\x1b[?${requestedMouse}h`);
+    });
     const pasteEverywhere = (text: string, all: boolean) => {
       terminal.paste(text);
       if (all) for (const id of receivers()) terminalFor(id)?.paste(text);
@@ -399,6 +432,9 @@ export function TerminalView({
     // selection if there is one and paste otherwise.
     const onContextMenu = (event: MouseEvent) => {
       event.preventDefault();
+      // A program that has the mouse (mc, Vim, tmux menus) gets the right
+      // button; Shift-right-click still opens ours, as in Windows Terminal.
+      if (terminal.modes.mouseTrackingMode !== "none" && !event.shiftKey && !(isMac && event.altKey)) return;
       if (settings().terminalRightClick === "paste") {
         if (terminal.hasSelection()) {
           copySelection();
@@ -652,6 +688,10 @@ export function TerminalView({
       container.removeEventListener("contextmenu", onContextMenu);
       osc52.dispose();
       capabilities.dispose();
+      binary.dispose();
+      mouseOn.dispose();
+      mouseOff.dispose();
+      stopMouseSetting();
       titleChange.dispose();
       bell.dispose();
       window.clearTimeout(typingTimer);
