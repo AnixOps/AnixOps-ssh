@@ -62,6 +62,11 @@ export function previewSession(
     if (command === "ls") {
       const entries = [color("1;34", "app"), color("1;34", "logs"), "deploy.sh", color("32", "start.sh"), "README.md"];
       emit(entries.join("  ") + CRLF);
+    } else if (command === "drop") {
+      // Simulates a lost connection, so auto reconnect can be seen in the preview.
+      closed = true;
+      window.setTimeout(() => onEvent({ kind: "exit", code: null, reason: "disconnected" }), 100);
+      return;
     } else if (command === "df -h") {
       const rows = [
         "Filesystem      Size  Used Avail Use% Mounted on",

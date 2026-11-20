@@ -9,6 +9,8 @@ export interface Settings {
   terminalScrollback: number;
   /** macOS: Option sends Meta (Esc prefix) instead of typing layout characters. */
   terminalOptionAsMeta: boolean;
+  /** Desktop terminals reconnect by themselves after a dropped connection. */
+  autoReconnect: boolean;
   /** The SSH engine for hosts that follow the global setting: the built-in
    * engine unless OpenSSH was chosen (an advanced option kept for compatibility). */
   sshEngine: SshEngine;
@@ -23,6 +25,7 @@ let current: Settings = {
   terminalFontSize: 13,
   terminalScrollback: 10000,
   terminalOptionAsMeta: false,
+  autoReconnect: true,
   sshEngine: "russh",
   crashReports: null,
   usageStats: false,

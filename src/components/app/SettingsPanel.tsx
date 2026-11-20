@@ -126,6 +126,13 @@ export function SettingsPanel({
               ))}
             </Select>
           </SettingsRow>
+          <SettingsRow label={t.autoReconnect} hint={t.autoReconnectHint}>
+            <Switch
+              on={current.autoReconnect}
+              label={t.autoReconnect}
+              onClick={() => update({ autoReconnect: !current.autoReconnect })}
+            />
+          </SettingsRow>
           {isMac && (
             <SettingsRow label={t.optionAsMeta} hint={t.optionAsMetaHint}>
               <Switch

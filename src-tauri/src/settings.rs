@@ -24,15 +24,32 @@ pub struct Settings {
     /// macOS: Option sends Meta instead of layout characters. Off by default.
     #[serde(default)]
     terminal_option_as_meta: bool,
+    /// Reconnect a desktop terminal after its connection dropped. On by default.
+    #[serde(default = "default_true")]
+    auto_reconnect: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Terminal behaviour only the app's terminal view reads. Kept under its own
 /// key so the shared `terminal` preferences and their schema stay unchanged;
 /// a missing or older value falls back to the defaults field by field.
-#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(default)]
 struct TerminalBehaviour {
     option_as_meta: bool,
+    auto_reconnect: bool,
+}
+
+impl Default for TerminalBehaviour {
+    fn default() -> Self {
+        Self {
+            option_as_meta: false,
+            auto_reconnect: true,
+        }
+    }
 }
 
 const TERMINAL_BEHAVIOUR: &str = "terminal_behaviour";
@@ -57,6 +74,7 @@ pub fn settings_get() -> Result<Settings, String> {
         crash_reports: config.telemetry.crash_reports,
         usage_stats: config.telemetry.usage_stats,
         terminal_option_as_meta: behaviour.option_as_meta,
+        auto_reconnect: behaviour.auto_reconnect,
     })
 }
 
@@ -90,6 +108,7 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
         .map_err(stored)?;
     let behaviour = TerminalBehaviour {
         option_as_meta: settings.terminal_option_as_meta,
+        auto_reconnect: settings.auto_reconnect,
     };
     if behaviour != terminal_behaviour() {
         store
@@ -179,6 +198,9 @@ mod tests {
         assert!(!empty.option_as_meta);
         let on: TerminalBehaviour = serde_json::from_str(r#"{"option_as_meta":true}"#).unwrap();
         assert!(on.option_as_meta);
+        // A value saved before auto reconnect existed keeps it on.
+        assert!(on.auto_reconnect);
+        assert!(empty.auto_reconnect);
     }
 
     #[test]

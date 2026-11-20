@@ -6,7 +6,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { ChevronDown, ChevronUp, LoaderCircle, RotateCw, Sparkles, SquareArrowOutUpRight, Unplug, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { CompletionPopup, type PopupPlacement } from "@/components/app/CompletionPopup";
 import { AskAiPanel, ASK_AI_WIDTH } from "@/components/app/AskAiPanel";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,8 @@ import {
   copyText,
   isVaultLocked,
   loadHosts,
+  onAskpass,
+  onHostKey,
   openFiles,
   openExternal,
   openSession,
@@ -27,6 +29,15 @@ import {
   type SessionHandle,
   type SshEngine,
 } from "@/lib/backend";
+import {
+  autoReconnectStep,
+  IDLE,
+  isActive,
+  isDropped,
+  secondsLeft,
+  WAKE_CHECK_MS,
+  wokeFromSleep,
+} from "@/lib/autoReconnect";
 import { isSerialPermissionError } from "@/lib/serialUi";
 import { requestVaultUnlock } from "@/lib/vaultUi";
 import { CompletionController, type ViewState } from "@/lib/completion/controller";
@@ -88,7 +99,16 @@ export function TerminalView({
   const fitRef = useRef<FitAddon | null>(null);
   const searchRef = useRef<SearchAddon | null>(null);
   const sessionRef = useRef<SessionHandle | null>(null);
+  /** Manual start: Enter or "Reconnect". */
   const startRef = useRef<() => void>(() => {});
+  /** Automatic start of attempt n; does not take the focus. */
+  const autoStartRef = useRef<(attempt: number) => void>(() => {});
+  const [auto, dispatchAuto] = useReducer(autoReconnectStep, IDLE);
+  const autoRef = useRef(auto);
+  autoRef.current = auto;
+  /** A drop is retried only after the session had been up once. */
+  const everConnectedRef = useRef(false);
+  const [now, setNow] = useState(() => Date.now());
   const [status, setStatus] = useState<SessionStatus>({ state: "connecting" });
   /** Set while the session is over, so Enter reconnects instead of typing. */
   const endedRef = useRef(false);
@@ -103,6 +123,10 @@ export function TerminalView({
   const report = useCallback(
     (next: SessionStatus) => {
       endedRef.current = next.state === "exited";
+      if (next.state === "connected") {
+        everConnectedRef.current = true;
+        dispatchAuto({ type: "connected" });
+      }
       setStatus(next);
       onStatus(tabKey, next);
     },
@@ -312,6 +336,15 @@ export function TerminalView({
           exited = true;
           sessionRef.current = null;
           report({ state: "exited", code: event.code, reason: event.reason, signal: event.signal });
+          dispatchAuto({
+            type: "ended",
+            eligible:
+              hostId !== null &&
+              settings().autoReconnect &&
+              isDropped(event) &&
+              (everConnectedRef.current || autoRef.current.kind === "connecting"),
+            now: Date.now(),
+          });
         }
       };
       const attaching = reattach;
@@ -343,8 +376,21 @@ export function TerminalView({
           }
         })
         .catch((reason) => {
-          if (isVaultLocked(reason)) requestVaultUnlock();
-          if (!disposed) report({ state: "exited", code: null, error: String(reason) });
+          const locked = isVaultLocked(reason);
+          if (locked) requestVaultUnlock();
+          if (!disposed) {
+            report({ state: "exited", code: null, error: String(reason) });
+            // The vault needs the person; any other failure of an automatic attempt is tried again.
+            dispatchAuto(
+              locked
+                ? { type: "interaction" }
+                : {
+                    type: "ended",
+                    eligible: settings().autoReconnect && autoRef.current.kind === "connecting",
+                    now: Date.now(),
+                  },
+            );
+          }
         });
     };
     const unregister = registerTerminal(tabKey, {
@@ -364,13 +410,18 @@ export function TerminalView({
         sessionRef.current = null;
       },
     });
-    startRef.current = () => {
+    const restart = (attempt: number) => {
       // Undo modes the old session left on (alternate screen, mouse
       // reporting, bracketed paste) before the new one starts.
-      terminal.write(TERMINAL_RESET + "\r\n");
+      terminal.write(TERMINAL_RESET + (attempt <= 1 ? "\r\n" : ""));
       start();
+    };
+    startRef.current = () => {
+      dispatchAuto({ type: "reset" });
+      restart(1);
       terminal.focus();
     };
+    autoStartRef.current = restart;
     start();
 
     const observer = new ResizeObserver(() => {
@@ -415,6 +466,47 @@ export function TerminalView({
       terminalRef.current = null;
     };
   }, [hostId, onSession, report, sessionId, tabKey]);
+
+  // Automatic reconnect: the wait, the countdown, the attempt itself.
+  const attempt = auto.kind === "connecting" ? auto.attempt : 0;
+  useEffect(() => {
+    if (attempt > 0) autoStartRef.current(attempt);
+  }, [attempt]);
+  useEffect(() => {
+    if (auto.kind !== "waiting") return;
+    const fire = window.setTimeout(() => dispatchAuto({ type: "fire" }), Math.max(0, auto.dueAt - Date.now()));
+    const tick = window.setInterval(() => setNow(Date.now()), 500);
+    setNow(Date.now());
+    return () => {
+      window.clearTimeout(fire);
+      window.clearInterval(tick);
+    };
+  }, [auto]);
+  useEffect(() => {
+    // The network came back, or the clock jumped (the machine slept).
+    const network = () => dispatchAuto({ type: "network", now: Date.now() });
+    let last = Date.now();
+    const watch = window.setInterval(() => {
+      const current = Date.now();
+      if (wokeFromSleep(last, current)) network();
+      last = current;
+    }, WAKE_CHECK_MS);
+    window.addEventListener("online", network);
+    // A password, touch or host key question needs the person: stop retrying.
+    const interaction = () => dispatchAuto({ type: "interaction" });
+    const stopAskpass = onAskpass(interaction);
+    const stopHostKey = onHostKey(interaction);
+    const stopSettings = onSettings((next) => {
+      if (!next.autoReconnect) dispatchAuto({ type: "reset" });
+    });
+    return () => {
+      window.clearInterval(watch);
+      window.removeEventListener("online", network);
+      stopAskpass();
+      stopHostKey();
+      stopSettings();
+    };
+  }, []);
 
   useEffect(() => {
     if (!active) return;
@@ -509,7 +601,7 @@ export function TerminalView({
       )}
 
       {!askOpen && (
-        <div className="absolute top-3 right-4 z-dropdown">
+        <div className={`absolute right-4 z-dropdown ${isActive(auto) ? "top-12" : "top-3"}`}>
           <Tooltip label={t.askAi}>
             <Button variant="quiet" size="icon-sm" aria-label={t.askAi} onClick={() => setAskOpen(true)}>
               <Sparkles />
@@ -536,7 +628,7 @@ export function TerminalView({
           animate={{ opacity: 1, y: 0, transition: { duration: duration.toggle, ease: ease.emphasized } }}
           exit={{ opacity: 0, y: -6, transition: leave }}
           style={{ right: askOpen ? `calc(${ASK_AI_WIDTH} + 1rem)` : "3.25rem" }}
-          className="material-bar absolute top-3 z-dropdown flex items-center gap-1 rounded-sm p-1 shadow-2 ring-1 ring-separator"
+          className={`material-bar absolute ${isActive(auto) ? "top-12" : "top-3"} z-dropdown flex items-center gap-1 rounded-sm p-1 shadow-2 ring-1 ring-separator`}
         >
           <Input
             ref={findInputRef}
@@ -564,6 +656,43 @@ export function TerminalView({
       </AnimatePresence>
 
       <AnimatePresence>
+      {isActive(auto) && (
+        <motion.div
+          role="status"
+          aria-live="polite"
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0, transition: enter }}
+          exit={{ opacity: 0, transition: leave }}
+          className="absolute inset-x-0 top-0 z-dropdown flex items-center gap-3 border-b border-separator bg-bg-elevated px-4 py-1.5"
+        >
+          {auto.kind === "connecting" ? (
+            <LoaderCircle
+              className="size-4 shrink-0 animate-spin text-label-2 motion-reduce:animate-none"
+              strokeWidth={1.5}
+            />
+          ) : (
+            <Unplug className="size-4 shrink-0 text-label-2" strokeWidth={1.5} />
+          )}
+          <p className="min-w-0 flex-1 truncate text-callout text-label-1">
+            {auto.kind === "waiting"
+              ? t.autoReconnectWaiting
+                  .replace("{seconds}", String(secondsLeft(auto.dueAt, now)))
+                  .replace("{attempt}", String(auto.attempt))
+              : t.autoReconnectTrying.replace("{attempt}", String(attempt))}
+          </p>
+          {auto.kind === "waiting" && (
+            <Button variant="secondary" size="sm" onClick={() => dispatchAuto({ type: "fire" })}>
+              {t.autoReconnectNow}
+            </Button>
+          )}
+          <Button variant="quiet" size="sm" onClick={() => dispatchAuto({ type: "cancel" })}>
+            {t.autoReconnectCancel}
+          </Button>
+        </motion.div>
+      )}
+      </AnimatePresence>
+
+      <AnimatePresence>
       {status.state === "reconnecting" && (
         <div className="pointer-events-none absolute inset-x-0 bottom-6 flex justify-center px-4">
           <motion.div
@@ -584,7 +713,7 @@ export function TerminalView({
       </AnimatePresence>
 
       <AnimatePresence>
-      {status.state === "exited" && (
+      {status.state === "exited" && !isActive(auto) && (
         <div className="pointer-events-none absolute inset-x-0 bottom-6 flex justify-center px-4">
           <motion.div
             role="status"
