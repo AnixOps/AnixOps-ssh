@@ -76,11 +76,15 @@ export async function previewTransfer(
 ): Promise<StartedTransfer> {
   const id = `preview-${nextTransfer++}`;
   const remote = request.upload ? `${request.remote}/${nameOf(request.local ?? "file")}` : request.remote;
-  const total = 734003200;
+  const total = request.upload ? 52428800 : 734003200;
   let bytes = 0;
   const timer = window.setInterval(() => {
     bytes = Math.min(total, bytes + total / 6);
-    if (request.upload || bytes >= total) {
+    if (request.local?.includes("fail")) {
+      window.clearInterval(timer);
+      timers.delete(id);
+      onEvent({ kind: "failed", message: `${remote}: Permission denied` });
+    } else if (bytes >= total) {
       window.clearInterval(timer);
       timers.delete(id);
       if (request.upload) {
@@ -89,7 +93,7 @@ export async function previewTransfer(
       }
       onEvent({ kind: "done" });
     } else {
-      onEvent({ kind: "progress", bytes });
+      onEvent({ kind: "progress", bytes, total });
     }
   }, 500);
   timers.set(id, timer);

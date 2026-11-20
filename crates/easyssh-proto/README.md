@@ -20,13 +20,13 @@ travels is somebody else's concern.
     `session.open|write|resize|close|list|attach|detach`,
     `askpass.reply|endpoint`, `daemon.shutdown_when_idle`, and for the
     built-in SSH engine `hostkey.reply`, `engine.resolve|connections`,
-    `sftp.open|list|mkdir|remove|rename|close`, `transfer.start|cancel`,
+    `sftp.open|list|mkdir|remove|rename|close`, `transfer.start|enqueue|cancel`,
     `tunnel.start|stop|list`, `monitor.sample|signal`, `vault.unlock_with|enable_unlock|disable_unlock|add_unlock_item|remove_unlock_item`,
     `serial.ports`; events
     `session.output` (optional per-session byte offset `seq`), `session.exit`,
     `askpass.prompt` (optional `kind` and `echo` for the built-in engine),
     `askpass.resolved`, `hosts.changed`, `hostkey.prompt|resolved`,
-    `transfer.progress|done`, `tunnel.status`. It will grow.
+    `transfer.started|progress|done`, `tunnel.status`. It will grow.
     `session.open` and `session.list` also report the optional `engine` and
     `engine_reason`.
     `proto.hello` carries `schema_version` (any integer, so a daemon can answer

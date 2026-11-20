@@ -19,6 +19,7 @@ The v2 direction (approved 2026-11-17, shipped in 2.0) is described in
 | v1.0.1 | Motion | Motion in the macOS and Linear style; browser preview site |
 | v2.0 | v2 architecture | Background service, built-in russh engine (default) with OpenSSH fallback, SQLite store and importers, encrypted vault with Windows Hello and Touch ID, end-to-end encrypted sync and team vaults, splits, shell integration, completion, AI with your own key, encrypted session logs, serial ports, AnixOps Design 1.2.0 |
 | v2.1 | Keys and mobile | FIDO2 security keys on every desktop platform, vault unlock with a FIDO2 key, mobile app preview (Android and iOS) with terminal, files, forwards, vault and sync |
+| v2.2 | Parity and AnixOps integration | Behaviour aligned with OpenSSH and mainstream clients (sign-in order, known_hosts, ssh_config, terminal modes, SFTP fidelity, tunnels and connections that recover), terminal comfort (right-click, links, OSC 52, auto-reconnect), server monitor, imports from AnixOps Control, Ansible and JumpServer, outbound proxies, signed update feed |
 
 ## What drives the work
 

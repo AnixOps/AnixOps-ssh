@@ -427,7 +427,8 @@ export interface FilesHandle {
 }
 
 export type TransferEvent =
-  | { kind: "progress"; bytes: number }
+  | { kind: "started" }
+  | { kind: "progress"; bytes: number; total?: number | null }
   | { kind: "done" }
   | { kind: "failed"; message: string }
   | { kind: "cancelled" };
@@ -445,6 +446,8 @@ export interface StartedTransfer {
   id: string;
   local: string;
   remote: string;
+  /** Waits for the host's other transfers; a "started" event follows when its turn comes. */
+  queued?: boolean;
 }
 
 /** Opens a long-lived sftp process for browsing `hostId`. */
