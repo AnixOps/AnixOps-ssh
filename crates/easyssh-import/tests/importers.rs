@@ -454,6 +454,215 @@ fn termius_json() {
     assert_eq!(host(&report, "bare").port, 2200);
 }
 
+// ---- Ansible -------------------------------------------------------------
+
+#[test]
+fn ansible_yaml_nesting_vars_and_mappings() {
+    let report = ansible::parse(&fixture("ansible/inventory.yml"));
+    let web = host(&report, "web02.example.com");
+    assert_eq!(web.group_path, path(&["prod", "web"]));
+    assert_eq!(web.hostname, "web02.example.com");
+    // all < prod < web for the port; all < prod for the user.
+    assert_eq!(web.port, 2222);
+    assert_eq!(web.username.as_deref(), Some("deploy"));
+    assert_eq!(web.jump, vec!["jump@bastion.example.com:2222"]);
+    for n in ["web01.example.com", "web03.example.com"] {
+        host(&report, n);
+    }
+
+    // Host variables beat group variables; the key is a path, not material.
+    let odd = host(&report, "web-odd");
+    assert_eq!(odd.hostname, "192.0.2.50");
+    assert_eq!(odd.username.as_deref(), Some("alice"));
+    assert_eq!(
+        odd.identity_file.as_deref(),
+        Some(Path::new("~/.ssh/web_ed25519"))
+    );
+    assert!(has_warning(&report, "ansible_password was not imported"));
+
+    // Two groups: deepest wins, the other becomes a tag.
+    let db = host(&report, "db1");
+    assert_eq!(db.group_path, path(&["prod", "db"]));
+    assert_eq!(db.notes, "Tags: monitoring");
+    assert_eq!(db.port, 2200);
+    assert_eq!(
+        db.jump,
+        vec!["jump@bastion.example.com:2222", "hop1", "hop2"]
+    );
+    assert_eq!(report.hosts.iter().filter(|h| h.label == "db1").count(), 1);
+
+    // Templated values are dropped with a warning.
+    let mon = host(&report, "mon1");
+    assert_eq!(mon.hostname, "mon1");
+    assert_eq!(mon.group_path, path(&["monitoring"]));
+    assert!(has_warning(&report, "is templated"));
+
+    // ungrouped hosts have no group; ProxyCommand is not imported.
+    let loner = host(&report, "loner");
+    assert!(loner.group_path.is_empty());
+    assert!(loner.jump.is_empty());
+    assert_eq!(loner.username.as_deref(), Some("ops"));
+    assert!(has_warning(&report, "ProxyCommand"));
+
+    // local, winrm and docker connections are skipped.
+    for name in ["localbox", "win1", "ctr"] {
+        assert!(!report.hosts.iter().any(|h| h.label == name), "{name}");
+    }
+    assert_eq!(report.skipped, 3);
+    assert!(has_warning(&report, "ansible_connection `local`"));
+    assert!(!report.groups.contains(&path(&["all"])));
+    assert!(report.groups.contains(&path(&["prod", "web"])));
+}
+
+#[test]
+fn ansible_ini_sections_ranges_and_vars() {
+    let report = ansible::parse(&fixture("ansible/inventory.ini"));
+    let standalone = host(&report, "standalone");
+    assert_eq!(standalone.hostname, "192.0.2.9");
+    assert!(standalone.group_path.is_empty());
+    assert_eq!(standalone.username.as_deref(), Some("ops"));
+    assert_eq!(standalone.port, 2200);
+
+    let web = host(&report, "web03.example.com");
+    assert_eq!(web.group_path, path(&["prod", "web"]));
+    assert_eq!(web.username.as_deref(), Some("deploy"));
+    assert_eq!(web.jump, vec!["jump@bastion.example.com:2222"]);
+    assert_eq!(host(&report, "web-odd").username.as_deref(), Some("alice"));
+    assert!(has_warning(&report, "ansible_password was not imported"));
+
+    // [db:vars] is deeper than [prod:vars]; the inline port beats [all:vars].
+    let db = host(&report, "db1");
+    assert_eq!(db.username.as_deref(), Some("dbadmin"));
+    assert_eq!(db.port, 2022);
+    assert_eq!(db.group_path, path(&["prod", "db"]));
+    assert_eq!(db.notes, "Tags: monitoring");
+    assert_eq!(
+        db.jump,
+        vec!["jump@bastion.example.com:2222", "hop1", "hop2"]
+    );
+
+    // Alphabetic ranges, templated values.
+    for n in ["abc-a", "abc-b", "abc-c"] {
+        let h = host(&report, n);
+        assert_eq!(h.port, 2201);
+        assert_eq!(h.group_path, path(&["monitoring"]));
+    }
+    assert_eq!(host(&report, "mon1").hostname, "mon1");
+    assert!(has_warning(&report, "is templated"));
+
+    // The cap: 3000 requested, 1024 kept, with a warning.
+    let big = report
+        .hosts
+        .iter()
+        .filter(|h| h.label.starts_with("big"))
+        .count();
+    assert_eq!(big, ansible::MAX_RANGE_HOSTS);
+    assert!(has_warning(&report, "range expands to more than"));
+
+    assert!(!report.hosts.iter().any(|h| h.label == "localbox"));
+    assert_eq!(report.skipped, 1);
+}
+
+#[test]
+fn ansible_range_forms() {
+    let ini = b"[g]\nn[01:03]\nm[8:10]\nx[a:c]\ny[1:7:3]\n[2001:db8::1]\nh[3:1]\n";
+    let report = ansible::parse(ini);
+    let labels: Vec<&str> = report.hosts.iter().map(|h| h.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        ["n01", "n02", "n03", "m8", "m9", "m10", "xa", "xb", "xc", "y1", "y4", "y7"]
+    );
+    assert!(has_warning(&report, "runs backwards"));
+}
+
+#[test]
+fn ansible_secrets_and_odd_args() {
+    let ini = b"[g]\nh1 ansible_host=192.0.2.1 ansible_ssh_pass=hunter2 ansible_become_pass=x ansible_ssh_common_args='-oProxyJump=a -J b,c -J -oProxyCommand=evil'\n";
+    let report = ansible::parse(ini);
+    let h = host(&report, "h1");
+    assert_eq!(h.jump, vec!["a", "b", "c"]);
+    assert!(has_warning(&report, "ansible_ssh_pass was not imported"));
+    assert!(has_warning(&report, "ansible_become_pass was not imported"));
+    assert!(has_warning(&report, "jump host"));
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(!json.contains("hunter2"));
+}
+
+#[test]
+fn ansible_yaml_aliases_and_vault() {
+    let yaml = b"all:\n  hosts:\n    a:\n      ansible_host: 192.0.2.1\n      ansible_user: !vault |\n        $ANSIBLE_VAULT;1.1;AES256\n        6162\n    b: &b\n      ansible_host: 192.0.2.2\n    c: *b\n";
+    let report = ansible::parse(yaml);
+    assert_eq!(host(&report, "a").username, None);
+    assert!(has_warning(&report, "encrypted"));
+    assert_eq!(host(&report, "c").hostname, "192.0.2.2");
+}
+
+#[test]
+fn ansible_malformed_input_warns_without_panicking() {
+    let bomb = {
+        let mut s = String::from("all:\n  vars:\n    l0: &l0 [x, x, x, x, x, x, x, x, x]\n");
+        for i in 1..12 {
+            let prev = i - 1;
+            s.push_str(&format!(
+                "    l{i}: &l{i} [*l{prev}, *l{prev}, *l{prev}, *l{prev}, *l{prev}, *l{prev}, *l{prev}, *l{prev}, *l{prev}]\n"
+            ));
+        }
+        s.into_bytes()
+    };
+    let deep = format!(
+        "all:\n  children:\n{}",
+        "    a:\n      children:\n".repeat(300)
+    );
+    let inputs: Vec<&[u8]> = vec![
+        b"",
+        b"all: [1, 2",
+        b"all: 5",
+        b"- a\n- b\n",
+        b"all:\n  hosts: 7\n  children: [x]\n  vars: nope\n  other: 1\n",
+        b"all:\n  children:\n    a:\n      children:\n        a:\n",
+        b"[a:children]\na\n[a]\nh\n",
+        b"[:children]\n[a:wat]\nh\n[]\n=\nk=v\n",
+        b"[a]\nh key='unterminated\nh2 =x\nh3 ansible_port=99999 ansible_host=\n",
+        b"[a]\n[[[:]]]\nh[1:]\nh[:2]\nh[0:99999999999]\nh[1:2:0]\n[a:vars]\nnoequals\n",
+        b"[a]\nh1 ansible_host={{ x }} ansible_user={{ u }} ansible_port={{ p }}\n{{ name }}\n",
+        b"\xff\xfe\x00\x00[a]\n",
+        &bomb,
+        deep.as_bytes(),
+    ];
+    for input in inputs {
+        let report = ansible::parse(input);
+        for h in &report.hosts {
+            assert!(h.port != 0 && !h.hostname.is_empty() && !h.hostname.starts_with('-'));
+        }
+        let _ = detect_format(input);
+        let _ = import_auto(input);
+    }
+    let report = ansible::parse(b"all: [1, 2");
+    assert!(has_warning(&report, "invalid YAML"));
+    assert!(report.hosts.is_empty());
+    let report = ansible::parse(b"[a]\nh1 ansible_host={{ x }} ansible_port={{ p }}\n");
+    assert_eq!(host(&report, "h1").hostname, "h1");
+    assert_eq!(host(&report, "h1").port, 22);
+}
+
+#[test]
+fn ansible_detection_does_not_steal() {
+    // Other formats' fixtures keep their formats (see auto_detection_...).
+    assert!(!ansible::detect(&fixture("openssh/config")));
+    assert!(!ansible::detect(&fixture("termius.csv")));
+    assert!(!ansible::detect(&fixture("hosts.csv")));
+    assert!(!ansible::detect(&fixture("putty.reg")));
+    // A plain YAML file, an INI file without Ansible markers.
+    assert!(!ansible::detect(b"name: x\nitems:\n  - a\n"));
+    assert!(!ansible::detect(b"[section]\nkey=value\n"));
+    assert!(!ansible::detect(b"Host web\n  HostName 192.0.2.1\n"));
+    // Ansible shapes.
+    assert!(ansible::detect(b"all:\n  hosts:\n    h:\n"));
+    assert!(ansible::detect(b"web:\n  hosts:\n    h1:\n"));
+    assert!(ansible::detect(b"[web:children]\nx\n"));
+    assert!(ansible::detect(b"h1 ansible_host=192.0.2.1\n"));
+}
+
 // ---- CSV -----------------------------------------------------------------
 
 #[test]
@@ -515,6 +724,8 @@ fn auto_detection_picks_each_format() {
         ("finalshell.json", Format::FinalShell),
         ("termius.csv", Format::Termius),
         ("termius.json", Format::Termius),
+        ("ansible/inventory.yml", Format::Ansible),
+        ("ansible/inventory.ini", Format::Ansible),
         ("hosts.csv", Format::Csv),
         ("openssh/config", Format::OpenSsh),
     ];

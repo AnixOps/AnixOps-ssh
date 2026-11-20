@@ -16,17 +16,20 @@ use zeroize::Zeroizing;
 pub enum Service {
     /// AnixOps Control: the admin API's node list.
     Control,
+    /// JumpServer: the assets API, optionally through its KoKo SSH gateway.
+    JumpServer,
 }
 
 impl Service {
     pub fn id(self) -> &'static str {
         match self {
             Service::Control => "control",
+            Service::JumpServer => "jumpserver",
         }
     }
 
     pub fn from_id(id: &str) -> Option<Service> {
-        [Service::Control]
+        [Service::Control, Service::JumpServer]
             .into_iter()
             .find(|service| service.id() == id)
     }
@@ -57,6 +60,18 @@ pub struct ServiceForm {
     pub default_user: String,
     /// Key file the hosts use; noted on the host, never read.
     pub identity_file: Option<String>,
+    /// JumpServer: the access key id (not secret; the secret is sealed).
+    pub access_key_id: String,
+    /// JumpServer: organization id; empty means the default organization.
+    pub org_id: String,
+    /// JumpServer: connect through the KoKo SSH gateway.
+    pub gateway: bool,
+    /// JumpServer: gateway host; empty means the service's own host.
+    pub gateway_host: String,
+    /// JumpServer: gateway SSH port.
+    pub gateway_port: u16,
+    /// JumpServer: the JumpServer user name that logs in to the gateway.
+    pub gateway_user: String,
 }
 
 impl Default for ServiceForm {
@@ -65,6 +80,12 @@ impl Default for ServiceForm {
             url: String::new(),
             default_user: "root".to_owned(),
             identity_file: None,
+            access_key_id: String::new(),
+            org_id: String::new(),
+            gateway: true,
+            gateway_host: String::new(),
+            gateway_port: 2222,
+            gateway_user: String::new(),
         }
     }
 }
@@ -141,7 +162,10 @@ pub fn read_secret(
 /// One line of printable ASCII: it goes into an HTTP header, so nothing else
 /// is accepted.
 pub fn check_secret(secret: &str) -> Result<()> {
-    if secret.len() > MAX_SECRET_LEN || !secret.bytes().all(|b| (0x21..=0x7e).contains(&b)) {
+    if secret.is_empty()
+        || secret.len() > MAX_SECRET_LEN
+        || !secret.bytes().all(|b| (0x21..=0x7e).contains(&b))
+    {
         return Err(ServiceError::Invalid(
             "The credential must be one line of plain characters, without spaces.".to_owned(),
         ));
@@ -170,6 +194,10 @@ mod tests {
         assert!(!has_secret(&store, Service::Control));
         set_secret(&store, &vault, Service::Control, Some("anixadm_topsecret")).unwrap();
         assert!(has_secret(&store, Service::Control));
+        assert!(
+            !has_secret(&store, Service::JumpServer),
+            "one slot per service"
+        );
         let raw: String = store
             .get_setting_as(&Service::Control.secret_slot())
             .unwrap()

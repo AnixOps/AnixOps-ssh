@@ -86,12 +86,47 @@ pub fn secrets_update(
         password: change(password),
         private_key: change(private_key),
         passphrase: change(passphrase),
+        proxy_password: SecretChange::Keep,
     })
+}
+
+/// The change for the password of a host's outbound proxy: `None` keeps it,
+/// an empty string clears it, anything else replaces it. One line, like any
+/// password; the message never repeats it.
+pub fn proxy_password_change(value: Option<String>) -> Result<SecretChange, InputError> {
+    match value {
+        None => Ok(SecretChange::Keep),
+        Some(value) if value.is_empty() => Ok(SecretChange::Clear),
+        Some(value) if value.len() > MAX_SECRET_BYTES => {
+            Err(invalid("invalid_command", "the proxy password is too long"))
+        }
+        Some(value) if value.contains(['\n', '\r', '\0']) => Err(invalid(
+            "invalid_command",
+            "the proxy password must be a single line",
+        )),
+        Some(value) => Ok(SecretChange::Set(SecretText::new(value))),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_proxy_password_is_checked_like_a_password() {
+        assert_eq!(proxy_password_change(None).unwrap(), SecretChange::Keep);
+        assert_eq!(
+            proxy_password_change(Some(String::new())).unwrap(),
+            SecretChange::Clear
+        );
+        assert_eq!(
+            proxy_password_change(Some("pw".into())).unwrap(),
+            SecretChange::Set(SecretText::new("pw"))
+        );
+        let e = proxy_password_change(Some("a\nb-LEAK".into())).unwrap_err();
+        assert_eq!(e.code, "invalid_command");
+        assert!(!e.message.contains("LEAK"));
+    }
 
     #[test]
     fn keep_set_and_clear() {

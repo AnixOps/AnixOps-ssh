@@ -19,7 +19,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 easyssh-core = { path = "../crates/easyssh-core" }
 easyssh-engine = { path = "../crates/easyssh-engine" }
+easyssh-ssh = { path = "../crates/easyssh-ssh" }
 easyssh-store = { path = "../crates/easyssh-store" }
+fontdb = "0.23"
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }
@@ -38,6 +40,7 @@ easyssh-crypto = { path = "../crates/easyssh-crypto" }
 easyssh-sessionlog = { path = "../crates/easyssh-sessionlog" }
 easyssh-telemetry = { path = "../crates/easyssh-telemetry" }
 easyssh-unlock = { path = "../crates/easyssh-unlock" }
+easyssh-update = { path = "../crates/easyssh-update" }
 easyssh-vault = { path = "../crates/easyssh-vault", features = ["os-keyring"] }
 easysshd = { path = "../crates/easysshd" }
 portable-pty = "0.9"

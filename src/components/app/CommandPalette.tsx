@@ -6,6 +6,7 @@ import {
   Keyboard,
   Settings,
   FolderOpen,
+  Activity,
   Maximize2,
   Minimize2,
   Plus,
@@ -97,6 +98,7 @@ export function CommandPalette({
   onNewHost,
   onImport,
   onToggleFiles,
+  onToggleMonitor,
   onPaneAction,
   paneCount,
   maximised,
@@ -116,6 +118,8 @@ export function CommandPalette({
   onNewHost: () => void;
   onImport: () => void;
   onToggleFiles: () => void;
+  /** Set when the active tab is an SSH host the monitor can read. */
+  onToggleMonitor?: () => void;
   onPaneAction: (action: PaneAction) => void;
   /** Panes in the active tab; 0 without one. */
   paneCount: number;
@@ -144,6 +148,9 @@ export function CommandPalette({
       { id: "import-hosts", section: t.paletteActions, title: t.importHosts, subtitle: shortcutHint("import"), icon: Download, run: onImport },
       ...(activeHostTab
         ? [{ id: "files", section: t.paletteActions, title: t.toggleFiles, subtitle: shortcutHint("toggle-files"), icon: FolderOpen, run: onToggleFiles }]
+        : []),
+      ...(onToggleMonitor
+        ? [{ id: "monitor", section: t.paletteActions, title: t.toggleMonitor, subtitle: "", icon: Activity, run: onToggleMonitor }]
         : []),
       ...(paneCount > 0
         ? ([
@@ -241,6 +248,7 @@ export function CommandPalette({
     onNewHost,
     onImport,
     onToggleFiles,
+    onToggleMonitor,
     onPaneAction,
     onNav,
     onShortcutList,

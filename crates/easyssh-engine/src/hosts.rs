@@ -11,7 +11,9 @@
 use crate::Target;
 use easyssh_core::security::{validate_connection, validate_host, validate_username};
 use easyssh_core::tunnel::bare_host;
-use easyssh_core::{AppConfig, Connection, ConnectionTarget, Group, Tunnel, TunnelKind};
+use easyssh_core::{
+    AppConfig, Connection, ConnectionTarget, Group, ProxySettings, Tunnel, TunnelKind,
+};
 use easyssh_store::Store;
 use serde_json::{json, Value};
 
@@ -31,6 +33,8 @@ pub struct NewHost {
     pub favorite: bool,
     /// The jump host chain, `[user@]host[:port]` separated by commas.
     pub jump: Option<String>,
+    /// The outbound proxy of the first hop. `None` removes it.
+    pub proxy: Option<ProxySettings>,
 }
 
 fn display_target(hostname: &str, username: Option<&str>, port: u16) -> String {
@@ -95,6 +99,7 @@ fn host_json(connection: &Connection) -> Option<Value> {
             "notes": connection.notes,
             "engine": null,
             "shellIntegration": false,
+            "proxy": connection.proxy,
             "serial": null,
         },
     }))
@@ -233,6 +238,17 @@ pub fn save_host(store: &Store, input: &NewHost) -> Result<String, String> {
             Some(jump.to_owned())
         }
     };
+    connection.proxy = input.proxy.as_ref().map(|proxy| ProxySettings {
+        kind: proxy.kind,
+        host: proxy.host.trim().to_owned(),
+        port: proxy.port,
+        username: proxy
+            .username
+            .as_deref()
+            .map(str::trim)
+            .filter(|user| !user.is_empty())
+            .map(str::to_owned),
+    });
     connection.updated_at = chrono::Utc::now();
     validate_connection(&connection).map_err(|error| error.to_string())?;
     store
@@ -292,14 +308,21 @@ fn endpoint(connection: &Connection) -> Option<(&str, Option<&str>, u16)> {
     }
 }
 
-/// Resolves one hop to a target: a saved host named (or identified) by the
-/// hop's text, else the address the text spells out. A hop without a user
-/// uses the user of the host being opened.
-fn hop_target(config: &AppConfig, hop_text: &str, fallback_user: &str) -> Result<Target, String> {
-    let saved = config.connections.iter().find(|connection| {
+/// Most hops a chain may have, nested chains included.
+pub const MAX_JUMP_HOPS: usize = 8;
+
+/// The saved host a hop's text names (by id or name), if it has an address.
+fn saved_hop<'a>(config: &'a AppConfig, hop_text: &str) -> Option<&'a Connection> {
+    config.connections.iter().find(|connection| {
         endpoint(connection).is_some() && (connection.id == hop_text || connection.name == hop_text)
-    });
-    if let Some(connection) = saved {
+    })
+}
+
+/// Resolves one hop to a target without its own jump chain: a saved host named
+/// (or identified) by the hop's text, else the address the text spells out. A
+/// hop without a user uses `fallback_user`.
+fn hop_target(config: &AppConfig, hop_text: &str, fallback_user: &str) -> Result<Target, String> {
+    if let Some(connection) = saved_hop(config, hop_text) {
         let (host, user, port) = endpoint(connection).expect("checked above");
         return Ok(Target {
             host_id: connection.id.clone(),
@@ -310,6 +333,7 @@ fn hop_target(config: &AppConfig, hop_text: &str, fallback_user: &str) -> Result
             identity: None,
             jump: Vec::new(),
             saved_password: None,
+            proxy: None,
         });
     }
     let hop = parse_jump(hop_text)?
@@ -336,7 +360,47 @@ fn hop_target(config: &AppConfig, hop_text: &str, fallback_user: &str) -> Result
         identity: None,
         jump: Vec::new(),
         saved_password: None,
+        proxy: None,
     })
+}
+
+/// The hops that lead to `connection`, outermost first, flattened. A hop that
+/// is a saved host with a jump chain of its own is reached through that chain
+/// first, recursively; each hop keeps its own user and port (a hop with no
+/// user falls back to `owner_user`, the user of the host that names it).
+/// `path` holds the saved hosts being resolved, to catch loops.
+fn collect_chain(
+    config: &AppConfig,
+    connection: &Connection,
+    owner_user: &str,
+    path: &mut Vec<String>,
+    out: &mut Vec<Target>,
+) -> Result<(), String> {
+    let Some(chain) = connection.proxy_jump.as_deref() else {
+        return Ok(());
+    };
+    path.push(connection.id.clone());
+    for part in chain.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let hop = hop_target(config, part, owner_user)?;
+        if path.contains(&hop.host_id) {
+            return Err(format!(
+                "the jump hosts of {} loop back to {}",
+                connection.name, hop.label
+            ));
+        }
+        if let Some(saved) = saved_hop(config, part) {
+            collect_chain(config, saved, &hop.user, path, out)?;
+        }
+        out.push(hop);
+        if out.len() > MAX_JUMP_HOPS {
+            return Err(format!(
+                "{} has more than {MAX_JUMP_HOPS} jump hosts in a row",
+                connection.name
+            ));
+        }
+    }
+    path.pop();
+    Ok(())
 }
 
 /// Where to connect for `host_id`, with its jump chain. A host without a user
@@ -361,15 +425,15 @@ pub fn target_for(config: &AppConfig, host_id: &str) -> Result<Target, String> {
         )
     })?;
     let mut jump = Vec::new();
-    if let Some(chain) = connection.proxy_jump.as_deref() {
-        for part in chain.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-            let hop = hop_target(config, part, &user)?;
-            if hop.host_id == connection.id {
-                return Err(format!("{} cannot be its own jump host", connection.name));
-            }
-            jump.push(hop);
-        }
-    }
+    collect_chain(config, connection, &user, &mut vec![], &mut jump)?;
+    // The proxy of the host reaches its first hop; the password is added by
+    // `with_saved_login`, the only place secrets are read.
+    let proxy = connection
+        .proxy
+        .as_ref()
+        .map(|settings| crate::saved_proxy(settings, None, &connection.id))
+        .transpose()
+        .map_err(|error| error.to_string())?;
     Ok(Target {
         host_id: connection.id.clone(),
         label: connection.name.clone(),
@@ -379,6 +443,7 @@ pub fn target_for(config: &AppConfig, host_id: &str) -> Result<Target, String> {
         identity: None,
         jump,
         saved_password: None,
+        proxy,
     })
 }
 
@@ -473,6 +538,56 @@ mod tests {
         assert_eq!(host["fields"]["hostname"], "10.0.0.5");
         assert!(host["fields"]["serial"].is_null());
         assert_eq!(snapshot["warnings"], json!([]));
+    }
+
+    #[test]
+    fn a_host_keeps_its_outbound_proxy_and_the_target_carries_it() {
+        use easyssh_core::ProxyKind;
+        let (_dir, store) = store();
+        let mut input = new_host("web", "10.0.0.5", Some("deploy"), 22);
+        input.proxy = Some(ProxySettings {
+            kind: ProxyKind::Socks5,
+            host: " 127.0.0.1 ".into(),
+            port: 7890,
+            username: Some(" ".into()),
+        });
+        let id = add_host(&store, &input).unwrap();
+        let config = store.load_app_config().unwrap();
+        // Trimmed, and a blank user means no login.
+        assert_eq!(
+            config.connections[0].proxy,
+            Some(ProxySettings {
+                kind: ProxyKind::Socks5,
+                host: "127.0.0.1".into(),
+                port: 7890,
+                username: None,
+            })
+        );
+        let host = &snapshot(&config)["hosts"][0]["fields"]["proxy"];
+        assert_eq!(host["kind"], "socks5");
+        assert_eq!(host["port"], 7890);
+        let target = target_for(&config, &id).unwrap();
+        assert_eq!(
+            target
+                .proxy
+                .as_ref()
+                .map(|proxy| proxy.display())
+                .as_deref(),
+            Some("socks5://127.0.0.1:7890")
+        );
+        // Editing without a proxy takes it away; a bad one is refused.
+        let mut edited = input.clone();
+        edited.id = Some(id.clone());
+        edited.proxy = None;
+        save_host(&store, &edited).unwrap();
+        assert_eq!(store.load_app_config().unwrap().connections[0].proxy, None);
+        edited.proxy = Some(ProxySettings {
+            kind: ProxyKind::Http,
+            host: "".into(),
+            port: 3128,
+            username: None,
+        });
+        assert!(save_host(&store, &edited).is_err());
     }
 
     #[test]
@@ -713,6 +828,128 @@ mod tests {
             }
         )
         .is_err());
+    }
+
+    fn with_jump(store: &Store, name: &str, host: &str, user: &str, jump: &str) -> String {
+        save_host(
+            store,
+            &NewHost {
+                jump: Some(jump.into()),
+                ..new_host(name, host, Some(user), 22)
+            },
+        )
+        .unwrap()
+    }
+
+    fn hops(config: &AppConfig, id: &str) -> Vec<(String, u16, String)> {
+        target_for(config, id)
+            .unwrap()
+            .jump
+            .iter()
+            .map(|h| (h.host.clone(), h.port, h.user.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn nested_jump_hosts_are_resolved_hop_by_hop_with_their_own_users() {
+        let (_dir, store) = store();
+        add_host(&store, &new_host("outer", "o.example", Some("oscar"), 2201)).unwrap();
+        with_jump(&store, "middle", "m.example", "mia", "outer");
+        let target = with_jump(&store, "db", "d.example", "dba", "middle");
+        let config = store.load_app_config().unwrap();
+        assert_eq!(
+            hops(&config, &target),
+            vec![
+                ("o.example".to_owned(), 2201, "oscar".to_owned()),
+                ("m.example".to_owned(), 22, "mia".to_owned()),
+            ]
+        );
+        assert_eq!(
+            target_for(&config, &target).unwrap().key().jump,
+            vec!["oscar@o.example:2201", "mia@m.example:22"]
+        );
+    }
+
+    #[test]
+    fn a_comma_list_and_user_at_host_port_hops_keep_order_user_and_port() {
+        let (_dir, store) = store();
+        add_host(&store, &new_host("a", "a.example", Some("amy"), 22)).unwrap();
+        let target = with_jump(
+            &store,
+            "t",
+            "t.example",
+            "tom",
+            "a, bob@b.example:2222, c.example",
+        );
+        let config = store.load_app_config().unwrap();
+        assert_eq!(
+            hops(&config, &target),
+            vec![
+                ("a.example".to_owned(), 22, "amy".to_owned()),
+                ("b.example".to_owned(), 2222, "bob".to_owned()),
+                // No user anywhere: the user of the host being opened.
+                ("c.example".to_owned(), 22, "tom".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_nested_chain_inside_a_comma_list_is_flattened_in_order() {
+        let (_dir, store) = store();
+        add_host(&store, &new_host("x", "x.example", Some("xa"), 22)).unwrap();
+        with_jump(&store, "y", "y.example", "ya", "x");
+        let target = with_jump(&store, "t", "t.example", "tom", "y,z@z.example");
+        let config = store.load_app_config().unwrap();
+        let users: Vec<String> = hops(&config, &target).into_iter().map(|h| h.2).collect();
+        assert_eq!(users, vec!["xa", "ya", "z"]);
+    }
+
+    #[test]
+    fn jump_loops_and_overlong_chains_are_refused() {
+        let (_dir, store) = store();
+        let a = add_host(&store, &new_host("a", "a.example", Some("me"), 22)).unwrap();
+        let b = with_jump(&store, "b", "b.example", "me", "a");
+        // a -> b -> a
+        let mut config = store.load_app_config().unwrap();
+        config
+            .connections
+            .iter_mut()
+            .find(|c| c.id == a)
+            .unwrap()
+            .proxy_jump = Some("b".into());
+        assert!(target_for(&config, &a).unwrap_err().contains("loop"));
+        assert!(target_for(&config, &b).unwrap_err().contains("loop"));
+        // A host cannot jump through itself.
+        let me = with_jump(&store, "me", "me.example", "me", "other.example");
+        let mut config = store.load_app_config().unwrap();
+        config
+            .connections
+            .iter_mut()
+            .find(|c| c.id == me)
+            .unwrap()
+            .proxy_jump = Some("me".into());
+        assert!(target_for(&config, &me).is_err());
+
+        // A chain of nine hosts is too long, eight is fine.
+        add_host(&store, &new_host("h0", "h0.example", Some("me"), 22)).unwrap();
+        let mut last = String::new();
+        for i in 1..=9 {
+            last = with_jump(
+                &store,
+                &format!("h{i}"),
+                &format!("h{i}.example"),
+                "me",
+                &format!("h{}", i - 1),
+            );
+            let config = store.load_app_config().unwrap();
+            let result = target_for(&config, &last);
+            if i <= 8 {
+                assert_eq!(result.unwrap().jump.len(), i, "chain of {i}");
+            } else {
+                assert!(result.is_err(), "nine hops are too many");
+            }
+        }
+        assert!(!last.is_empty());
     }
 
     #[test]

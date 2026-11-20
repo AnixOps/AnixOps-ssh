@@ -81,7 +81,8 @@ let state: VaultStatus = {
         : [],
 };
 let passphrase = mode === "locked" || hello || bio || key ? "preview-passphrase" : "";
-const saved = new Map<string, SecretsStatus>([["3", { password: true, privateKey: false, passphrase: false }]]);
+const none: SecretsStatus = { password: false, privateKey: false, passphrase: false, proxyPassword: false };
+const saved = new Map<string, SecretsStatus>([["3", { ...none, password: true }]]);
 const listeners = new Set<(unlocked: boolean) => void>();
 
 function changed(): VaultStatus {
@@ -200,23 +201,24 @@ export const previewVault = {
 };
 
 export async function previewForgetAll(): Promise<number> {
-  const hosts = [...saved.values()].filter((s) => s.password || s.privateKey || s.passphrase).length;
+  const hosts = [...saved.values()].filter((s) => s.password || s.privateKey || s.passphrase || s.proxyPassword).length;
   saved.clear();
   return hosts;
 }
 
 export async function previewSecretsStatus(hostId: string): Promise<SecretsStatus> {
-  return { ...(saved.get(hostId) ?? { password: false, privateKey: false, passphrase: false }) };
+  return { ...(saved.get(hostId) ?? none) };
 }
 
 export async function previewSecretsSet(hostId: string, input: SecretsInput): Promise<SecretsStatus> {
   if (!state.keychainAvailable) throw new Error(`the operating system keychain is not available: ${state.keychainError}`);
   if (state.passphraseSet && !state.unlocked) throw new Error("the vault is locked");
-  const current = saved.get(hostId) ?? { password: false, privateKey: false, passphrase: false };
+  const current = saved.get(hostId) ?? none;
   const next = {
     password: input.password === undefined ? current.password : input.password !== "",
     privateKey: input.privateKey === undefined ? current.privateKey : input.privateKey !== "",
     passphrase: input.passphrase === undefined ? current.passphrase : input.passphrase !== "",
+    proxyPassword: input.proxyPassword === undefined ? current.proxyPassword : input.proxyPassword !== "",
   };
   saved.set(hostId, next);
   return { ...next };

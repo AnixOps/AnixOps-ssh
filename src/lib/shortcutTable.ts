@@ -1,7 +1,7 @@
 import { t } from "./i18n";
 import { isMac, type AppShortcut } from "./shortcuts";
 
-export type ShortcutId = AppShortcut | "focus-pane" | "rename" | "remove" | "row-menu" | "next-tab";
+export type ShortcutId = AppShortcut | "focus-pane" | "rename" | "remove" | "select-all" | "properties" | "row-menu" | "next-tab";
 
 export interface ShortcutRow {
   id: ShortcutId;
@@ -11,11 +11,12 @@ export interface ShortcutRow {
   mac: string;
   /** Shown beside the shortcut when the terminal has the focus and it differs. */
   pcInTerminal?: string;
+  macInTerminal?: string;
 }
 
 /** Every shortcut, once (K9). */
 export const shortcutTable: ShortcutRow[] = [
-  { id: "search-hosts", group: "app", title: () => t.palette, pc: "Ctrl+K", mac: "⌘K", pcInTerminal: "Ctrl+Shift+K" },
+  { id: "search-hosts", group: "app", title: () => t.palette, pc: "Ctrl+K", mac: "⌘K", pcInTerminal: "Ctrl+Shift+K", macInTerminal: "⌘⇧K" },
   { id: "shortcut-list", group: "app", title: () => t.shortcutList, pc: "Ctrl+/", mac: "⌘/", pcInTerminal: "Ctrl+Shift+/" },
   { id: "settings", group: "app", title: () => t.navSettings, pc: "Ctrl+,", mac: "⌘,", pcInTerminal: "Ctrl+Shift+," },
   { id: "go-hosts", group: "app", title: () => t.navHosts, pc: "Ctrl+1", mac: "⌘1", pcInTerminal: "Ctrl+Shift+1" },
@@ -29,6 +30,7 @@ export const shortcutTable: ShortcutRow[] = [
   { id: "close-tab", group: "terminal", title: () => t.closeTab, pc: "Ctrl+Shift+W", mac: "⌘W" },
   { id: "toggle-files", group: "terminal", title: () => t.toggleFiles, pc: "Ctrl+Shift+E", mac: "⌘E" },
   { id: "find", group: "terminal", title: () => t.find, pc: "Ctrl+Shift+F", mac: "⌘F" },
+  { id: "clear-terminal", group: "terminal", title: () => t.clearTerminal, pc: "", mac: "⌘K" },
   { id: "copy", group: "terminal", title: () => t.copy, pc: "Ctrl+Shift+C", mac: "⌘C" },
   { id: "paste", group: "terminal", title: () => t.paste, pc: "Ctrl+Shift+V", mac: "⌘V" },
   { id: "split-right", group: "terminal", title: () => t.splitRight, pc: "Ctrl+Shift+D", mac: "⌘D" },
@@ -40,11 +42,14 @@ export const shortcutTable: ShortcutRow[] = [
   { id: "next-prompt", group: "terminal", title: () => t.promptNext, pc: "Ctrl+Shift+PageDown", mac: "⌘↓" },
   { id: "rename", group: "list", title: () => t.editHost, pc: "F2", mac: "⌘E" },
   { id: "remove", group: "list", title: () => t.delete, pc: "Delete", mac: "⌘⌫" },
+  { id: "select-all", group: "list", title: () => t.selectAll, pc: "Ctrl+A", mac: "⌘A" },
+  { id: "properties", group: "list", title: () => t.properties, pc: "Alt+Enter", mac: "⌘I" },
   { id: "row-menu", group: "list", title: () => t.more, pc: "Shift+F10", mac: "⌃↵" },
 ];
 
-/** The shortcut for a command, as the platform writes it; "" when there is none. */
-export function shortcutHint(id: ShortcutId): string {
-  const row = shortcutTable.find((candidate) => candidate.id === id);
+/** The shortcut for a command, as the platform writes it; "" when there is none.
+ *  `group` picks the row of a command listed twice (find: hosts or terminal). */
+export function shortcutHint(id: ShortcutId, group?: ShortcutRow["group"]): string {
+  const row = shortcutTable.find((candidate) => candidate.id === id && (!group || candidate.group === group));
   return row ? (isMac ? row.mac : row.pc) : "";
 }

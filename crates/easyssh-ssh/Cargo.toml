@@ -43,6 +43,7 @@ windows = { version = "0.62", optional = true, features = [
 ] }
 
 [dev-dependencies]
+bytes = "1"
 tempfile.workspace = true
 sha2.workspace = true
 ed25519-dalek = "3"

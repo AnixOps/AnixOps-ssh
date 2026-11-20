@@ -24,15 +24,95 @@ pub struct Settings {
     /// macOS: Option sends Meta instead of layout characters. Off by default.
     #[serde(default)]
     terminal_option_as_meta: bool,
+    /// Empty means the built-in monospace stack.
+    #[serde(default)]
+    terminal_font_family: String,
+    #[serde(default = "default_line_height")]
+    terminal_line_height: f32,
+    #[serde(default)]
+    terminal_cursor_style: CursorStyle,
+    #[serde(default = "default_true")]
+    terminal_cursor_blink: bool,
+    /// Ask before a multi-line paste into a shell without bracketed paste.
+    #[serde(default = "yes")]
+    terminal_warn_multiline_paste: bool,
+    /// What a right-click in the terminal does.
+    #[serde(default)]
+    terminal_right_click: RightClick,
+    /// Selecting text in the terminal copies it.
+    #[serde(default)]
+    terminal_copy_on_select: bool,
+    /// Remote programs may write (never read) the clipboard with OSC 52.
+    #[serde(default = "yes")]
+    terminal_osc52: bool,
+    /// Reconnect by itself, with backoff, when a connection drops.
+    #[serde(default = "yes")]
+    terminal_auto_reconnect: bool,
+}
+
+fn default_line_height() -> f32 {
+    1.2
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Serialize, Deserialize, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorStyle {
+    #[default]
+    Block,
+    Bar,
+    Underline,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// What a right-click in the terminal does.
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RightClick {
+    #[default]
+    Menu,
+    Paste,
 }
 
 /// Terminal behaviour only the app's terminal view reads. Kept under its own
 /// key so the shared `terminal` preferences and their schema stay unchanged;
 /// a missing or older value falls back to the defaults field by field.
-#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(default)]
 struct TerminalBehaviour {
     option_as_meta: bool,
+    font_family: String,
+    line_height: f32,
+    cursor_style: CursorStyle,
+    cursor_blink: bool,
+    warn_multiline_paste: bool,
+    right_click: RightClick,
+    copy_on_select: bool,
+    osc52: bool,
+    auto_reconnect: bool,
+}
+
+impl Default for TerminalBehaviour {
+    fn default() -> Self {
+        Self {
+            option_as_meta: false,
+            font_family: String::new(),
+            line_height: default_line_height(),
+            cursor_style: CursorStyle::default(),
+            cursor_blink: true,
+            warn_multiline_paste: true,
+            right_click: RightClick::Menu,
+            copy_on_select: false,
+            osc52: true,
+            auto_reconnect: true,
+        }
+    }
 }
 
 const TERMINAL_BEHAVIOUR: &str = "terminal_behaviour";
@@ -57,6 +137,15 @@ pub fn settings_get() -> Result<Settings, String> {
         crash_reports: config.telemetry.crash_reports,
         usage_stats: config.telemetry.usage_stats,
         terminal_option_as_meta: behaviour.option_as_meta,
+        terminal_font_family: behaviour.font_family,
+        terminal_line_height: behaviour.line_height,
+        terminal_cursor_style: behaviour.cursor_style,
+        terminal_cursor_blink: behaviour.cursor_blink,
+        terminal_warn_multiline_paste: behaviour.warn_multiline_paste,
+        terminal_right_click: behaviour.right_click,
+        terminal_copy_on_select: behaviour.copy_on_select,
+        terminal_osc52: behaviour.osc52,
+        terminal_auto_reconnect: behaviour.auto_reconnect,
     })
 }
 
@@ -67,6 +156,12 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     }
     if !(1_000..=200_000).contains(&settings.terminal_scrollback) {
         return Err("scrollback must be between 1,000 and 200,000 lines".to_owned());
+    }
+    if !(1.0..=1.6).contains(&settings.terminal_line_height) {
+        return Err("the line height must be between 1.0 and 1.6".to_owned());
+    }
+    if settings.terminal_font_family.len() > 200 {
+        return Err("the font family is too long".to_owned());
     }
     // Only these settings are written, so a host saved by the daemon in the
     // meantime is not touched.
@@ -90,6 +185,15 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
         .map_err(stored)?;
     let behaviour = TerminalBehaviour {
         option_as_meta: settings.terminal_option_as_meta,
+        font_family: settings.terminal_font_family.trim().to_owned(),
+        line_height: settings.terminal_line_height,
+        cursor_style: settings.terminal_cursor_style,
+        cursor_blink: settings.terminal_cursor_blink,
+        warn_multiline_paste: settings.terminal_warn_multiline_paste,
+        right_click: settings.terminal_right_click,
+        copy_on_select: settings.terminal_copy_on_select,
+        osc52: settings.terminal_osc52,
+        auto_reconnect: settings.terminal_auto_reconnect,
     };
     if behaviour != terminal_behaviour() {
         store
@@ -114,6 +218,30 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     Ok(())
 }
 
+/// Monospace font families installed on this machine, sorted and without
+/// duplicates; the terminal font picker offers them.
+#[tauri::command]
+pub async fn monospace_fonts() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut database = fontdb::Database::new();
+        database.load_system_fonts();
+        monospace_families(&database)
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+fn monospace_families(database: &fontdb::Database) -> Vec<String> {
+    let mut families: Vec<String> = database
+        .faces()
+        .filter(|face| face.monospaced)
+        .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
+        .collect();
+    families.sort_by_key(|name| name.to_lowercase());
+    families.dedup();
+    families
+}
+
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
@@ -132,6 +260,8 @@ pub struct SshStatus {
     sftp_found: bool,
     agent: AgentState,
     agent_keys: Vec<String>,
+    /// Which agent the built-in engine found: `openssh`, `pageant`, `environment`.
+    agent_kind: Option<&'static str>,
     agent_error: Option<String>,
     ssh_config_hosts: usize,
 }
@@ -146,10 +276,12 @@ fn agent_state(available: bool, error: Option<&str>) -> AgentState {
     }
 }
 
-/// Runs `ssh -V` and `ssh-add -l`; slow enough to keep off the main thread.
+/// Runs `ssh -V` and `ssh-add -l`, then asks the agent the way the built-in
+/// engine does (so Pageant on Windows shows up); slow enough to keep off the
+/// main thread.
 #[tauri::command]
 pub async fn ssh_status() -> Result<SshStatus, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    let mut status = tauri::async_runtime::spawn_blocking(|| {
         let diagnostics = OpenSsh.diagnostics(None);
         let (available, agent_keys, agent_error) = match diagnostics.agent_keys {
             Some(keys) => (keys.available, keys.fingerprints, keys.raw_error),
@@ -160,25 +292,55 @@ pub async fn ssh_status() -> Result<SshStatus, String> {
             sftp_found: OpenSsh.sftp_path().is_ok(),
             agent: agent_state(available, agent_error.as_deref()),
             agent_keys,
+            agent_kind: None,
             agent_error,
             ssh_config_hosts: scan_default_ssh_config().aliases.len(),
         }
     })
     .await
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    let probe = easyssh_ssh::probe_agent(&easyssh_ssh::AgentSource::Environment).await;
+    if let Some(kind) = probe.kind {
+        if probe.error.is_none() {
+            status.agent = if probe.keys.is_empty() {
+                AgentState::Empty
+            } else {
+                AgentState::Ready
+            };
+            status.agent_keys = probe.keys;
+            status.agent_kind = Some(kind.id());
+            status.agent_error = None;
+        }
+    }
+    Ok(status)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_state, AgentState, TerminalBehaviour};
+    use super::{agent_state, AgentState, RightClick, TerminalBehaviour};
 
     #[test]
     fn terminal_behaviour_defaults_when_missing_or_partial() {
         let empty: TerminalBehaviour = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, TerminalBehaviour::default());
+        assert!(empty.warn_multiline_paste && empty.osc52 && !empty.copy_on_select);
+        assert!(empty.auto_reconnect);
+        let partial: TerminalBehaviour =
+            serde_json::from_str(r#"{"right_click":"paste"}"#).unwrap();
+        assert_eq!(partial.right_click, RightClick::Paste);
+        assert!(partial.osc52);
         assert!(!empty.option_as_meta);
         let on: TerminalBehaviour = serde_json::from_str(r#"{"option_as_meta":true}"#).unwrap();
         assert!(on.option_as_meta);
+        // Settings saved before the font options existed keep working.
+        assert!(empty.font_family.is_empty());
+        assert_eq!(empty.line_height, 1.2);
+        assert_eq!(empty.cursor_style, super::CursorStyle::Block);
+        assert!(empty.cursor_blink);
+        let bar: TerminalBehaviour =
+            serde_json::from_str(r#"{"cursor_style":"bar","cursor_blink":false}"#).unwrap();
+        assert_eq!(bar.cursor_style, super::CursorStyle::Bar);
+        assert!(!bar.cursor_blink);
     }
 
     #[test]

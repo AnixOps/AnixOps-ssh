@@ -251,6 +251,10 @@
         "engine": {
           "$ref": "#/$defs/EnginePreference",
           "description": "Absent means auto."
+        },
+        "proxy": {
+          "$ref": "#/$defs/ProxySettings",
+          "description": "An outbound proxy for the first hop. Absent means a direct connection. The proxy password is a saved secret, not part of the record."
         }
       },
       "required": [
@@ -1077,6 +1081,7 @@
         "xshell",
         "finalshell",
         "termius",
+        "ansible",
         "csv",
         "openssh"
       ],
@@ -2325,6 +2330,10 @@
         },
         "passphrase": {
           "type": "boolean"
+        },
+        "proxy_password": {
+          "type": "boolean",
+          "description": "The password of the host's outbound proxy. Absent from older daemons."
         }
       },
       "required": [
@@ -2352,6 +2361,10 @@
         "passphrase": {
           "type": "string",
           "description": "Key passphrase. Absent keeps; empty clears."
+        },
+        "proxy_password": {
+          "type": "string",
+          "description": "Password of the host's outbound proxy. Absent keeps; empty clears."
         }
       },
       "required": [
@@ -3121,6 +3134,41 @@
       ],
       "description": "Rust: domain::EnginePreference. Per-host override of the global engine; `auto` follows the global setting."
     },
+    "ProxyKind": {
+      "type": "string",
+      "enum": [
+        "socks5",
+        "http"
+      ],
+      "description": "Rust: domain::ProxyKind. SOCKS5 (RFC 1928, with RFC 1929 username/password) or HTTP CONNECT (with basic authentication)."
+    },
+    "ProxySettings": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProxyKind"
+        },
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "username": {
+          "type": "string",
+          "description": "The proxy login; absent means no authentication. Its password is the saved secret `proxy_password`."
+        }
+      },
+      "required": [
+        "kind",
+        "host",
+        "port"
+      ],
+      "additionalProperties": false,
+      "description": "Rust: domain::ProxySettings. Where the outbound proxy of a host is."
+    },
     "HostKeyStatus": {
       "type": "string",
       "enum": [
@@ -3346,6 +3394,14 @@
               "type": "null"
             }
           ]
+        },
+        "uid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gid": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "required": [
@@ -3356,7 +3412,7 @@
         "permissions"
       ],
       "additionalProperties": false,
-      "description": "`modified` is Unix seconds."
+      "description": "`modified` is Unix seconds. `uid` and `gid` are present when the server sent them."
     },
     "SftpOpenParams": {
       "type": "object",
@@ -3386,6 +3442,72 @@
         "home"
       ],
       "additionalProperties": false
+    },
+    "MonitorSampleParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "boolean",
+          "description": "Also list every process's owner, command line and executable."
+        }
+      },
+      "required": [
+        "host_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `monitor.sample` payload (russh engine): reads the server's load, memory, network, disks and processes on the connection the terminal already has. Never connects. Reply: MonitorSampleResult."
+    },
+    "MonitorSampleResult": {
+      "type": "object",
+      "properties": {
+        "output": {
+          "type": "string",
+          "description": "What the read-only sample script printed (`@section` markers, raw /proc and df text)."
+        },
+        "latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Keepalive round trip; null when the server did not answer it."
+        }
+      },
+      "required": [
+        "output",
+        "latency_ms"
+      ],
+      "additionalProperties": false
+    },
+    "MonitorSignalParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "signal": {
+          "type": "string",
+          "enum": [
+            "TERM",
+            "KILL",
+            "HUP",
+            "INT"
+          ]
+        }
+      },
+      "required": [
+        "host_id",
+        "pid",
+        "signal"
+      ],
+      "additionalProperties": false,
+      "description": "Command `monitor.signal` payload (russh engine): sends a signal to a process as the login user, on the existing connection."
     },
     "SftpListParams": {
       "type": "object",
@@ -3478,6 +3600,32 @@
       "additionalProperties": false,
       "description": "Command `sftp.rename` payload."
     },
+    "SftpChmodParams": {
+      "type": "object",
+      "properties": {
+        "sftp_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4095
+        },
+        "recursive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sftp_id",
+        "path",
+        "mode"
+      ],
+      "additionalProperties": false,
+      "description": "Command `sftp.chmod` payload. `mode` holds the permission bits (`0o755` style, with setuid, setgid and sticky). `recursive` applies it to everything inside a folder too; links are skipped, never followed."
+    },
     "SftpCloseParams": {
       "type": "object",
       "properties": {
@@ -3531,6 +3679,50 @@
       ],
       "additionalProperties": false
     },
+    "TransferEnqueueParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/TransferDirection"
+        },
+        "local_path": {
+          "type": "string"
+        },
+        "remote_path": {
+          "type": "string"
+        },
+        "recursive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "host_id",
+        "direction",
+        "local_path",
+        "remote_path"
+      ],
+      "additionalProperties": false,
+      "description": "Command `transfer.enqueue` payload (russh engine): like `transfer.start`, but on the host's transfer queue instead of a file session of its own. At most a few transfers per host run at once, the others wait (`queued` in the reply) and report `transfer.started` when their turn comes. Reply: TransferEnqueueResult."
+    },
+    "TransferEnqueueResult": {
+      "type": "object",
+      "properties": {
+        "transfer_id": {
+          "type": "string"
+        },
+        "queued": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "transfer_id",
+        "queued"
+      ],
+      "additionalProperties": false
+    },
     "TransferCancelParams": {
       "type": "object",
       "properties": {
@@ -3553,6 +3745,11 @@
         "bytes": {
           "type": "integer",
           "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bytes the whole transfer will move (a folder: the sum of its files), when known."
         }
       },
       "required": [
@@ -3560,7 +3757,20 @@
         "bytes"
       ],
       "additionalProperties": false,
-      "description": "Event `transfer.progress` payload: bytes moved so far."
+      "description": "Event `transfer.progress` payload: bytes moved so far, and the total when known."
+    },
+    "TransferStartedEvent": {
+      "type": "object",
+      "properties": {
+        "transfer_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "transfer_id"
+      ],
+      "additionalProperties": false,
+      "description": "Event `transfer.started` payload: a queued transfer left the queue and runs."
     },
     "TransferDoneEvent": {
       "type": "object",
@@ -3585,6 +3795,11 @@
               "type": "null"
             }
           ]
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Links a folder transfer left out: broken, or leading back up into a folder that holds them. Absent when none."
         }
       },
       "required": [
@@ -3650,9 +3865,11 @@
       "enum": [
         "starting",
         "running",
+        "reconnecting",
         "stopped",
         "failed"
-      ]
+      ],
+      "description": "`reconnecting`: the connection dropped; the forward is closed while a new connection is made (the reason is in `error`)."
     },
     "TunnelState": {
       "type": "object",
@@ -3687,6 +3904,22 @@
               "type": "null"
             }
           ]
+        },
+        "channel_errors": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Connections the running forward accepted but could not pass on (the server refused the channel, the target is down). Optional; absent means none."
+        },
+        "last_channel_error": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the last of `channel_errors` failed, e.g. `127.0.0.1:1: connect failed`."
         }
       },
       "required": [
@@ -3741,6 +3974,22 @@
               "type": "null"
             }
           ]
+        },
+        "channel_errors": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Connections the running forward accepted but could not pass on (the server refused the channel, the target is down). Optional; absent means none."
+        },
+        "last_channel_error": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the last of `channel_errors` failed, e.g. `127.0.0.1:1: connect failed`."
         }
       },
       "required": [

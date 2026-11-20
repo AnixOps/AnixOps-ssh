@@ -1,13 +1,25 @@
 import { ClipboardPaste, Eye, EyeOff } from "lucide-react";
-import { useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { ProxySection } from "@/components/app/ProxySection";
 import { MobileSwitchRow } from "@/components/mobile/MobileSwitchRow";
 import { Button } from "@/components/ui/button";
 import { Field, Notice, Textarea } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { isVaultLocked, pasteText, saveHost, secretsSet, type Group, type Host, type SecretsInput } from "@/lib/backend";
+import {
+  isVaultLocked,
+  pasteText,
+  saveHost,
+  secretsSet,
+  secretsStatus,
+  type Group,
+  type Host,
+  type ProxyFields,
+  type SecretsInput,
+} from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { hostAttach, setHostAttach, type Attach } from "@/lib/mobilePrefs";
+import { cleanProxy, proxyReady } from "@/lib/proxyUi";
 import { vaultErrorText } from "@/lib/vaultUi";
 import { groupName, jumpHostFor, jumpOptions, jumpText, parseTags, tagsText } from "@/lib/mobileHosts";
 
@@ -46,10 +58,18 @@ export function MobileHostForm({
   const [privateKey, setPrivateKey] = useState("");
   const [keyPassphrase, setKeyPassphrase] = useState("");
   const [showKey, setShowKey] = useState(false);
+  const [proxy, setProxy] = useState<ProxyFields | null>(host?.fields.proxy ?? null);
+  const [proxyPassword, setProxyPassword] = useState("");
+  /** Whether the host already has a proxy password in the vault (never its value). */
+  const [proxyPasswordSaved, setProxyPasswordSaved] = useState(false);
   /** Set once the host is saved, so a retry after a login failure updates it instead of adding another. */
   const [savedId, setSavedId] = useState<string | null>(host?.id ?? null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (host) secretsStatus(host.id).then((status) => setProxyPasswordSaved(status.proxyPassword)).catch(() => {});
+  }, [host]);
 
   const options = jumpOptions(hosts, host?.id ?? null);
   const chosen = jumpHostFor(options, jump);
@@ -69,6 +89,9 @@ export function MobileHostForm({
     if (password !== "") input.password = password;
     if (privateKey.trim() !== "") input.privateKey = privateKey.trim() + "\n";
     if (keyPassphrase !== "") input.passphrase = keyPassphrase;
+    // A host without a proxy keeps no proxy password; empty keeps the saved one.
+    if (!proxy && proxyPasswordSaved) input.proxyPassword = "";
+    else if (proxy && proxyPassword !== "") input.proxyPassword = proxyPassword;
     if (Object.keys(input).length === 0) return null;
     try {
       await secretsSet(hostId, input);
@@ -85,6 +108,7 @@ export function MobileHostForm({
     // A phone has no local user to fall back on, so the login name is needed.
     if (!username.trim()) return setError(`${t.username}: ${t.required}`);
     if (!/^\d{1,5}$/.test(port.trim()) || portNumber < 1 || portNumber > 65535) return setError(`${t.port}: 1–65535`);
+    if (!proxyReady(proxy)) return setError(`${t.proxyHost}: ${t.required}`);
     setSaving(true);
     saveHost({
       id: savedId,
@@ -102,6 +126,7 @@ export function MobileHostForm({
         username: username.trim(),
         port: portNumber,
         proxyJump: jump.trim() || null,
+        proxy: cleanProxy(proxy),
       },
     })
       .then(async (hostId) => {
@@ -227,6 +252,18 @@ export function MobileHostForm({
           <span className="mt-1 block text-callout text-label-2">{t.mobileAttachHint}</span>
         </Field>
         <MobileSwitchRow label={t.favorite} on={favorite} onChange={setFavorite} />
+        <ProxySection
+          touch
+          proxy={proxy}
+          onChange={setProxy}
+          password={{
+            saved: proxyPasswordSaved,
+            value: proxyPassword,
+            cleared: false,
+            onValue: setProxyPassword,
+            onCleared: () => {},
+          }}
+        />
         <section aria-labelledby="mobile-login-title" className="flex flex-col gap-5">
           <div className="flex flex-col gap-1">
             <h3 id="mobile-login-title" className="text-title-3">

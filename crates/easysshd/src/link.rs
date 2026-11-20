@@ -149,10 +149,29 @@ pub struct HostKeyPrompt {
 #[derive(Debug, Clone)]
 pub struct TunnelStatus {
     pub id: String,
-    /// `starting`, `running`, `stopped` or `failed`.
+    /// `starting`, `running`, `reconnecting`, `stopped` or `failed`.
     pub state: String,
     pub bind_port: Option<u16>,
     pub error: Option<String>,
+    /// Connections the running forward could not pass on, and the last reason.
+    pub channel_errors: u64,
+    pub last_channel_error: Option<String>,
+}
+
+impl TunnelStatus {
+    /// Reads a `tunnel.status` payload or a `tunnel.list` row.
+    pub fn from_payload(payload: &Value) -> TunnelStatus {
+        TunnelStatus {
+            id: payload["id"].as_str().unwrap_or_default().to_owned(),
+            state: payload["state"].as_str().unwrap_or("failed").to_owned(),
+            bind_port: payload["bind_port"]
+                .as_u64()
+                .and_then(|p| u16::try_from(p).ok()),
+            error: payload["error"].as_str().map(str::to_owned),
+            channel_errors: payload["channel_errors"].as_u64().unwrap_or(0),
+            last_channel_error: payload["last_channel_error"].as_str().map(str::to_owned),
+        }
+    }
 }
 
 /// What `session.open` answered.
@@ -170,6 +189,10 @@ pub trait LinkHandler: Send + Sync + 'static {
     /// The connection to the daemon ended. Every sink has received
     /// `Exit { code: None }` (after [`Link::is_alive`] turned false).
     fn lost(&self) {}
+    /// A connection to the daemon is up again after [`LinkHandler::lost`]
+    /// (the same daemon, or a new one that knows nothing of the old one's
+    /// tunnels and transfers). Sessions are re-attached by then.
+    fn resumed(&self) {}
     /// Prompt `id` was answered, cancelled or timed out (by any client).
     fn askpass_resolved(&self, _id: u64) {}
     /// A client saved or deleted a host: refresh the host list.
@@ -179,7 +202,9 @@ pub trait LinkHandler: Send + Sync + 'static {
     fn hostkey_prompt(&self, _prompt: HostKeyPrompt) {}
     /// Host key prompt `id` is over (answered, cancelled or timed out).
     fn hostkey_resolved(&self, _id: u64) {}
-    fn transfer_progress(&self, _transfer_id: &str, _bytes: u64) {}
+    /// A queued transfer left the queue and runs.
+    fn transfer_started(&self, _transfer_id: &str) {}
+    fn transfer_progress(&self, _transfer_id: &str, _bytes: u64, _total: Option<u64>) {}
     /// `status` is `completed`, `failed` or `cancelled`.
     fn transfer_done(&self, _transfer_id: &str, _status: &str, _error: Option<&str>) {}
     fn tunnel_status(&self, _status: TunnelStatus) {}
@@ -330,21 +355,22 @@ impl Inner {
             Some("hostkey.resolved") => self
                 .handler
                 .hostkey_resolved(payload["id"].as_u64().unwrap_or(0)),
+            Some("transfer.started") => self
+                .handler
+                .transfer_started(payload["transfer_id"].as_str().unwrap_or_default()),
             Some("transfer.progress") => self.handler.transfer_progress(
                 payload["transfer_id"].as_str().unwrap_or_default(),
                 payload["bytes"].as_u64().unwrap_or(0),
+                payload["total"].as_u64(),
             ),
             Some("transfer.done") => self.handler.transfer_done(
                 payload["transfer_id"].as_str().unwrap_or_default(),
                 payload["status"].as_str().unwrap_or("failed"),
                 payload["error"].as_str(),
             ),
-            Some("tunnel.status") => self.handler.tunnel_status(TunnelStatus {
-                id: payload["id"].as_str().unwrap_or_default().to_owned(),
-                state: payload["state"].as_str().unwrap_or("failed").to_owned(),
-                bind_port: payload["bind_port"].as_u64().map(|p| p as u16),
-                error: payload["error"].as_str().map(str::to_owned),
-            }),
+            Some("tunnel.status") => self
+                .handler
+                .tunnel_status(TunnelStatus::from_payload(payload)),
             Some("askpass.resolved") => self
                 .handler
                 .askpass_resolved(payload["id"].as_u64().unwrap_or(0)),

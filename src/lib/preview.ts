@@ -74,7 +74,12 @@ const store: HostsSnapshot =
           makeHost("1", "prod-web-01", endpoint("deploy@10.0.1.11"), "prod", { favorite: true, color: "chart-1" }),
           makeHost("2", "prod-web-02", endpoint("deploy@10.0.1.12"), "prod"),
           makeHost("3", "prod-db", endpoint("postgres@10.0.2.20"), "prod", { favorite: true, color: "chart-5" }),
-          makeHost("4", "staging-api", endpoint("ubuntu@staging.internal:2222"), "staging"),
+          makeHost(
+            "4",
+            "staging-api",
+            { ...endpoint("ubuntu@staging.internal:2222"), proxy: { kind: "socks5", host: "127.0.0.1", port: 7890, username: null } },
+            "staging",
+          ),
           makeHost("5", "home-nas", endpoint("admin@192.168.1.10"), "home", { favorite: true }),
           makeHost("6", "raspberry-pi", endpoint("pi@192.168.1.42"), "home", { color: "chart-7" }),
           makeHost(
@@ -210,10 +215,19 @@ const fileHosts: ImportHost[] = [
   { label: "prod-web-01", hostname: "10.0.1.11", port: 22, username: "deploy", group_path: ["Prod"], exists: true },
 ];
 
+/** What an Ansible inventory import looks like: groups from `children`, jump
+ *  hosts from `ansible_ssh_common_args`, the other groups as notes. */
+const ansibleHosts: ImportHost[] = [
+  { label: "web01", hostname: "10.0.2.11", port: 22, username: "deploy", group_path: ["prod", "web"], exists: false },
+  { label: "web02", hostname: "10.0.2.12", port: 22, username: "deploy", group_path: ["prod", "web"], exists: false },
+  { label: "db01", hostname: "10.0.3.21", port: 22, username: "ops", group_path: ["prod", "db"], jump: ["bastion.example.com"], exists: false },
+];
+
 /** A canned preview of an import: `~/.ssh/config` or a picked file. */
 export function previewImport(kind: "file" | "ssh_config", format: ImportFormat | null): HostsImportPreviewResult {
   const detected: ImportFormat = kind === "ssh_config" ? "openssh" : "csv";
-  const hosts = structuredClone(kind === "ssh_config" ? sshConfigHosts : fileHosts);
+  const ansible = kind === "file" && format === "ansible";
+  const hosts = structuredClone(kind === "ssh_config" ? sshConfigHosts : ansible ? ansibleHosts : fileHosts);
   const groups = new Map<string, string[]>();
   for (const host of hosts)
     for (let end = 1; end <= (host.group_path?.length ?? 0); end++) {
@@ -228,8 +242,10 @@ export function previewImport(kind: "file" | "ssh_config", format: ImportFormat 
     warnings:
       kind === "ssh_config"
         ? ["Include ~/.ssh/config.d/*.conf: 2 files read", "legacy-switch: Match blocks are not evaluated"]
-        : [],
-    skipped: kind === "ssh_config" ? 1 : 0,
+        : ansible
+          ? ["web02: ansible_password was not imported (secrets are never imported)", "local-box: ansible_connection `local` is not SSH, host skipped"]
+          : [],
+    skipped: kind === "ssh_config" || ansible ? 1 : 0,
   };
 }
 
@@ -239,7 +255,17 @@ const rememberedServices = new Map<ServiceId, ServiceRemembered>();
 export function previewServiceRemembered(service: ServiceId): ServiceRemembered {
   return structuredClone(
     rememberedServices.get(service) ?? {
-      form: { url: "", default_user: "root", identity_file: null } satisfies ServiceForm,
+      form: {
+        url: "",
+        default_user: "root",
+        identity_file: null,
+        access_key_id: "",
+        org_id: "",
+        gateway: true,
+        gateway_host: "",
+        gateway_port: 2222,
+        gateway_user: "",
+      } satisfies ServiceForm,
       has_secret: false,
     },
   );
@@ -251,8 +277,12 @@ function checkServiceRequest(request: ServiceRequest): void {
     throw new Error("The address must start with https:// (http:// is accepted for localhost only).");
   const saved = rememberedServices.get(request.service)?.has_secret && !request.clear_secret;
   if (!request.secret?.trim() && !saved) throw new Error("Enter an admin API token.");
-  if (request.secret && !request.secret.startsWith("anixadm_"))
+  if (request.service === "control" && request.secret && !request.secret.startsWith("anixadm_"))
     throw new Error("An admin API token starts with anixadm_. Create one in the panel under API tokens.");
+  if (request.service === "jumpserver" && !request.form.access_key_id.trim())
+    throw new Error("Enter the access key id (create an access key under Profile, API key in JumpServer).");
+  if (request.service === "jumpserver" && request.form.gateway && !request.form.gateway_user.trim())
+    throw new Error("Enter your JumpServer user name: it is the SSH user name at the gateway.");
 }
 
 function rememberService(request: ServiceRequest): void {
@@ -265,13 +295,14 @@ function rememberService(request: ServiceRequest): void {
 export function previewServiceTest(request: ServiceRequest): number {
   checkServiceRequest(request);
   rememberService(request);
-  return 5;
+  return request.service === "jumpserver" ? 7 : 5;
 }
 
 /** A canned preview of an AnixOps Control import; the second node is stored already. */
 export function previewServicePreview(request: ServiceRequest): HostsImportPreviewResult {
   checkServiceRequest(request);
   rememberService(request);
+  if (request.service === "jumpserver") return previewJumpServer(request);
   const panel = new URL(request.form.url.trim()).hostname;
   const user = request.form.default_user.trim() || null;
   const node = (id: number, label: string, hostname: string, group: string, tags: string[], exists = false): ImportHost => ({
@@ -299,6 +330,45 @@ export function previewServicePreview(request: ServiceRequest): HostsImportPrevi
     warnings: ["2 node(s) are not approved in the panel (pending or rejected) and were skipped."],
     skipped: 2,
     removed: ["old-sg-02"],
+  };
+}
+
+/** A canned preview of a JumpServer import (gateway or direct). */
+function previewJumpServer(request: ServiceRequest): HostsImportPreviewResult {
+  const url = new URL(request.form.url.trim());
+  const { form } = request;
+  const gateway = form.gateway;
+  const asset = (id: number, label: string, address: string, path: string[], port = 22): ImportHost => ({
+    label,
+    hostname: gateway ? form.gateway_host.trim() || url.hostname : address,
+    port: gateway ? form.gateway_port || 2222 : port,
+    username: gateway
+      ? form.default_user.trim()
+        ? `${form.gateway_user.trim()}@${form.default_user.trim()}@${address}`
+        : form.gateway_user.trim()
+      : form.default_user.trim() || null,
+    group_path: [url.hostname, ...path],
+    notes: gateway ? `JumpServer asset ${label} (${address}:${port}), account ${form.default_user.trim()}. Direct login through the KoKo gateway.` : "",
+    source: ["jumpserver:" + url.origin, "00000000-0000-0000-0000-000000000002", `a${id}`].join("#"),
+    exists: id === 2,
+  });
+  const hosts = [
+    asset(1, "OVH-FR-web", "198.51.100.10", ["Prod", "Web"]),
+    asset(2, "prod-web-01", "10.0.1.11", ["Prod", "Web"]),
+    asset(3, "HK-edge-01", "192.0.2.31", ["Prod", "Edge"], 2200),
+    asset(4, "build-01", "192.0.2.40", ["CI"]),
+  ];
+  return {
+    format: null,
+    detected: null,
+    hosts,
+    groups: [[url.hostname], [url.hostname, "Prod"], [url.hostname, "Prod", "Web"], [url.hostname, "Prod", "Edge"], [url.hostname, "CI"]],
+    warnings: [
+      "1 asset(s) are disabled in JumpServer and were skipped.",
+      "1 asset(s) have no SSH protocol (for example Windows over RDP) and were skipped: win-rdp-01 (Windows).",
+    ],
+    skipped: 2,
+    removed: [],
   };
 }
 
