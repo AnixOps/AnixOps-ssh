@@ -721,7 +721,7 @@ impl ::std::convert::TryFrom<::std::string::String> for HostKeyStatus {
 #[serde(deny_unknown_fields)]
 pub struct HostkeyPromptEvent {
     pub algorithm: ::std::string::String,
-    ///Fingerprints on record when the key changed.
+    ///Fingerprints on record: of the changed key, or of the other key types when the key is of a new type.
     #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
     pub expected: ::std::vec::Vec<::std::string::String>,
     pub fingerprint: ::std::string::String,
@@ -835,6 +835,9 @@ pub struct HostsImportPreviewResult {
     pub format: ::std::option::Option<ImportFormat>,
     pub groups: ::std::vec::Vec<::std::vec::Vec<::std::string::String>>,
     pub hosts: ::std::vec::Vec<ImportHost>,
+    ///Service imports: names of stored hosts an earlier import created that the service no longer lists. Nothing is removed.
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub removed: ::std::vec::Vec<::std::string::String>,
     ///Records recognised but not importable.
     pub skipped: u64,
     pub warnings: ::std::vec::Vec<::std::string::String>,
@@ -1115,6 +1118,12 @@ pub struct ImportHost {
     ///Preview only: why the host cannot be imported. Ignored by hosts.import_apply.
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub problem: ::std::option::Option<::std::string::String>,
+    ///Stable key of the host at its origin (service imports, for example `control:https://panel.example.com#12`). A later import of the same key updates the host it created, even when its address changed.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub source: ::std::option::Option<::std::string::String>,
+    ///Tags to put on the host (service imports bring the service's own).
+    #[serde(default, skip_serializing_if = "::std::vec::Vec::is_empty")]
+    pub tags: ::std::vec::Vec<::std::string::String>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub username: ::std::option::Option<::std::string::String>,
 }
@@ -1391,13 +1400,77 @@ pub struct SessionCloseParams {
 pub struct SessionDetachParams {
     pub session_id: ::std::string::String,
 }
-///Event `session.exit` payload.
+///Event `session.exit` payload. `reason` and `signal` are optional: daemons before they were added send only the code.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct SessionExitEvent {
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub code: ::std::option::Option<i64>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub reason: ::std::option::Option<SessionExitReason>,
     pub session_id: ::std::string::String,
+    ///The signal's name without `SIG` (`TERM`), when `reason` is `signal`.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub signal: ::std::option::Option<::std::string::String>,
+}
+///Why a session ended: the shell exited with `code`, was killed by `signal`, or ended without a status (the connection dropped).
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum SessionExitReason {
+    #[serde(rename = "exit")]
+    Exit,
+    #[serde(rename = "signal")]
+    Signal,
+    #[serde(rename = "disconnected")]
+    Disconnected,
+}
+impl ::std::fmt::Display for SessionExitReason {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Exit => f.write_str("exit"),
+            Self::Signal => f.write_str("signal"),
+            Self::Disconnected => f.write_str("disconnected"),
+        }
+    }
+}
+impl ::std::str::FromStr for SessionExitReason {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "exit" => Ok(Self::Exit),
+            "signal" => Ok(Self::Signal),
+            "disconnected" => Ok(Self::Disconnected),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for SessionExitReason {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for SessionExitReason {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
 }
 ///A session the daemon holds. Ended sessions stay listed (with their scrollback) until `session.close`.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]

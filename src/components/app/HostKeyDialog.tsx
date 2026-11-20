@@ -35,6 +35,9 @@ export function HostKeyDialog() {
   };
 
   const changed = current?.status === "changed";
+  // A key of a type not on record yet: asked like a new host, with the
+  // host's keys of other types shown.
+  const newType = !changed && (current?.expected?.length ?? 0) > 0;
   const where = current ? (current.port === 22 ? current.host : `${current.host}:${current.port}`) : "";
 
   return (
@@ -66,7 +69,7 @@ export function HostKeyDialog() {
                 }
                 role={changed ? "alert" : undefined}
               >
-                {changed ? t.hostKeyChangedBody : t.hostKeyNewBody}
+                {changed ? t.hostKeyChangedBody : newType ? t.hostKeyNewTypeBody : t.hostKeyNewBody}
               </p>
               <dl className="selectable mt-4 space-y-2 text-callout">
                 <div>
@@ -77,10 +80,12 @@ export function HostKeyDialog() {
                   <dt className="text-callout text-label-3">{t.hostKeyFingerprint}</dt>
                   <dd className="font-mono break-all">{current.fingerprint}</dd>
                 </div>
-                {changed &&
-                  current.expected.map((print) => (
+                {(changed || newType) &&
+                  (current.expected ?? []).map((print) => (
                     <div key={print}>
-                      <dt className="text-callout text-label-3">{t.hostKeyRecorded}</dt>
+                      <dt className="text-callout text-label-3">
+                        {changed ? t.hostKeyRecorded : t.hostKeyOtherRecorded}
+                      </dt>
                       <dd className="font-mono break-all">{print}</dd>
                     </div>
                   ))}
