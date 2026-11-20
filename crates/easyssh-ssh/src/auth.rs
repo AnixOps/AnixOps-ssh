@@ -2,6 +2,7 @@
 //! OpenSSH's order), keyboard-interactive, password. After a partial success
 //! (the server wants a further method) the remaining methods run again.
 
+use crate::agent::DynAgent;
 use crate::error::{AuthMethod, Error, Result};
 use crate::interaction::{Interaction, KbdPrompt};
 use crate::params::{AgentSource, ConnectParams, MemoryIdentity};
@@ -9,7 +10,6 @@ use crate::security_key::{default_security_key, SkKeyInfo, SkSignError, SkSigner
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse};
-use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::ssh_key::public::KeyData;
 use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
@@ -241,43 +241,6 @@ pub async fn decode_identity(
     )))
 }
 
-async fn connect_agent(
-    source: &AgentSource,
-) -> std::result::Result<AgentClient<Box<dyn AgentStream + Send + Unpin>>, String> {
-    match source {
-        AgentSource::Disabled => Err("agent disabled".into()),
-        #[cfg(unix)]
-        AgentSource::Environment => match std::env::var_os("SSH_AUTH_SOCK") {
-            None => Err("SSH_AUTH_SOCK is not set".into()),
-            Some(path) => AgentClient::connect_uds(path)
-                .await
-                .map(AgentClient::dynamic)
-                .map_err(|e| e.to_string()),
-        },
-        #[cfg(unix)]
-        AgentSource::Path(path) => AgentClient::connect_uds(path)
-            .await
-            .map(AgentClient::dynamic)
-            .map_err(|e| e.to_string()),
-        #[cfg(windows)]
-        AgentSource::Environment => {
-            let pipe = std::env::var_os("SSH_AUTH_SOCK")
-                .unwrap_or_else(|| r"\\.\pipe\openssh-ssh-agent".into());
-            AgentClient::connect_named_pipe(pipe)
-                .await
-                .map(AgentClient::dynamic)
-                .map_err(|e| e.to_string())
-        }
-        #[cfg(windows)]
-        AgentSource::Path(path) => AgentClient::connect_named_pipe(path)
-            .await
-            .map(AgentClient::dynamic)
-            .map_err(|e| e.to_string()),
-        #[cfg(not(any(unix, windows)))]
-        _ => Err("agents are not supported on this platform".into()),
-    }
-}
-
 /// What the chain knows while it runs.
 struct State {
     remaining: Vec<MethodKind>,
@@ -298,7 +261,7 @@ struct State {
 }
 
 struct AgentKeys {
-    client: Option<AgentClient<Box<dyn AgentStream + Send + Unpin>>>,
+    client: Option<DynAgent>,
     keys: Vec<PublicKey>,
 }
 
@@ -569,8 +532,8 @@ async fn agent_keys(params: &ConnectParams, state: &mut State) {
         keys: Vec::new(),
     };
     if params.agent != AgentSource::Disabled {
-        match connect_agent(&params.agent).await {
-            Ok(mut client) => match client.request_identities().await {
+        match crate::agent::connect(&params.agent).await {
+            Ok((mut client, _kind)) => match client.request_identities().await {
                 Ok(identities) => {
                     for identity in identities {
                         let AgentIdentity::PublicKey { key, .. } = identity else {

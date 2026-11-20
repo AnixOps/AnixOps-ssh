@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   isTauri,
+  monospaceFonts,
   telemetryDeletePending,
   telemetryPending,
   telemetryStatus,
@@ -35,6 +36,8 @@ import { pendingText, privacyView, type TelemetryStatus } from "@/lib/telemetry"
 import { cn } from "@/lib/utils";
 
 const SCROLLBACK = [1000, 5000, 10000, 50000, 100000];
+const LINE_HEIGHTS = [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6];
+const FONT_LIST_ID = "terminal-font-list";
 
 export function SettingsPanel({
   status,
@@ -50,8 +53,14 @@ export function SettingsPanel({
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState("");
   const [editor, setEditor] = useState(settings().editorCommand);
+  const [fonts, setFonts] = useState<string[]>([]);
+  const [fontText, setFontText] = useState(settings().terminalFontFamily);
 
   useEffect(() => onSettings((next) => (setCurrent(next), setEditor(next.editorCommand))), []);
+  useEffect(() => setFontText(current.terminalFontFamily), [current.terminalFontFamily]);
+  useEffect(() => {
+    monospaceFonts().then(setFonts).catch(console.error);
+  }, []);
   useEffect(() => onCompletionPrefs(setPrefs), []);
   useEffect(() => {
     if (isTauri) getVersion().then(setVersion).catch(console.error);
@@ -122,6 +131,57 @@ export function SettingsPanel({
                 <Plus />
               </Stepper>
             </div>
+          </SettingsRow>
+          <SettingsRow label={t.fontFamily} hint={t.fontFamilyHint}>
+            <Input
+              aria-label={t.fontFamily}
+              list={FONT_LIST_ID}
+              value={fontText}
+              placeholder={t.fontFamilyDefault}
+              onChange={(event) => setFontText(event.target.value)}
+              onBlur={() => fontText.trim() !== current.terminalFontFamily && update({ terminalFontFamily: fontText.trim() })}
+              onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
+              className="h-7 w-36"
+            />
+            <datalist id={FONT_LIST_ID}>
+              {fonts.map((family) => (
+                <option key={family} value={family} />
+              ))}
+            </datalist>
+          </SettingsRow>
+          <SettingsRow label={t.lineHeight}>
+            <Select
+              aria-label={t.lineHeight}
+              value={current.terminalLineHeight}
+              onChange={(event) => update({ terminalLineHeight: Number(event.target.value) })}
+              className="h-7 w-auto"
+            >
+              {LINE_HEIGHTS.map((height) => (
+                <option key={height} value={height}>
+                  {height.toFixed(1)}
+                </option>
+              ))}
+            </Select>
+          </SettingsRow>
+          <SettingsRow label={t.cursorStyle}>
+            <Segmented
+              size="sm"
+              value={current.terminalCursorStyle}
+              onChange={(terminalCursorStyle) => update({ terminalCursorStyle })}
+              label={t.cursorStyle}
+              options={[
+                { value: "block", label: t.cursorBlock },
+                { value: "bar", label: t.cursorBar },
+                { value: "underline", label: t.cursorUnderline },
+              ]}
+            />
+          </SettingsRow>
+          <SettingsRow label={t.cursorBlink}>
+            <Switch
+              on={current.terminalCursorBlink}
+              label={t.cursorBlink}
+              onClick={() => update({ terminalCursorBlink: !current.terminalCursorBlink })}
+            />
           </SettingsRow>
           <SettingsRow label={t.scrollback}>
             <Select
@@ -243,9 +303,9 @@ export function SettingsPanel({
               !status
                 ? "…"
                 : status.agent === "ready"
-                  ? `${status.agentKeys.length} ${t.agentReady}`
+                  ? `${status.agentKeys.length} ${t.agentReady}${status.agentKind === "pageant" ? ` · ${t.agentPageant}` : status.agentKind === "openssh" ? ` · ${t.agentOpenSsh}` : ""}`
                   : status.agent === "empty"
-                    ? t.agentEmpty
+                    ? `${t.agentEmpty}${status.agentKind === "pageant" ? ` · ${t.agentPageant}` : status.agentKind === "openssh" ? ` · ${t.agentOpenSsh}` : ""}`
                     : t.agentUnavailable
             }
           />

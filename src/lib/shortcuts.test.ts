@@ -66,7 +66,8 @@ describe("shortcuts on macOS", () => {
   });
 
   it("keeps the existing shortcuts", () => {
-    expect(mac({ key: "k" })).toBe("search-hosts");
+    expect(mac({ key: "K", shiftKey: true })).toBe("search-hosts");
+    expect(mac({ key: "k" })).toBeNull();
     expect(mac({ key: "t" })).toBe("new-local");
     expect(mac({ key: "w" })).toBe("close-tab");
     expect(mac({ key: "e" })).toBe("toggle-files");
@@ -115,6 +116,14 @@ describe("reserved app shortcuts", () => {
     expect(pc({ key: "?", code: "Slash" }, true)).toBe("shortcut-list");
     expect(pc({ key: "<", code: "Comma" }, true)).toBe("settings");
     expect(pc({ key: "!", code: "Digit1" }, true)).toBe("go-hosts");
+  });
+
+  it("clears the terminal with Cmd+K on macOS and moves the palette to Cmd+Shift+K there", () => {
+    const k = key({ key: "k", metaKey: true });
+    expect(resolveGlobalShortcut(k, true, true)).toBe("clear-terminal");
+    expect(resolveGlobalShortcut(k, true, false)).toBe("search-hosts");
+    expect(mac({ key: "K", shiftKey: true })).toBeNull();
+    expect(resolveShortcut(key({ key: "K", metaKey: true, shiftKey: true }), true)).toBe("search-hosts");
   });
 
   it("never uses Ctrl+Alt", () => {

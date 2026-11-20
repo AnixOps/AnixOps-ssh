@@ -7,7 +7,8 @@
    Ctrl everywhere except while the terminal has the focus, where the same
    commands use Ctrl+Shift (K22: never Ctrl+Alt). Terminal commands (tabs,
    splits, broadcast) use Ctrl+Shift always. macOS has no such conflict and uses
-   Cmd. The table below is the one place shortcuts are written down (K9): the
+   Cmd, except that ⌘K clears the screen and scrollback inside a terminal (the
+   palette is ⌘⇧K there). The table below is the one place shortcuts are written down (K9): the
    shortcut list, tooltips, menus and the palette read it. */
 
 export const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -30,6 +31,7 @@ export type AppShortcut =
   | "toggle-maximise"
   | "prev-prompt"
   | "next-prompt"
+  | "clear-terminal"
   | "shortcut-list"
   | "settings"
   | "go-hosts"
@@ -91,6 +93,8 @@ export function resolveShortcut(input: KeyInput, mac: boolean): AppShortcut | nu
       return null;
     }
     if (altKey) return null;
+    // Plain ⌘K is the terminal's (clear) or the palette's; resolveGlobalShortcut decides.
+    if (letter === "k" && !shiftKey) return null;
     if (isD) return shiftKey ? "split-down" : "split-right";
     if (letter === "b") return shiftKey ? "toggle-broadcast" : null;
     if (input.key === "Enter") return shiftKey ? "toggle-maximise" : null;
@@ -123,6 +127,8 @@ export function resolveGlobalShortcut(input: KeyInput, mac: boolean, inTerminal:
   const page = input.code ? pages[input.code] : undefined;
   if (mac) {
     if (!input.metaKey || input.ctrlKey || shiftKey) return null;
+    // iTerm2 habit: ⌘K clears the terminal; the palette is ⌘⇧K there.
+    if (letter === "k") return inTerminal ? "clear-terminal" : "search-hosts";
     if (slash) return "shortcut-list";
     if (comma) return "settings";
     if (page) return page;
