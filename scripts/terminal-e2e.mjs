@@ -46,6 +46,31 @@ const openTimes = [];
 // from the server or was lost on the way to the terminal.
 const sessionOutput = new Map();
 let failedDeliveries = 0;
+// Which page each session belongs to, so output of a session from an earlier
+// check never queues in front of the current page's.
+const sessionPages = new Map();
+// Messages go to a page in batches, one evaluate in flight per page: a burst
+// (seq 1 200000 is thousands of chunks) costs a few round trips instead of
+// one per chunk, which on a slow runner backed up for minutes.
+const deliveries = new Map();
+function deliver(page, message) {
+  if (page.isClosed()) return;
+  let state = deliveries.get(page);
+  if (!state) deliveries.set(page, (state = { queue: [], busy: false }));
+  state.queue.push(message);
+  if (!state.busy) void flush(page, state);
+}
+async function flush(page, state) {
+  state.busy = true;
+  while (state.queue.length && !page.isClosed()) {
+    const batch = state.queue.splice(0);
+    await page
+      .evaluate((messages) => messages.forEach((m) => window.__anixopsE2eReceive?.(m)), batch)
+      .catch(() => (failedDeliveries += batch.length));
+  }
+  state.queue.length = 0;
+  state.busy = false;
+}
 const ready = new Promise((resolve, reject) => {
   bridge.once("exit", (code) => reject(new Error(`web_bridge exited with ${code}`)));
   createInterface({ input: bridge.stdout }).on("line", (line) => {
@@ -65,12 +90,14 @@ const ready = new Promise((resolve, reject) => {
         if (ms > 5000) console.log(`slow session open: ${ms} ms (${message.op}${message.message ? `: ${message.message}` : ""})`);
       }
       openStarted.delete(message.seq);
-      pendingOpens.get(message.seq)?.(message);
+      const pending = pendingOpens.get(message.seq);
+      if (pending && message.op === "opened") sessionPages.set(message.id, pending.page);
+      pending?.resolve(message);
       pendingOpens.delete(message.seq);
     } else if (message.op === "reply") {
       pendingRequests.get(message.seq)?.(message);
       pendingRequests.delete(message.seq);
-    } else if (bridgePage) {
+    } else if (sessionPages.has(message.id) || bridgePage) {
       if (process.env.DEBUG_BRIDGE) console.log("bridge>", line.slice(0, 160));
       if (message.op === "data") {
         const seen = sessionOutput.get(message.id) ?? { chars: 0, tail: "" };
@@ -78,7 +105,7 @@ const ready = new Promise((resolve, reject) => {
         seen.tail = (seen.tail + message.data).slice(-120);
         sessionOutput.set(message.id, seen);
       }
-      bridgePage.evaluate((m) => window.__anixopsE2eReceive?.(m), message).catch(() => failedDeliveries++);
+      deliver(sessionPages.get(message.id) ?? bridgePage, message);
     }
   });
 });
@@ -287,7 +314,7 @@ async function newPage({ width = 1200, height = 760, query = "" } = {}) {
     const id = ++seq;
     bridgePage = page;
     return new Promise((resolve) => {
-      pendingOpens.set(id, resolve);
+      pendingOpens.set(id, { resolve, page });
       openStarted.set(id, Date.now());
       send({ op: "open", seq: id, host: "e2e-target", cols, rows, integration });
     });
