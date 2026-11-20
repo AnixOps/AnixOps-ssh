@@ -16,6 +16,9 @@ a server on the same machine).
 ## Pieces
 
 - `scrub::scrub`: the single scrubber (table in its module docs; many unit tests).
+  Its placeholders (`<url> <host> <ip> <email> <secret> <id>`) and core rules are the
+  AnixOps shared redaction rule set (anix-kit `redact`); `<path>`, `<mac>` and
+  `<account>` are stricter AnixOps SSH additions.
 - `Report`: version, OS, arch, component (`app`/`daemon`/`ui`), kind, scrubbed
   message, symbol names. Scrubbed on construction and again when read back.
 - `hook::install`/`set_capture`: panic hook that writes to the `Spool`; at most
@@ -63,3 +66,25 @@ kind is generated, stored or sent, so pings cannot be linked.
 `cargo test -p easyssh-telemetry`: scrubber table tests, envelope format and
 consent gating against a mock HTTP server on `127.0.0.1` (nothing else is ever
 contacted), spool caps, rate limit and back-off, DSN parsing.
+
+### Shared redaction vectors
+
+`tests/data/anixops-redact-vectors.json` is a vendored copy of
+`redact/testdata/vectors.json` from `AnixOps/anix-kit` (its `_note` field names
+the commit). `tests/redact_vectors.rs` runs every vector through `scrub` and
+requires the exact output. To refresh, in CI or by hand:
+
+```sh
+git clone --depth 1 https://github.com/AnixOps/anix-kit /tmp/anix-kit
+python3 - <<'PY'
+import json, subprocess
+src = json.load(open("/tmp/anix-kit/redact/testdata/vectors.json"))
+sha = subprocess.check_output(["git", "-C", "/tmp/anix-kit", "rev-parse", "HEAD"], text=True).strip()
+out = {"_note": f"Vendored copy. Source: AnixOps/anix-kit, redact/testdata/vectors.json at commit {sha}. Do not edit by hand; see the crate README for how to refresh."}
+out.update(src)
+open("crates/easyssh-telemetry/tests/data/anixops-redact-vectors.json", "w").write(json.dumps(out, indent=2, ensure_ascii=False) + "\n")
+PY
+cargo test -p easyssh-telemetry --test redact_vectors
+```
+
+A failing vector means the kit changed its rules: change `scrub.rs` to match.
