@@ -34,6 +34,11 @@ let bridgePage = null;
 const pendingOpens = new Map();
 const openStarted = new Map();
 const openTimes = [];
+// What the bridge sent for each session, and deliveries to the page that
+// failed: when a check times out, these say whether the output never came
+// from the server or was lost on the way to the terminal.
+const sessionOutput = new Map();
+let failedDeliveries = 0;
 const ready = new Promise((resolve, reject) => {
   bridge.once("exit", (code) => reject(new Error(`web_bridge exited with ${code}`)));
   createInterface({ input: bridge.stdout }).on("line", (line) => {
@@ -57,7 +62,13 @@ const ready = new Promise((resolve, reject) => {
       pendingOpens.delete(message.seq);
     } else if (bridgePage) {
       if (process.env.DEBUG_BRIDGE) console.log("bridge>", line.slice(0, 160));
-      bridgePage.evaluate((m) => window.__anixopsE2eReceive?.(m), message).catch(() => {});
+      if (message.op === "data") {
+        const seen = sessionOutput.get(message.id) ?? { chars: 0, tail: "" };
+        seen.chars += message.data.length;
+        seen.tail = (seen.tail + message.data).slice(-120);
+        sessionOutput.set(message.id, seen);
+      }
+      bridgePage.evaluate((m) => window.__anixopsE2eReceive?.(m), message).catch(() => failedDeliveries++);
     }
   });
 });
@@ -68,12 +79,21 @@ const send = (message) => bridge.stdin.write(JSON.stringify(message) + "\n");
 // Runs in the page: the session bridge the app looks for in backend.ts.
 function pageBridge() {
   const sinks = new Map();
+  // Output that comes before open() has its sink (the prompt can beat the
+  // opened reply into the page) waits here instead of being dropped.
+  const early = new Map();
+  window.__anixopsE2eDelivered = {};
   window.__anixopsE2eTerminals = new Map();
+  const deliver = (sink, message) => {
+    if (message.op === "data") {
+      window.__anixopsE2eDelivered[message.id] = (window.__anixopsE2eDelivered[message.id] ?? 0) + message.data.length;
+      sink({ kind: "data", data: message.data });
+    } else if (message.op === "exit") sink({ kind: "exit", code: message.code, reason: message.reason, signal: message.signal ?? undefined });
+  };
   window.__anixopsE2eReceive = (message) => {
     const sink = sinks.get(message.id);
-    if (!sink) return;
-    if (message.op === "data") sink({ kind: "data", data: message.data });
-    else if (message.op === "exit") sink({ kind: "exit", code: message.code, reason: message.reason, signal: message.signal ?? undefined });
+    if (sink) deliver(sink, message);
+    else if (!window.__anixopsE2eOpened.includes(message.id)) early.set(message.id, [...(early.get(message.id) ?? []), message]);
   };
   window.__anixopsE2eOpened = [];
   window.__anixopsE2eSession = {
@@ -83,6 +103,8 @@ function pageBridge() {
       const id = opened.id;
       sinks.set(id, onEvent);
       window.__anixopsE2eOpened.push(id);
+      for (const message of early.get(id) ?? []) deliver(onEvent, message);
+      early.delete(id);
       const post = (message) => window.__anixopsE2ePost({ ...message, id });
       return {
         id,
@@ -183,7 +205,25 @@ async function waitScreen(page, pattern, { timeout = 15000, all = true, index = 
     if (pattern.test(text)) return text;
     await page.waitForTimeout(100);
   }
-  throw new Error(`timed out waiting for ${pattern} on screen:\n${text.split("\n").slice(-12).join("\n")}`);
+  const shown = text.split("\n").filter((line) => line.trim()).slice(-12).join("\n");
+  throw new Error(`timed out waiting for ${pattern} on screen:\n${shown}\n${await outputReport(page)}`);
+}
+
+/** Where the output of this page's sessions got to, for a timeout message. */
+async function outputReport(page) {
+  const state = await page
+    .evaluate(() => ({
+      opened: window.__anixopsE2eOpened,
+      delivered: window.__anixopsE2eDelivered,
+      buffers: [...window.__anixopsE2eTerminals.values()].map((t) => t.buffer.active.type),
+    }))
+    .catch((error) => ({ error: String(error) }));
+  if (state.error) return `page: ${state.error}`;
+  const sessions = state.opened.map((id) => {
+    const seen = sessionOutput.get(id) ?? { chars: 0, tail: "" };
+    return `session ${id}: bridge sent ${seen.chars} chars, page got ${state.delivered[id] ?? 0}, last sent ${JSON.stringify(seen.tail.slice(-60))}`;
+  });
+  return [...sessions, `buffers: ${state.buffers.join(", ")}; failed deliveries: ${failedDeliveries}`].join("\n");
 }
 
 /** Types a command and presses Enter, as a person would. */
