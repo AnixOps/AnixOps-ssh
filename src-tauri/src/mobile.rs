@@ -413,6 +413,47 @@ async fn sftp_close(state: State<'_, Mobile>, id: String) -> Result<(), String> 
     Ok(())
 }
 
+/// A monitor failure the UI tells apart by `code` (`not_connected`, ...),
+/// like the desktop's.
+#[derive(Serialize)]
+struct MonitorError {
+    code: &'static str,
+    message: String,
+}
+
+/// `monitor_sample`: the raw sample script output, read on the connection a
+/// terminal, the files or a forward of the host already holds. Never
+/// connects and never reads the vault, so it can neither prompt nor wake a
+/// sleeping connection.
+#[tauri::command]
+async fn monitor_sample(
+    state: State<'_, Mobile>,
+    host_id: String,
+    detail: Option<bool>,
+) -> Result<Value, MonitorError> {
+    // The connection key does not depend on the saved login.
+    let target = state
+        .with_store(|store| {
+            let config = store.load_app_config().map_err(|error| error.to_string())?;
+            target_for(&config, &host_id)
+        })
+        .map_err(|message| MonitorError {
+            code: "failed",
+            message,
+        })?;
+    let lease = state.engine.existing(&target).ok_or(MonitorError {
+        code: "not_connected",
+        message: "the host is not connected".into(),
+    })?;
+    let sample = easyssh_engine::monitor::sample(&lease, detail.unwrap_or(false))
+        .await
+        .map_err(|error| MonitorError {
+            code: "failed",
+            message: error.to_string(),
+        })?;
+    Ok(serde_json::json!({"output": sample.output, "latency_ms": sample.latency_ms}))
+}
+
 /// What a transfer reports to the web view (the desktop's `TransferEvent`).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
@@ -808,6 +849,7 @@ pub fn run() {
             sftp_remove,
             sftp_rename,
             sftp_close,
+            monitor_sample,
             transfer_start,
             transfer_cancel,
             stage_begin,

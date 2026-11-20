@@ -5,7 +5,10 @@ import {
   formatUptime,
   parseSample,
   pushPoint,
+  rootDisk,
+  shouldSample,
   sortProcesses,
+  summarize,
   view,
 } from "./monitor";
 
@@ -157,5 +160,46 @@ describe("helpers", () => {
     expect(formatBytes(4.8 * 1024 ** 3)).toBe("4.8G");
     expect(formatUptime(4 * 3600 + 44 * 60, "天", "小时", "分")).toBe("4小时 44分");
     expect(formatUptime(3 * 86400 + 7200, "d", "h", "m")).toBe("3d 2h");
+  });
+});
+
+describe("the phone summary", () => {
+  const disks = [
+    { mount: "/data", size: 500, used: 400, available: 100 },
+    { mount: "/", size: 100, used: 25, available: 75 },
+  ];
+
+  it("takes the root disk, or the biggest one without it", () => {
+    expect(rootDisk(disks)?.mount).toBe("/");
+    expect(rootDisk([disks[0], { mount: "/run", size: 5, used: 1, available: 4 }])?.mount).toBe("/data");
+    expect(rootDisk([])).toBeNull();
+  });
+
+  it("reduces a view to percentages and summed real interfaces", () => {
+    const first = parseSample(sample({ cpu: 1000, idle: 900, rx: 1000, tx: 500, ticks: 0 }));
+    const second = parseSample(sample({ cpu: 1200, idle: 1000, rx: 3000, tx: 1500, ticks: 0 }));
+    const summary = summarize({ ...view(second, first), disks });
+    expect(summary.cpu).toBeCloseTo(50);
+    expect(summary.mem).toBeCloseTo(25);
+    expect(summary.diskPercent).toBe(25);
+    expect(summary.rx).toBeGreaterThan(0);
+    expect(summary.tx).toBeGreaterThan(0);
+    expect(summary.load[0]).toBeCloseTo(0.04);
+    expect(summary.uptime).toBeCloseTo(16020.58);
+  });
+
+  it("has no rates or CPU from a single sample", () => {
+    const summary = summarize(view(parseSample(sample({ cpu: 1000, idle: 900, rx: 1, tx: 1, ticks: 0 })), null));
+    expect(summary.cpu).toBeNull();
+    expect(summary.rx).toBeNull();
+  });
+});
+
+describe("when the phone card reads the server", () => {
+  it("needs the card open, the app in front and a connection", () => {
+    expect(shouldSample(true, true, true)).toBe(true);
+    expect(shouldSample(false, true, true)).toBe(false);
+    expect(shouldSample(true, false, true)).toBe(false);
+    expect(shouldSample(true, true, false)).toBe(false);
   });
 });
