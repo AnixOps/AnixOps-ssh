@@ -1336,10 +1336,35 @@ impl Daemon {
                 return Err(ssh_shared(error));
             }
         };
+        // When the connection drops the tunnel leases a new one by itself,
+        // resolving the host again (it may have been edited meanwhile).
+        let me = self.me.clone();
+        let host_id = tunnel.host_id.clone();
+        let relink: engine::tunnels::Relink = Arc::new(move || {
+            let me = me.clone();
+            let host_id = host_id.clone();
+            Box::pin(async move {
+                let stopping = || engine::tunnels::RelinkError {
+                    message: "the daemon is stopping".into(),
+                    fatal: true,
+                };
+                let me = me.upgrade().ok_or_else(stopping)?;
+                let relink_failed = |failure: Failure| engine::tunnels::RelinkError {
+                    fatal: failure.code == "wrong_engine"
+                        || easyssh_engine::supervisor::is_fatal(failure.code),
+                    message: failure.message,
+                };
+                let plan = me.russh_plan(&host_id).await.map_err(relink_failed)?;
+                me.engine
+                    .lease(&plan, None)
+                    .await
+                    .map_err(|error| relink_failed(ssh_shared(error)))
+            })
+        });
         match self
             .engine
             .tunnels
-            .start(&tunnel, lease, broadcast.clone())
+            .start(&tunnel, lease, relink, broadcast.clone())
             .await
         {
             Ok(port) => Ok(port),

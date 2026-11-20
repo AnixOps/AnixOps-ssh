@@ -8,7 +8,7 @@ use russh::{Channel, ChannelOpenFailure};
 use std::collections::HashMap;
 use std::net::{Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
@@ -20,6 +20,53 @@ pub enum ForwardKind {
     Local,
     Remote,
     Dynamic,
+}
+
+/// Connections a forward accepted but could not pass on: how many, and why
+/// the last one failed ("127.0.0.1:1: connect failed", "administratively
+/// prohibited", ...). The forward itself keeps running.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ForwardFailures {
+    pub count: u64,
+    pub last: Option<String>,
+}
+
+type Failures = Arc<watch::Sender<ForwardFailures>>;
+
+fn record(failures: &watch::Sender<ForwardFailures>, message: String) {
+    tracing::debug!("forward: {message}");
+    failures.send_modify(|f| {
+        f.count += 1;
+        f.last = Some(message);
+    });
+}
+
+/// Why the server would not open a channel to `host:port`, in a few words.
+fn open_failure(host: &str, port: u16, error: &russh::Error) -> String {
+    let reason = match error {
+        russh::Error::ChannelOpenFailure(ChannelOpenFailure::ConnectFailed) => {
+            "connect failed".to_owned()
+        }
+        russh::Error::ChannelOpenFailure(ChannelOpenFailure::AdministrativelyProhibited) => {
+            "administratively prohibited".to_owned()
+        }
+        russh::Error::ChannelOpenFailure(ChannelOpenFailure::ResourceShortage) => {
+            "the server is short of resources".to_owned()
+        }
+        russh::Error::ChannelOpenFailure(ChannelOpenFailure::UnknownChannelType) => {
+            "the server does not forward TCP".to_owned()
+        }
+        other => other.to_string(),
+    };
+    format!("{} {reason}", target_label(host, port))
+}
+
+fn target_label(host: &str, port: u16) -> String {
+    if host.contains(':') {
+        format!("[{host}]:{port}:")
+    } else {
+        format!("{host}:{port}:")
+    }
 }
 
 /// A running forward. Call [`Forward::stop`] to end it; dropping it also
@@ -35,9 +82,15 @@ pub struct Forward {
     local_socket: Option<PathBuf>,
     stop: watch::Sender<bool>,
     task: Option<JoinHandle<()>>,
+    failures: Failures,
 }
 
 impl Forward {
+    /// Connections that could not be passed on so far; changes as they happen.
+    pub fn failures(&self) -> watch::Receiver<ForwardFailures> {
+        self.failures.subscribe()
+    }
+
     pub fn kind(&self) -> ForwardKind {
         self.kind
     }
@@ -123,6 +176,7 @@ pub(crate) struct RemoteTarget {
     /// A Unix socket on this machine instead of `host:port`.
     unix: Option<PathBuf>,
     stop: watch::Receiver<bool>,
+    failures: Failures,
 }
 
 impl RemoteTarget {
@@ -136,7 +190,13 @@ impl RemoteTarget {
                         reply.accept().await;
                         bridge(stream, channel.into_stream(), self.stop).await;
                     }
-                    _ => reply.reject(ChannelOpenFailure::ConnectFailed).await,
+                    _ => {
+                        record(
+                            &self.failures,
+                            format!("{}: cannot connect", path.display()),
+                        );
+                        reply.reject(ChannelOpenFailure::ConnectFailed).await
+                    }
                 }
             }
             #[cfg(not(unix))]
@@ -147,13 +207,20 @@ impl RemoteTarget {
             return;
         }
         let connect = TcpStream::connect((self.host.as_str(), self.port));
-        match tokio::time::timeout(Duration::from_secs(10), connect).await {
+        let reason = match tokio::time::timeout(Duration::from_secs(10), connect).await {
             Ok(Ok(tcp)) => {
                 reply.accept().await;
                 bridge(tcp, channel.into_stream(), self.stop).await;
+                return;
             }
-            _ => reply.reject(ChannelOpenFailure::ConnectFailed).await,
-        }
+            Ok(Err(e)) => e.to_string(),
+            Err(_) => "timed out".to_owned(),
+        };
+        record(
+            &self.failures,
+            format!("{} {reason}", target_label(&self.host, self.port)),
+        );
+        reply.reject(ChannelOpenFailure::ConnectFailed).await;
     }
 }
 
@@ -224,18 +291,21 @@ impl Session {
         let listeners = listen(bind_host, bind_port).await?;
         let local_addr = listeners[0].local_addr().ok();
         let (stop_tx, stop_rx) = watch::channel(false);
+        let failures: Failures = Arc::new(watch::channel(ForwardFailures::default()).0);
         let session = self.clone();
         let target_host = target_host.to_owned();
+        let failed = failures.clone();
         let task = tokio::spawn(accept_all(listeners, stop_rx, move |tcp, peer, stop| {
             let session = session.clone();
             let target_host = target_host.clone();
+            let failed = failed.clone();
             async move {
                 match session
                     .open_direct_tcpip(&target_host, target_port, peer)
                     .await
                 {
                     Ok(channel) => bridge(tcp, channel.into_stream(), stop).await,
-                    Err(e) => tracing::debug!("-L to {target_host}:{target_port} failed: {e}"),
+                    Err(e) => record(&failed, open_failure(&target_host, target_port, &e)),
                 }
             }
         }));
@@ -247,6 +317,7 @@ impl Session {
             local_socket: None,
             stop: stop_tx,
             task: Some(task),
+            failures,
         })
     }
 
@@ -269,11 +340,14 @@ impl Session {
                     let listeners = listen(bind_host, bind_port).await?;
                     let local_addr = listeners[0].local_addr().ok();
                     let (stop_tx, stop_rx) = watch::channel(false);
+                    let failures: Failures = Arc::new(watch::channel(ForwardFailures::default()).0);
+                    let failed = failures.clone();
                     let session = self.clone();
                     let task = tokio::spawn(accept_all(listeners, stop_rx, move |tcp, _, stop| {
                         let session = session.clone();
                         let socket = socket.clone();
-                        async move { serve_socket(session, tcp, &socket, stop).await }
+                        let failed = failed.clone();
+                        async move { serve_socket(session, tcp, &socket, stop, &failed).await }
                     }));
                     Ok(Forward {
                         kind: ForwardKind::Local,
@@ -283,6 +357,7 @@ impl Session {
                         local_socket: None,
                         stop: stop_tx,
                         task: Some(task),
+                        failures,
                     })
                 }
             };
@@ -291,6 +366,8 @@ impl Session {
         {
             let listener = bind_unix(path)?;
             let (stop_tx, mut stop) = watch::channel(false);
+            let failures: Failures = Arc::new(watch::channel(ForwardFailures::default()).0);
+            let failed = failures.clone();
             let session = self.clone();
             let task = tokio::spawn(async move {
                 let stop_rx = stop.clone();
@@ -302,8 +379,9 @@ impl Session {
                                 let session = session.clone();
                                 let dest = dest.clone();
                                 let stop = stop_rx.clone();
+                                let failed = failed.clone();
                                 tokio::spawn(async move {
-                                    serve_dest(session, stream, &dest, stop).await
+                                    serve_dest(session, stream, &dest, stop, &failed).await
                                 });
                             }
                             Err(e) => {
@@ -322,6 +400,7 @@ impl Session {
                 local_socket: Some(PathBuf::from(path)),
                 stop: stop_tx,
                 task: Some(task),
+                failures,
             })
         }
         #[cfg(not(unix))]
@@ -358,11 +437,13 @@ impl Session {
             ));
         }
         let (stop_tx, stop_rx) = watch::channel(false);
+        let failures: Failures = Arc::new(watch::channel(ForwardFailures::default()).0);
         let target = RemoteTarget {
             host: target_host.to_owned(),
             port: target_port,
             unix: local_socket.map(PathBuf::from),
             stop: stop_rx,
+            failures: failures.clone(),
         };
         let table = self.remote_forwards();
         if let Some(path) = bind_socket {
@@ -379,6 +460,7 @@ impl Session {
                 local_socket: None,
                 stop: stop_tx,
                 task: None,
+                failures,
             });
         }
         if bind_port != 0 {
@@ -402,6 +484,7 @@ impl Session {
             local_socket: None,
             stop: stop_tx,
             task: None,
+            failures,
         })
     }
 
@@ -411,12 +494,15 @@ impl Session {
         let listeners = listen(bind_host, bind_port).await?;
         let local_addr = listeners[0].local_addr().ok();
         let (stop_tx, stop_rx) = watch::channel(false);
+        let failures: Failures = Arc::new(watch::channel(ForwardFailures::default()).0);
         let session = self.clone();
+        let failed = failures.clone();
         let task = tokio::spawn(accept_all(
             listeners,
             stop_rx,
             move |mut tcp, peer, stop| {
                 let session = session.clone();
+                let failed = failed.clone();
                 async move {
                     let request = tokio::time::timeout(
                         Duration::from_secs(15),
@@ -444,6 +530,7 @@ impl Session {
                             }
                         }
                         Err(e) => {
+                            record(&failed, open_failure(&request.host, request.port, &e));
                             let code = match &e {
                                 russh::Error::ChannelOpenFailure(
                                     ChannelOpenFailure::ConnectFailed,
@@ -467,6 +554,7 @@ impl Session {
             local_socket: None,
             stop: stop_tx,
             task: Some(task),
+            failures,
         })
     }
 
@@ -481,11 +569,13 @@ impl Session {
         target_port: u16,
     ) -> Result<Forward> {
         let (stop_tx, stop_rx) = watch::channel(false);
+        let failures: Failures = Arc::new(watch::channel(ForwardFailures::default()).0);
         let target = RemoteTarget {
             host: target_host.to_owned(),
             port: target_port,
             unix: None,
             stop: stop_rx,
+            failures: failures.clone(),
         };
         let table = self.remote_forwards();
         // Registered first so no early connection finds nothing.
@@ -510,35 +600,46 @@ impl Session {
             local_socket: None,
             stop: stop_tx,
             task: None,
+            failures,
         })
     }
 }
 
 /// Opens the channel for one accepted connection and copies both ways.
 #[cfg(unix)]
-async fn serve_dest<S>(session: Session, stream: S, dest: &Dest, stop: watch::Receiver<bool>)
-where
+async fn serve_dest<S>(
+    session: Session,
+    stream: S,
+    dest: &Dest,
+    stop: watch::Receiver<bool>,
+    failures: &watch::Sender<ForwardFailures>,
+) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     match dest {
-        Dest::Socket(socket) => serve_socket(session, stream, socket, stop).await,
+        Dest::Socket(socket) => serve_socket(session, stream, socket, stop, failures).await,
         Dest::Tcp { host, port } => {
             let origin = SocketAddr::from(([127, 0, 0, 1], 0));
             match session.open_direct_tcpip(host, *port, origin).await {
                 Ok(channel) => bridge(stream, channel.into_stream(), stop).await,
-                Err(e) => tracing::debug!("-L to {host}:{port} failed: {e}"),
+                Err(e) => record(failures, open_failure(host, *port, &e)),
             }
         }
     }
 }
 
-async fn serve_socket<S>(session: Session, stream: S, socket: &str, stop: watch::Receiver<bool>)
-where
+async fn serve_socket<S>(
+    session: Session,
+    stream: S,
+    socket: &str,
+    stop: watch::Receiver<bool>,
+    failures: &watch::Sender<ForwardFailures>,
+) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     match session.open_direct_streamlocal(socket).await {
         Ok(channel) => bridge(stream, channel.into_stream(), stop).await,
-        Err(e) => tracing::debug!("-L to {socket} failed: {e}"),
+        Err(e) => record(failures, format!("{socket}: {e}")),
     }
 }
 
@@ -647,12 +748,48 @@ where
 mod tests {
     use super::*;
 
+    #[test]
+    fn failures_are_counted_with_the_last_reason() {
+        let (tx, rx) = watch::channel(ForwardFailures::default());
+        record(
+            &tx,
+            open_failure(
+                "127.0.0.1",
+                1,
+                &russh::Error::ChannelOpenFailure(ChannelOpenFailure::ConnectFailed),
+            ),
+        );
+        record(
+            &tx,
+            open_failure(
+                "::1",
+                22,
+                &russh::Error::ChannelOpenFailure(ChannelOpenFailure::AdministrativelyProhibited),
+            ),
+        );
+        let seen = rx.borrow().clone();
+        assert_eq!(seen.count, 2);
+        assert_eq!(
+            seen.last.as_deref(),
+            Some("[::1]:22: administratively prohibited")
+        );
+        assert_eq!(
+            open_failure(
+                "db",
+                5432,
+                &russh::Error::ChannelOpenFailure(ChannelOpenFailure::ConnectFailed)
+            ),
+            "db:5432: connect failed"
+        );
+    }
+
     fn target(host: &str) -> RemoteTarget {
         RemoteTarget {
             host: host.into(),
             port: 1,
             unix: None,
             stop: watch::channel(false).1,
+            failures: Arc::new(watch::channel(ForwardFailures::default()).0),
         }
     }
 
