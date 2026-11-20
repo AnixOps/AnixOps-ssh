@@ -43,9 +43,9 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/0006_host_serial.sql"),
     },
     Migration {
-        version: 8,
+        version: 7,
         name: "host_forward_x11",
-        sql: include_str!("../migrations/0008_host_forward_x11.sql"),
+        sql: include_str!("../migrations/0007_host_forward_x11.sql"),
     },
 ];
 
