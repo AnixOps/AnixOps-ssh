@@ -3,8 +3,13 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
+  ChevronDown,
+  ChevronUp,
   CircleAlert,
+  Copy,
   Download,
+  Eye,
+  EyeOff,
   File,
   Folder,
   FolderPlus,
@@ -32,11 +37,14 @@ import { Menu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   cancelTransfer,
+  copyText,
   editOpen,
   editPrepare,
   editStop,
   editWatch,
+  enableShellIntegration,
   isTauri,
+  loadHosts,
   openFiles,
   pickUploads,
   revealLocal,
@@ -64,16 +72,29 @@ import { failureMessage, formatDuration, nextRate, secondsLeft, type Rate } from
 import { baseName, formatSize, locate, localName, parentPath, resolvePath, uploadConflicts } from "@/lib/remotePath";
 import { cn } from "@/lib/utils";
 import {
+  BINARY_CONTENT,
   checkEditable,
   editConflict,
   editKey,
   FOLLOW_DEBOUNCE_MS,
+  isBinaryName,
   isEditableName,
   stampOf,
   type EditingFile,
   type RemoteStamp,
 } from "@/lib/remoteEdit";
 import { onSettings, settings, updateSettings } from "@/lib/settings";
+import {
+  isHidden,
+  nextSort,
+  rememberShowHidden,
+  rememberSort,
+  savedShowHidden,
+  savedSort,
+  sortEntries,
+  type FileSort,
+  type SortKey,
+} from "@/lib/fileList";
 import { followTarget, onTerminalCwd, terminalCwd } from "@/lib/terminalCwd";
 
 interface TransferItem {
@@ -96,13 +117,6 @@ type Editing = { kind: "mkdir"; value: string } | { kind: "rename"; from: string
 
 const joinPath = (dir: string, name: string) => (dir.endsWith("/") ? dir + name : `${dir}/${name}`);
 
-function sortEntries(entries: RemoteFile[]): RemoteFile[] {
-  return [...entries].sort((a, b) => {
-    const aDir = a.kind === "directory" ? 0 : 1;
-    const bDir = b.kind === "directory" ? 0 : 1;
-    return aDir - bDir || a.name.localeCompare(b.name);
-  });
-}
 
 export function FilesPane({
   hostId,
@@ -145,6 +159,8 @@ export function FilesPane({
   /** Saves that came in while the previous one was still uploading. */
   const savedAgain = useRef(new Set<string>());
   const [follow, setFollow] = useState(settings().followTerminalFolder);
+  const [sort, setSort] = useState<FileSort>(savedSort);
+  const [showHidden, setShowHidden] = useState(savedShowHidden);
   const [terminal, setTerminal] = useState(() => terminalCwd(hostId));
   /** The listing of `cwdRef`, for checking what an upload would replace. */
   const entriesRef = useRef<RemoteFile[]>([]);
@@ -156,7 +172,7 @@ export function FilesPane({
       try {
         // A typed location may name a file: show its folder with it selected.
         const found = typed ? await locate(files.list, path) : { dir: path, entries: await files.list(path), select: null };
-        setEntries(sortEntries(found.entries));
+        setEntries(found.entries);
         entriesRef.current = found.entries;
         setCwd(found.dir);
         setPathInput(found.dir);
@@ -398,8 +414,14 @@ export function FilesPane({
           );
           await editOpen(file.local);
         } catch (reason) {
-          setActionError(`${t.editFailed.replace("{name}", file.name)}${String(reason)}`);
           stopEdit(file);
+          // A binary would hang the editor: it is downloaded instead.
+          if (String(reason).includes(BINARY_CONTENT)) {
+            setActionError(t.editBinary.replace("{name}", file.name));
+            transfer(false, file.remote, undefined, file.base.size);
+            return;
+          }
+          setActionError(`${t.editFailed.replace("{name}", file.name)}${String(reason)}`);
         }
       })();
       return;
@@ -419,6 +441,10 @@ export function FilesPane({
     const check = checkEditable(entry);
     if (check === "not-file") return setActionError(t.editNotFile);
     if (check === "too-large") return setActionError(t.editTooLarge.replace("{name}", entry.name));
+    if (check === "binary") {
+      setActionError(t.editBinary.replace("{name}", entry.name));
+      return void transfer(false, joinPath(cwd, entry.name), undefined, entry.size);
+    }
     if (!isEditableName(entry.name)) {
       return setActionError(`${t.editFailed.replace("{name}", entry.name)}${t.renameInvalid}`);
     }
@@ -475,6 +501,10 @@ export function FilesPane({
     const path = joinPath(cwd, entry.name);
     if (entry.kind === "directory") void navigate(handle, path);
     else if (entry.kind === "symlink") void navigate(handle, path, false, () => void transfer(false, path, undefined, null));
+    // A file opens in the editor (saves go back), as in FinalShell and
+    // WinSCP, unless Settings say download; a binary (by name here, by its
+    // content once downloaded) or one too large to edit downloads.
+    else if (settings().filesDoubleClick === "edit" && checkEditable(entry) === "ok" && isEditableName(entry.name)) void openInEditor(entry);
     else void transfer(false, path, undefined, entry.size);
   };
 
@@ -529,8 +559,45 @@ export function FilesPane({
     setEditing(null);
   };
 
-  const order = entries.map((entry) => entry.name);
   const selectedNames = new Set(selection.names);
+  // A hidden entry still shows while it is selected (a typed path to it).
+  const shown = sortEntries(entries, sort).filter((entry) => showHidden || !isHidden(entry) || selectedNames.has(entry.name));
+  const order = shown.map((entry) => entry.name);
+
+  const chooseSort = (key: SortKey) => {
+    const next = nextSort(sort, key);
+    setSort(next);
+    rememberSort(next);
+  };
+
+  const toggleHidden = () => {
+    const next = !showHidden;
+    setShowHidden(next);
+    rememberShowHidden(next);
+    if (!next) setSelection((current) => (current.names.some((name) => name.startsWith(".")) ? emptySelection : current));
+  };
+
+  /** Without the integration, the follow button offers to turn it on for this host. */
+  const offerIntegration = async () => {
+    try {
+      const { hosts } = await loadHosts();
+      const host = hosts.find((candidate) => candidate.id === hostId);
+      if (host && host.source !== "saved") return setActionError(t.followTerminalConfigHost);
+      const name = host?.name ?? hostId;
+      const ok = await confirm({
+        title: t.followTerminalEnableTitle.replace("{host}", name),
+        body: t.followTerminalEnableBody,
+        verb: t.followTerminalEnable,
+        destructive: false,
+      });
+      if (!ok) return;
+      if (!(await enableShellIntegration(hostId))) return setActionError(t.followTerminalConfigHost);
+      await updateSettings({ followTerminalFolder: true });
+      setActionError(t.followTerminalEnabled);
+    } catch (reason) {
+      setActionError(String(reason));
+    }
+  };
 
   const downloadEntries = (names: string[]) => {
     for (const name of names) {
@@ -650,6 +717,9 @@ export function FilesPane({
           <IconButton label={t.upload} onClick={() => void pickUploads().then(uploadPaths)}>
             <Upload />
           </IconButton>
+          <IconButton label={t.showHiddenFiles} pressed={showHidden} onClick={toggleHidden}>
+            {showHidden ? <Eye /> : <EyeOff />}
+          </IconButton>
         </>
       }
     >
@@ -673,9 +743,12 @@ export function FilesPane({
               size="icon-sm"
               aria-label={t.followTerminal}
               aria-pressed={follow && terminal.integration}
-              disabled={!terminal.integration}
-              className={cn(follow && terminal.integration && "bg-accent-soft text-(--accent)")}
-              onClick={() => void updateSettings({ followTerminalFolder: !follow }).catch((reason) => setActionError(String(reason)))}
+              className={cn(follow && terminal.integration && "bg-accent-soft text-(--accent)", !terminal.integration && "text-label-3")}
+              onClick={() =>
+                terminal.integration
+                  ? void updateSettings({ followTerminalFolder: !follow }).catch((reason) => setActionError(String(reason)))
+                  : void offerIntegration()
+              }
             >
               <SquareTerminal />
             </Button>
@@ -711,6 +784,13 @@ export function FilesPane({
         </div>
       )}
 
+      <div className="flex h-6 shrink-0 items-center gap-2 px-4 text-caption text-label-3" role="toolbar" aria-label={t.sortBy}>
+        <SortButton label={t.sortByName} column="name" sort={sort} onSort={chooseSort} className="min-w-0 flex-1 justify-start" />
+        <SortButton label={t.sortBySize} column="size" sort={sort} onSort={chooseSort} className="w-16 justify-end" />
+        <SortButton label={t.sortByModified} column="modified" sort={sort} onSort={chooseSort} className="w-24 justify-end" />
+        <span className="w-14 shrink-0" />
+      </div>
+
       <div
         className={cn(
           "relative min-h-0 flex-1 overflow-y-auto px-2 pb-2 transition-opacity duration-micro",
@@ -726,6 +806,16 @@ export function FilesPane({
             event.preventDefault();
             setSelection(selectAll(order));
           } else if (event.key === "Escape" && selection.names.length > 1) setSelection(emptySelection);
+          // Backspace and Alt+Up (⌘↑ on a Mac) go to the parent folder, as in Explorer, Finder and WinSCP.
+          else if (
+            cwd !== "/" &&
+            ((event.key === "Backspace" && !event.ctrlKey && !event.metaKey && !event.altKey) ||
+              (event.key === "ArrowUp" && (isMac ? event.metaKey : event.altKey)))
+          ) {
+            event.preventDefault();
+            const from = baseName(cwd);
+            void navigate(handle, parentPath(cwd)).then(() => setReveal(from));
+          }
         }}
       >
         {editing?.kind === "mkdir" && (
@@ -738,10 +828,10 @@ export function FilesPane({
             onCancel={() => setEditing(null)}
           />
         )}
-        {entries.length === 0 && !loading && !editing && (
+        {shown.length === 0 && !loading && !editing && (
           <p className="pt-10 text-center text-callout text-label-2">{t.emptyFolder}</p>
         )}
-        {entries.map((entry) =>
+        {shown.map((entry) =>
           editing?.kind === "rename" && editing.from === entry.name ? (
             <EditRow
               key={entry.name}
@@ -761,7 +851,8 @@ export function FilesPane({
               onOpen={() => open(entry)}
               onMove={(step, extend) => move(entry.name, step, extend)}
               onDownload={() => downloadEntries(targetsOf(selection, entry.name))}
-              onEdit={entry.kind === "directory" ? undefined : () => void openInEditor(entry)}
+              onCopyPath={() => void copyText(joinPath(cwd, entry.name)).catch((reason) => setActionError(String(reason)))}
+              onEdit={entry.kind === "directory" || isBinaryName(entry.name) ? undefined : () => void openInEditor(entry)}
               onRename={() => setEditing({ kind: "rename", from: entry.name, value: entry.name })}
               onProperties={() => setProperties(entry)}
               onDelete={() => void removeEntries(targetsOf(selection, entry.name))}
@@ -890,19 +981,63 @@ function IconButton({
   label,
   onClick,
   disabled,
+  pressed,
   children,
 }: {
   label: string;
   onClick: () => void;
   disabled?: boolean;
+  /** A toggle: its state is announced and drawn. */
+  pressed?: boolean;
   children: ReactNode;
 }) {
   return (
     <Tooltip label={label}>
-      <Button variant="quiet" size="icon-sm" aria-label={label} onClick={onClick} disabled={disabled}>
+      <Button
+        variant="quiet"
+        size="icon-sm"
+        aria-label={label}
+        aria-pressed={pressed}
+        onClick={onClick}
+        disabled={disabled}
+        className={cn(pressed && "text-(--accent)")}
+      >
         {children}
       </Button>
     </Tooltip>
+  );
+}
+
+/** A column heading that sorts by it; a second click reverses the order. */
+function SortButton({
+  label,
+  column,
+  sort,
+  onSort,
+  className,
+}: {
+  label: string;
+  column: SortKey;
+  sort: FileSort;
+  onSort: (column: SortKey) => void;
+  className?: string;
+}) {
+  const active = sort.key === column;
+  const Arrow = sort.descending ? ChevronDown : ChevronUp;
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(column)}
+      aria-pressed={active}
+      className={cn(
+        "flex h-6 shrink-0 items-center gap-0.5 truncate rounded-xs px-0.5 transition-colors duration-micro hover:text-label-1 focus-visible:outline-2 focus-visible:outline-(--accent)",
+        active && "font-medium text-label-2",
+        className,
+      )}
+    >
+      <span className="truncate">{label}</span>
+      {active && <Arrow className="size-3 shrink-0" strokeWidth={2} aria-hidden />}
+    </button>
   );
 }
 
@@ -919,6 +1054,7 @@ function EntryRow({
   onMove,
   onDownload,
   onEdit,
+  onCopyPath,
   onRename,
   onProperties,
   onDelete,
@@ -931,6 +1067,7 @@ function EntryRow({
   onDownload: () => void;
   /** Absent for a folder. */
   onEdit?: () => void;
+  onCopyPath: () => void;
   onRename: () => void;
   onProperties: () => void;
   onDelete: () => void;
@@ -980,7 +1117,9 @@ function EntryRow({
           label={t.more}
           contextRow
           items={[
+            { key: "download", label: t.download, icon: <Download />, onSelect: onDownload },
             ...(onEdit ? [{ key: "edit", label: t.openInEditor, icon: <SquarePen />, onSelect: onEdit }] : []),
+            { key: "copy-path", label: t.copyPath, icon: <Copy />, onSelect: onCopyPath },
             { key: "rename", label: t.rename, icon: <Pencil />, shortcut: shortcutHint("rename"), onSelect: onRename },
             { key: "properties", label: t.properties, icon: <Info />, shortcut: shortcutHint("properties"), onSelect: onProperties },
             "separator",

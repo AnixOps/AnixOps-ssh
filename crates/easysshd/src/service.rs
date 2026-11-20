@@ -1179,8 +1179,13 @@ impl Daemon {
                 let me = self.upgrade()?;
                 self.background(outbox, req_id, async move {
                     let plan = me.russh_plan(&p.host_id).await?;
-                    let lease = me.engine.lease(&plan, None).await.map_err(ssh_shared)?;
-                    let (sftp_id, home) = me.engine.files.open(lease).await.map_err(ssh_fail)?;
+                    let (sftp, lease) = me.engine.open_sftp(&plan).await.map_err(ssh_shared)?;
+                    let (sftp_id, home) = me
+                        .engine
+                        .files
+                        .open_with(sftp, lease)
+                        .await
+                        .map_err(ssh_fail)?;
                     Ok(json!({"sftp_id": sftp_id, "home": home}))
                 })
             }
@@ -1259,7 +1264,7 @@ impl Daemon {
                     let open: engine::files::Opener = Box::pin(async move {
                         leasing
                             .engine
-                            .lease(&plan, None)
+                            .open_sftp(&plan)
                             .await
                             .map_err(|error| error.to_string())
                     });

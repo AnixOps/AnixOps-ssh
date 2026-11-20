@@ -1,11 +1,24 @@
-import type { ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+
+/** The settings search: rows whose label or hint (or whose group's title)
+ *  contain it stay; the other rows, and groups left without a row, hide. */
+const FilterContext = createContext("");
+/** The group's own title matches the search: all of its rows stay. */
+const GroupMatchContext = createContext(false);
+
+export function SettingsFilter({ query, children }: { query: string; children: ReactNode }) {
+  return <FilterContext.Provider value={query.trim().toLowerCase()}>{children}</FilterContext.Provider>;
+}
 
 /** A settings group (density.md N23): a section title in `--type-title-3-*`
  *  over a grouped list on `--bg-elevated`. `action` is at most one E3 icon (S4). */
 export function SettingsGroup({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+  const query = useContext(FilterContext);
+  const titleMatches = query !== "" && title.toLowerCase().includes(query);
   return (
-    <section>
+    <GroupMatchContext.Provider value={titleMatches}>
+    <section className={cn(query && !titleMatches && "[&:not(:has([data-settings-row]))]:hidden")}>
       <div className="flex h-9 items-center px-1">
         <h3 className="flex-1 text-title-3">{title}</h3>
         {action}
@@ -14,6 +27,7 @@ export function SettingsGroup({ title, action, children }: { title: string; acti
         {children}
       </div>
     </section>
+    </GroupMatchContext.Provider>
   );
 }
 
@@ -37,8 +51,11 @@ export function SettingsRow({
   stacked?: boolean;
   children?: ReactNode;
 }) {
+  const query = useContext(FilterContext);
+  const groupMatches = useContext(GroupMatchContext);
+  if (query && !groupMatches && !`${label} ${hint ?? ""}`.toLowerCase().includes(query)) return null;
   return (
-    <div className={cn("flex min-h-11 px-4 py-2", stacked ? "flex-col gap-2" : "flex-wrap items-center gap-x-3 gap-y-2")}>
+    <div data-settings-row className={cn("flex min-h-11 px-4 py-2", stacked ? "flex-col gap-2" : "flex-wrap items-center gap-x-3 gap-y-2")}>
       {/* Wrapping is decided on the label's basis: its own width for a lone
           label, 10rem when a hint can wrap under it. */}
       <div className={cn("min-w-0", !stacked && (hint ? "grow basis-40" : "grow"))}>

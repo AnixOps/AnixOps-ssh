@@ -219,3 +219,15 @@
 .tooltip-motion[data-state="instant-open"] {
   animation: tooltip-in var(--dur-micro) var(--ease-standard);
 }
+
+/* Terminal ligatures (Settings → Terminal): the DOM renderer keeps runs of
+   same-styled cells in one element, so the font's ligatures can join them. */
+.terminal-ligatures .xterm-rows {
+  font-variant-ligatures: common-ligatures contextual;
+  font-feature-settings: "liga" 1, "calt" 1;
+}
+
+/* The settings search found nothing (SettingsPanel). */
+.settings-list:not(:has([data-settings-row])) > .settings-empty {
+  display: block;
+}

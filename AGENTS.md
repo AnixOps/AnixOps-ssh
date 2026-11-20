@@ -32,10 +32,12 @@ required Rust checks always run.
 "Terminal end-to-end (Linux)" runs for every change but docs: the real
 frontend in Chromium (Windows key habits), a real OpenSSH server, and the real
 session daemon in between (`scripts/terminal-e2e.mjs`,
-`crates/easyssh-e2e/examples/web_bridge.rs`). Each check is something a person
-does every day in Windows Terminal, iTerm2 or Termius; the list and the
-findings are in `docs/terminal-parity.md`. A terminal change that breaks one
-fails CI; add a check when you add a terminal behaviour. Run it locally with
+`crates/easyssh-e2e/examples/web_bridge.rs`; the bridge also carries the files
+pane's SFTP and transfers and the port forwards). Each check is something a
+person does every day in Windows Terminal, iTerm2, Termius or FinalShell:
+the terminal, the files pane, connecting, forwards and settings; the list and
+the findings are in `docs/terminal-parity.md`. A change that breaks one fails
+CI; add a check when you add such a behaviour. Run it locally with
 the e2e containers up: `cargo build -p easyssh-e2e --example web_bridge`,
 `npm run build && npm run preview`, then
 `node scripts/terminal-e2e.mjs http://localhost:4173 out` (`ONLY=name,…`).

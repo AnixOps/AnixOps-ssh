@@ -3,14 +3,20 @@
 //! the app's frontend in a browser (Playwright, `scripts/terminal-e2e.mjs`)
 //! talks to a real SSH server through the same daemon the app uses.
 //!
-//! In:  {"op":"open","host":"e2e-target","cols":80,"rows":24,"seq":1}
+//! In:  {"op":"open","host":"e2e-target","cols":80,"rows":24,"seq":1,"integration":false}
 //!      {"op":"write","id":"…","data":"…"}
 //!      {"op":"resize","id":"…","cols":100,"rows":30}
 //!      {"op":"close","id":"…"}
+//!      {"op":"request","seq":2,"kind":"sftp.list","payload":{…},"host":"e2e-target"}
+//!        (any daemon request; with `host`, its saved id goes in `host_id`,
+//!        or in `tunnel.host_id` for `tunnel.start`)
 //! Out: {"op":"ready"}
 //!      {"op":"opened","seq":1,"id":"…"} or {"op":"error","seq":1,"message":"…"}
 //!      {"op":"data","id":"…","data":"…"}
 //!      {"op":"exit","id":"…","code":0,"reason":"exit"}
+//!      {"op":"reply","seq":2,"value":{…}} or {"op":"reply","seq":2,"error":"…"}
+//!      {"op":"transfer","id":"…","event":{"kind":"progress","bytes":1,"total":2}}
+//!      {"op":"tunnel","status":{"id":"…","state":"running","bind_port":1080,…}}
 //!
 //! Needs the e2e containers (see e2e/README.md) and nothing else; it never
 //! reads the user's SSH configuration.
@@ -18,9 +24,12 @@
 mod bridge {
     use easyssh_core::{ConfigStore, Connection, SshEngine};
     use easyssh_e2e::E2e;
-    use easysshd::link::{AskpassPrompt, HostKeyPrompt, Link, LinkHandler, SessionMsg};
+    use easysshd::link::{
+        AskpassPrompt, HostKeyPrompt, Link, LinkHandler, SessionMsg, TunnelStatus,
+    };
     use easysshd::{Daemon, DaemonConfig, Server};
     use serde_json::{json, Value};
+    use std::collections::HashMap;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -43,6 +52,66 @@ mod bridge {
                 let _ = link.hostkey_reply(prompt.id, "accept_and_save");
             }
         }
+
+        fn transfer_started(&self, transfer_id: &str) {
+            emit(json!({"op": "transfer", "id": transfer_id, "event": {"kind": "started"}}));
+        }
+
+        fn transfer_progress(&self, transfer_id: &str, bytes: u64, total: Option<u64>) {
+            emit(json!({
+                "op": "transfer",
+                "id": transfer_id,
+                "event": {"kind": "progress", "bytes": bytes, "total": total},
+            }));
+        }
+
+        fn transfer_done(&self, transfer_id: &str, status: &str, error: Option<&str>) {
+            let event = match status {
+                "completed" => json!({"kind": "done"}),
+                "cancelled" => json!({"kind": "cancelled"}),
+                _ => json!({"kind": "failed", "message": error.unwrap_or("the transfer failed")}),
+            };
+            emit(json!({"op": "transfer", "id": transfer_id, "event": event}));
+        }
+
+        fn tunnel_status(&self, status: TunnelStatus) {
+            emit(json!({
+                "op": "tunnel",
+                "status": {
+                    "id": status.id,
+                    "state": status.state,
+                    "bind_port": status.bind_port,
+                    "error": status.error,
+                    "channel_errors": status.channel_errors,
+                    "last_channel_error": status.last_channel_error,
+                },
+            }));
+        }
+    }
+
+    /// The saved connection for `host`, with or without the shell
+    /// integration, saving it on first use (each `Connection::alias` call
+    /// makes a new id).
+    async fn saved_connection(
+        link: &Link,
+        saved: &mut HashMap<(String, bool), Connection>,
+        host: &str,
+        integration: bool,
+    ) -> Result<Connection, String> {
+        let key = (host.to_owned(), integration);
+        if let Some(connection) = saved.get(&key) {
+            return Ok(connection.clone());
+        }
+        let mut connection = Connection::alias(host, host);
+        connection.shell_integration = integration;
+        link.request(
+            "hosts.save",
+            json!({"connection": serde_json::to_value(&connection).unwrap()}),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        saved.insert(key, connection.clone());
+        Ok(connection)
     }
 
     static OUT: Mutex<()> = Mutex::new(());
@@ -87,7 +156,7 @@ mod bridge {
             .expect("connect to the daemon");
         *answerer.link.lock().unwrap() = Some(link.clone());
 
-        let mut saved = std::collections::HashMap::<String, Connection>::new();
+        let mut saved = HashMap::<(String, bool), Connection>::new();
         emit(json!({"op": "ready"}));
 
         let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -101,24 +170,18 @@ mod bridge {
                 "open" => {
                     let host = message["host"].as_str().unwrap_or("e2e-target").to_owned();
                     let seq = message["seq"].clone();
-                    let connection = match saved.get(&host) {
-                        Some(connection) => connection.clone(),
-                        None => {
-                            let connection = Connection::alias(&host, &host);
-                            let reply = link
-                            .request(
-                                "hosts.save",
-                                json!({"connection": serde_json::to_value(&connection).unwrap()}),
-                            )
-                            .await;
-                            if let Err(error) = reply {
-                                emit(
-                                    json!({"op": "error", "seq": seq, "message": error.to_string()}),
-                                );
-                                continue;
-                            }
-                            saved.insert(host.clone(), connection.clone());
-                            connection
+                    let connection = match saved_connection(
+                        &link,
+                        &mut saved,
+                        &host,
+                        message["integration"] == true,
+                    )
+                    .await
+                    {
+                        Ok(connection) => connection,
+                        Err(message) => {
+                            emit(json!({"op": "error", "seq": seq, "message": message}));
+                            continue;
                         }
                     };
                     let opened_id = Arc::new(Mutex::new(None::<String>));
@@ -162,6 +225,41 @@ mod bridge {
                         link.resize_session(&text("id"), number("cols", 80), number("rows", 24));
                 }
                 "close" => link.close_session(&text("id")),
+                "request" => {
+                    let seq = message["seq"].clone();
+                    let mut payload = message["payload"].clone();
+                    if let Some(host) = message["host"].as_str() {
+                        match saved_connection(
+                            &link,
+                            &mut saved,
+                            host,
+                            message["integration"] == true,
+                        )
+                        .await
+                        {
+                            Ok(connection) => {
+                                if payload["tunnel"].is_object() {
+                                    payload["tunnel"]["host_id"] = json!(connection.id);
+                                } else {
+                                    payload["host_id"] = json!(connection.id);
+                                }
+                            }
+                            Err(error) => {
+                                emit(json!({"op": "reply", "seq": seq, "error": error}));
+                                continue;
+                            }
+                        }
+                    }
+                    let (link, kind) = (link.clone(), text("kind"));
+                    tokio::spawn(async move {
+                        match link.request(&kind, payload).await {
+                            Ok(value) => emit(json!({"op": "reply", "seq": seq, "value": value})),
+                            Err(error) => {
+                                emit(json!({"op": "reply", "seq": seq, "error": error.message}))
+                            }
+                        }
+                    });
+                }
                 _ => {}
             }
         }

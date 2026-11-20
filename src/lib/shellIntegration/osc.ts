@@ -61,3 +61,16 @@ export function parseIntegrationOsc(data: string): IntegrationEvent | null {
       return null;
   }
 }
+
+/** The folder in an OSC 7 report (`OSC 7 ; file://host/path ST`), which
+ *  many shells send without the integration script: Fedora's and Ubuntu's
+ *  VTE profile, fish, zsh frameworks, and what Windows Terminal, WezTerm
+ *  and iTerm2 read. xterm hands over what follows `7;`. The host part is
+ *  ignored (it names the server the shell runs on). */
+export function parseOsc7(data: string): string | null {
+  const match = /^file:\/\/[^/]*(\/.*)$/.exec(data.trim());
+  if (!match) return null;
+  const path = percentDecode(match[1]);
+  const control = [...path].some((char) => char.charCodeAt(0) < 0x20 || char === "\u007f");
+  return path.startsWith("/") && !control ? path : null;
+}

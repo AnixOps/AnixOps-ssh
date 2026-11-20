@@ -9,10 +9,10 @@ import { FilesPane } from "@/components/app/FilesPane";
 import { MonitorPane } from "@/components/app/MonitorPane";
 import { BroadcastBar } from "@/components/app/PaneOverlays";
 import { monitorOpenByDefault, rememberMonitorOpen, useMonitorLayout } from "@/lib/monitorPrefs";
-import { rememberSidebarHidden, sidebarHiddenByDefault } from "@/lib/sidebarPrefs";
+import { focusModeByDefault, rememberFocusMode, rememberSidebarHidden, sidebarHiddenByDefault } from "@/lib/sidebarPrefs";
 import { fitWorkspace, useElementWidth } from "@/lib/workspaceFit";
 import { ForwardsPanel } from "@/components/app/ForwardsPanel";
-import { HostEditor } from "@/components/app/HostEditor";
+import { HostEditor, type HostPrefill } from "@/components/app/HostEditor";
 import { HostList } from "@/components/app/HostList";
 import { ImportDialog } from "@/components/app/ImportDialog";
 import { IconRail, type NavKey } from "@/components/app/IconRail";
@@ -38,7 +38,6 @@ import {
   sshStatus,
   deleteHost,
   type Host,
-  type HostFields,
   type HostsSnapshot,
   type SshStatus,
 } from "@/lib/backend";
@@ -112,12 +111,20 @@ export function App() {
     rememberSidebarHidden(hidden);
     setSidebarHidden(hidden);
   }, []);
+  // Focus mode leaves only the tabs and the terminal (no rail, no sidebar);
+  // going to a section ends it.
+  const [focusMode, setFocusModeState] = useState(focusModeByDefault);
+  const setFocusMode = useCallback((on: boolean) => {
+    rememberFocusMode(on);
+    setFocusModeState(on);
+  }, []);
   const setNav = useCallback(
     (key: NavKey) => {
       setNavKey(key);
       hideSidebar(false);
+      setFocusMode(false);
     },
-    [hideSidebar],
+    [hideSidebar, setFocusMode],
   );
   const toggleSidebar = useCallback(() => hideSidebar(!sidebarHidden), [hideSidebar, sidebarHidden]);
   const chooseNav = useCallback(
@@ -133,7 +140,7 @@ export function App() {
   /** A new host being created starts as a serial port. */
   const [newSerial, setNewSerial] = useState(false);
   /** Values for the host being created from an unsaved connection. */
-  const [prefill, setPrefill] = useState<{ name: string; fields: HostFields } | undefined>(undefined);
+  const [prefill, setPrefill] = useState<HostPrefill | undefined>(undefined);
   /** Tabs of unsaved connections that no longer offer "save as host". */
   const [savedAdhoc, setSavedAdhoc] = useState<Set<string>>(new Set());
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -235,6 +242,20 @@ export function App() {
   }, []);
   const [adhocTab, setAdhocTab] = useState<string | null>(null);
 
+  // A new host with another's settings (its saved secrets are not copied).
+  const duplicateHost = useCallback((host: Host) => {
+    setPrefill({
+      name: t.hostCopyName.replace("{name}", host.name),
+      fields: host.fields,
+      groupId: host.groupId,
+      tags: host.tags,
+      color: host.color,
+    });
+    setNewSerial(false);
+    setEditing(null);
+    setAdhocTab(null);
+  }, []);
+
   const openLocal = useCallback(() => addTab(null, t.localTerminal, null), [addTab]);
 
   // Another session like a tab's, in a new tab next to the others.
@@ -246,6 +267,9 @@ export function App() {
     [tabs, addTab],
   );
   const openHostInNewTab = useCallback((host: Host) => addTab(host.id, host.name, host.color), [addTab]);
+  const renameTab = useCallback((key: string, title: string) => {
+    setTabs((current) => current.map((tab) => (tab.key === key ? { ...tab, title } : tab)));
+  }, []);
   const moveTab = useCallback((from: string, to: string) => {
     setTabs((current) => {
       const source = current.findIndex((tab) => tab.key === from);
@@ -435,6 +459,8 @@ export function App() {
   }, [tabs, activeKey, setFilesOpen]);
 
   const activeTab = tabs.find((tab) => tab.key === activeKey);
+  // Without a tab there is nothing to focus on: the window shows as usual.
+  const focused = focusMode && tabs.length > 0;
   /** The SSH host a tab's monitor reads; null for local shells and serial ports. */
   const monitorHost = (hostId: string | null): Host | null => {
     const host = hostId ? snapshot.hosts.find((candidate) => candidate.id === hostId) : undefined;
@@ -482,7 +508,10 @@ export function App() {
         const index = tabs.findIndex((tab) => tab.key === activeKey);
         const step = shortcut === "next-tab" ? 1 : -1;
         setActiveKey(tabs[(index + step + tabs.length) % tabs.length].key);
-      } else if (shortcut === "toggle-sidebar") toggleSidebar();
+      } else if (shortcut === "toggle-sidebar") {
+        if (focusMode) setFocusMode(false);
+        else toggleSidebar();
+      } else if (shortcut === "toggle-focus") setFocusMode(!focusMode);
       else if (shortcut === "new-local") openLocal();
       // Closing acts on the focused pane first; the last pane closes the tab.
       else if (shortcut === "close-tab" && activeTab) closePane(activeTab.key, activeTab.panes.focused);
@@ -499,7 +528,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeKey, activeTab, closePane, focusSearch, openLocal, paneAction, setNav, tabs, toggleFiles, toggleSidebar, updatePanes]);
+  }, [activeKey, activeTab, closePane, focusMode, focusSearch, openLocal, paneAction, setFocusMode, setNav, tabs, toggleFiles, toggleSidebar, updatePanes]);
 
   return (
     <MotionConfig reducedMotion="user">
@@ -507,9 +536,17 @@ export function App() {
     <ConfirmProvider>
       <div className="flex h-full">
         <FirstRunPrompt />
-        <IconRail active={nav} sidebarHidden={sidebarHidden} onChange={chooseNav} />
+        {!focused && (
+          <IconRail
+            active={nav}
+            sidebarHidden={sidebarHidden}
+            onChange={chooseNav}
+            onToggleSidebar={toggleSidebar}
+            onFocusMode={tabs.length > 0 ? () => setFocusMode(true) : undefined}
+          />
+        )}
         {/* Switching sections is immediate in a desktop window (M9). */}
-        <div key={nav} className="flex shrink-0" hidden={sidebarHidden}>
+        <div key={nav} className="flex shrink-0" hidden={sidebarHidden || focused}>
         {nav === "hosts" ? (
           <HostList
             hosts={snapshot.hosts}
@@ -517,6 +554,8 @@ export function App() {
             selectedId={activeTab?.hostId ?? null}
             onOpen={openHost}
             onOpenNew={openHostInNewTab}
+            onDuplicate={duplicateHost}
+            onQuickConnect={quickConnect}
             onEdit={(host) => {
               setNewSerial(false);
               setEditing(host);
@@ -547,6 +586,7 @@ export function App() {
               onCloseMany={closeTabs}
               onDuplicate={duplicateTab}
               onMove={moveTab}
+              onRename={renameTab}
               onNew={openLocal}
               serialHosts={serialHosts(snapshot.hosts)}
               onOpenHost={openHost}
@@ -555,6 +595,7 @@ export function App() {
               monitorAvailable={monitorHost(activeTab?.hostId ?? null) !== null}
               onToggleMonitor={toggleMonitor}
               onSplit={splitActive}
+              onExitFocus={focused ? () => setFocusMode(false) : undefined}
             />
           )}
           {loadError && (

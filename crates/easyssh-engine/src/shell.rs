@@ -338,8 +338,11 @@ impl Engine {
         sink: Events,
     ) -> (String, bool) {
         let engine = self.clone();
-        let open: crate::files::Opener =
-            Box::pin(async move { engine.lease(&target).await.map_err(|error| error.message) });
+        let open: crate::files::Opener = Box::pin(async move {
+            let lease = engine.lease(&target).await.map_err(|error| error.message)?;
+            let sftp = lease.sftp().await.map_err(|error| error.to_string())?;
+            Ok((sftp, lease))
+        });
         self.files
             .start_queued_transfer(key, open, upload, local, remote, recursive, sink)
     }

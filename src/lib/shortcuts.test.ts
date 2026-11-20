@@ -173,5 +173,16 @@ describe("tabs, zoom and the sidebar", () => {
     // In a terminal Ctrl+B is the shell's and tmux's.
     expect(resolveGlobalShortcut(key({ key: "b", ctrlKey: true }), false, true)).toBeNull();
     expect(resolveGlobalShortcut(key({ key: "s", code: "KeyS", ctrlKey: true, metaKey: true }), true, true)).toBe("toggle-sidebar");
+    // …and Ctrl+Shift+S from inside one.
+    expect(resolveGlobalShortcut(key({ key: "S", code: "KeyS", ctrlKey: true, shiftKey: true }), false, true)).toBe("toggle-sidebar");
+    expect(resolveGlobalShortcut(key({ key: "s", code: "KeyS", ctrlKey: true }), false, true)).toBeNull();
+  });
+
+  it("toggles focus mode with F11, ⌃⌘Z on macOS, in the terminal too", () => {
+    expect(resolveGlobalShortcut(key({ key: "F11", code: "F11" }), false, true)).toBe("toggle-focus");
+    expect(resolveGlobalShortcut(key({ key: "F11", code: "F11" }), false, false)).toBe("toggle-focus");
+    expect(resolveGlobalShortcut(key({ key: "F11", code: "F11", shiftKey: true }), false, true)).toBeNull();
+    expect(resolveGlobalShortcut(key({ key: "z", code: "KeyZ", ctrlKey: true, metaKey: true }), true, true)).toBe("toggle-focus");
+    expect(resolveGlobalShortcut(key({ key: "z", code: "KeyZ", metaKey: true }), true, true)).toBeNull();
   });
 });

@@ -15,6 +15,9 @@ export interface Settings {
   terminalOptionAsMeta: boolean;
   /** A font name or CSS font list; empty uses the built-in monospace stack. */
   terminalFontFamily: string;
+  /** Programming ligatures (=> != ===) of fonts that have them, such as
+   *  Fira Code, Cascadia Code or JetBrains Mono. Uses the DOM renderer. */
+  terminalLigatures: boolean;
   /** 1.0 to 1.6. */
   terminalLineHeight: number;
   terminalCursorStyle: CursorStyle;
@@ -37,6 +40,8 @@ export interface Settings {
   editorCommand: string;
   /** The files pane shows the folder the terminal is in (needs shell integration). */
   followTerminalFolder: boolean;
+  /** A double-click on a file in the files pane: open it in the editor (FinalShell, WinSCP) or download it. */
+  filesDoubleClick: "edit" | "download";
   /** The SSH engine for hosts that follow the global setting: the built-in
    * engine unless OpenSSH was chosen (an advanced option kept for compatibility). */
   sshEngine: SshEngine;
@@ -52,6 +57,7 @@ let current: Settings = {
   terminalScrollback: 10000,
   terminalOptionAsMeta: false,
   terminalFontFamily: "",
+  terminalLigatures: false,
   terminalLineHeight: 1.2,
   terminalCursorStyle: "block",
   terminalCursorBlink: true,
@@ -64,6 +70,7 @@ let current: Settings = {
   terminalAutoReconnect: true,
   editorCommand: "",
   followTerminalFolder: false,
+  filesDoubleClick: "edit",
   sshEngine: "russh",
   crashReports: null,
   usageStats: false,

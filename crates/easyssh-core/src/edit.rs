@@ -58,6 +58,25 @@ pub fn is_inside(root: &Path, path: &Path) -> bool {
             .any(|part| matches!(part, Component::ParentDir))
 }
 
+/// How much of a file is read to tell text from binary, as git does.
+pub const SNIFF_BYTES: usize = 8000;
+
+/// The start of a file is binary: it has a NUL byte, which text in any
+/// encoding a text editor opens by default (UTF-8, Latin-1, GBK) never has.
+pub fn looks_binary(head: &[u8]) -> bool {
+    head.iter().take(SNIFF_BYTES).any(|&byte| byte == 0)
+}
+
+/// Reads the start of `path` and tells whether it is binary.
+pub fn file_looks_binary(path: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(SNIFF_BYTES);
+    std::fs::File::open(path)?
+        .take(SNIFF_BYTES as u64)
+        .read_to_end(&mut head)?;
+    Ok(looks_binary(&head))
+}
+
 /// Splits a configured editor command into the program and its arguments.
 /// Spaces separate; double quotes keep a path with spaces together.
 pub fn split_command(command: &str) -> Vec<String> {
@@ -163,6 +182,24 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Instant;
+
+    #[test]
+    fn binary_is_told_by_a_nul_byte_near_the_start() {
+        assert!(looks_binary(b"\x7fELF\x02\x01\x01\0\0"));
+        assert!(!looks_binary("server { listen 80; } # 中文注释".as_bytes()));
+        assert!(!looks_binary(b""));
+        let mut late = vec![b'a'; SNIFF_BYTES];
+        late.push(0);
+        assert!(!looks_binary(&late));
+        let dir = std::env::temp_dir().join(format!("easyssh-sniff-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("ls");
+        std::fs::write(&file, b"\x7fELF\0\0\0").unwrap();
+        assert!(file_looks_binary(&file).unwrap());
+        std::fs::write(&file, b"#!/bin/sh\necho hi\n").unwrap();
+        assert!(!file_looks_binary(&file).unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn one_remote_file_has_one_folder_and_hosts_do_not_collide() {

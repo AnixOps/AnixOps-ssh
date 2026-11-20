@@ -28,7 +28,7 @@ const IDLE_SESSION: Duration = Duration::from_secs(20);
 
 /// Opens (or reuses) the connection a queued transfer runs on; called when
 /// the transfer leaves the queue, so a waiting transfer holds no channel.
-pub type Opener = Pin<Box<dyn Future<Output = Result<Lease, String>> + Send>>;
+pub type Opener = Pin<Box<dyn Future<Output = Result<(Sftp, Lease), String>> + Send>>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
@@ -244,6 +244,11 @@ impl Files {
     /// Registers an SFTP session on a leased connection.
     pub async fn open(&self, lease: Lease) -> Result<(String, String), SshError> {
         let sftp = lease.sftp().await?;
+        self.open_with(sftp, lease).await
+    }
+
+    /// Registers an SFTP session already opened on `lease`'s connection.
+    pub async fn open_with(&self, sftp: Sftp, lease: Lease) -> Result<(String, String), SshError> {
         let home = sftp.home().await?;
         let id = self.id("sftp");
         lock(&self.sessions).insert(
@@ -387,13 +392,10 @@ impl Files {
                 let got = match pool.take() {
                     Some(entry) => Ok(entry),
                     None => match open.await {
-                        Ok(lease) => match lease.sftp().await {
-                            Ok(sftp) => Ok(Arc::new(SftpEntry {
-                                sftp,
-                                _lease: lease,
-                            })),
-                            Err(e) => Err(e.to_string()),
-                        },
+                        Ok((sftp, lease)) => Ok(Arc::new(SftpEntry {
+                            sftp,
+                            _lease: lease,
+                        })),
                         Err(message) => Err(message),
                     },
                 };

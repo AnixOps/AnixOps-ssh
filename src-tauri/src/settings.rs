@@ -27,6 +27,9 @@ pub struct Settings {
     /// Empty means the built-in monospace stack.
     #[serde(default)]
     terminal_font_family: String,
+    /// Programming ligatures (=> != ===) of fonts that have them.
+    #[serde(default)]
+    terminal_ligatures: bool,
     #[serde(default = "default_line_height")]
     terminal_line_height: f32,
     #[serde(default)]
@@ -60,6 +63,19 @@ pub struct Settings {
     /// The files pane follows the terminal's folder.
     #[serde(default)]
     follow_terminal_folder: bool,
+    /// What a double-click on a file in the files pane does.
+    #[serde(default)]
+    files_double_click: FileDoubleClick,
+}
+
+/// A double-click on a file: open it in the editor (FinalShell, MobaXterm,
+/// WinSCP) or download it.
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum FileDoubleClick {
+    #[default]
+    Edit,
+    Download,
 }
 
 fn default_line_height() -> f32 {
@@ -104,6 +120,7 @@ enum RightClick {
 struct FilesBehaviour {
     editor_command: String,
     follow_terminal_folder: bool,
+    double_click: FileDoubleClick,
 }
 
 const FILES_BEHAVIOUR: &str = "files_behaviour";
@@ -128,6 +145,7 @@ pub fn editor_command() -> String {
 struct TerminalBehaviour {
     option_as_meta: bool,
     font_family: String,
+    ligatures: bool,
     line_height: f32,
     cursor_style: CursorStyle,
     cursor_blink: bool,
@@ -145,6 +163,7 @@ impl Default for TerminalBehaviour {
         Self {
             option_as_meta: false,
             font_family: String::new(),
+            ligatures: false,
             line_height: default_line_height(),
             cursor_style: CursorStyle::default(),
             cursor_blink: true,
@@ -183,6 +202,7 @@ pub fn settings_get() -> Result<Settings, String> {
         usage_stats: config.telemetry.usage_stats,
         terminal_option_as_meta: behaviour.option_as_meta,
         terminal_font_family: behaviour.font_family,
+        terminal_ligatures: behaviour.ligatures,
         terminal_line_height: behaviour.line_height,
         terminal_cursor_style: behaviour.cursor_style,
         terminal_cursor_blink: behaviour.cursor_blink,
@@ -195,6 +215,7 @@ pub fn settings_get() -> Result<Settings, String> {
         terminal_auto_reconnect: behaviour.auto_reconnect,
         editor_command: files.editor_command,
         follow_terminal_folder: files.follow_terminal_folder,
+        files_double_click: files.double_click,
     })
 }
 
@@ -235,6 +256,7 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     let behaviour = TerminalBehaviour {
         option_as_meta: settings.terminal_option_as_meta,
         font_family: settings.terminal_font_family.trim().to_owned(),
+        ligatures: settings.terminal_ligatures,
         line_height: settings.terminal_line_height,
         cursor_style: settings.terminal_cursor_style,
         cursor_blink: settings.terminal_cursor_blink,
@@ -254,6 +276,7 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     let files = FilesBehaviour {
         editor_command: settings.editor_command.trim().to_owned(),
         follow_terminal_folder: settings.follow_terminal_folder,
+        double_click: settings.files_double_click,
     };
     if files != files_behaviour() {
         store
@@ -396,6 +419,7 @@ mod tests {
         assert!(on.option_as_meta);
         // Settings saved before the font options existed keep working.
         assert!(empty.font_family.is_empty());
+        assert!(!empty.ligatures);
         assert_eq!(empty.line_height, 1.2);
         assert_eq!(empty.cursor_style, super::CursorStyle::Block);
         assert!(empty.cursor_blink);

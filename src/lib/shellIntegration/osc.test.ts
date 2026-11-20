@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseIntegrationOsc, percentDecode } from "./osc";
+import { parseIntegrationOsc, parseOsc7, percentDecode } from "./osc";
 
 describe("percentDecode", () => {
   it("decodes UTF-8 byte by byte", () => {
@@ -46,5 +46,18 @@ describe("parseIntegrationOsc", () => {
     expect(parseIntegrationOsc("Z;x")).toBeNull();
     expect(parseIntegrationOsc("")).toBeNull();
     expect(parseIntegrationOsc("P;")).toBeNull();
+  });
+});
+
+describe("parseOsc7", () => {
+  it("reads the path of a file URL and ignores the host", () => {
+    expect(parseOsc7("file://web-01/home/me/my%20dir")).toBe("/home/me/my dir");
+    expect(parseOsc7("file:///srv/中文")).toBe("/srv/中文");
+  });
+
+  it("refuses anything that is not a file URL with an absolute path", () => {
+    expect(parseOsc7("http://x/y")).toBeNull();
+    expect(parseOsc7("file://host")).toBeNull();
+    expect(parseOsc7("file:///a%0Ab")).toBeNull();
   });
 });

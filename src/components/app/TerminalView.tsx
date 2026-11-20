@@ -204,15 +204,30 @@ export function TerminalView({
     e2eTerminals?.set(tabKey, terminal);
     // Headless test browsers have no usable WebGL, so automation uses the DOM renderer.
     // `?webgl=1` keeps WebGL under automation, for the terminal end-to-end test.
-    if (!navigator.webdriver || new URLSearchParams(window.location.search).has("webgl")) {
-      try {
-        const webgl = new WebglAddon();
-        webgl.onContextLoss(() => webgl.dispose());
-        terminal.loadAddon(webgl);
-      } catch {
-        // The DOM renderer is the fallback when WebGL is unavailable.
+    // Ligatures need the DOM renderer too: WebGL draws each cell on its own,
+    // while the browser shapes a run of text in the DOM (see index.css).
+    const webglAllowed = !navigator.webdriver || new URLSearchParams(window.location.search).has("webgl");
+    let webgl: WebglAddon | null = null;
+    const applyRenderer = (ligatures: boolean) => {
+      container.classList.toggle("terminal-ligatures", ligatures);
+      if (ligatures && webgl) {
+        webgl.dispose();
+        webgl = null;
+      } else if (!ligatures && !webgl && webglAllowed) {
+        try {
+          const addon = new WebglAddon();
+          addon.onContextLoss(() => {
+            addon.dispose();
+            if (webgl === addon) webgl = null;
+          });
+          terminal.loadAddon(addon);
+          webgl = addon;
+        } catch {
+          // The DOM renderer is the fallback when WebGL is unavailable.
+        }
       }
-    }
+    };
+    applyRenderer(settings().terminalLigatures);
     fit.fit();
     // Output is written once per frame. The daemon protocol has no flow
     // control to pause reads, so this only coalesces (see outputBuffer.ts).
@@ -241,7 +256,10 @@ export function TerminalView({
     // The files pane can follow this terminal's folder.
     const cwdOwner = Symbol("terminal");
     if (hostId) {
-      lineSource.onChange(() => publishTerminalCwd(hostId, cwdOwner, { integration: lineSource.isActive(), cwd: lineSource.cwd() }));
+      // A folder comes from the integration script or a plain OSC 7 report.
+      lineSource.onChange(() =>
+        publishTerminalCwd(hostId, cwdOwner, { integration: lineSource.isActive() || lineSource.cwd() !== undefined, cwd: lineSource.cwd() }),
+      );
     }
     integrationRef.current = integration;
     const controller = new CompletionController({
@@ -708,6 +726,7 @@ export function TerminalView({
     const stopSettings = onSettings((next) => {
       terminal.options.fontSize = zoomedSize(next.terminalFontSize);
       Object.assign(terminal.options, liveTerminalOptions(next, terminalFont()));
+      applyRenderer(next.terminalLigatures);
       updateTheme();
       if (container.clientWidth > 0) fit.fit();
     });

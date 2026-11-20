@@ -45,7 +45,8 @@ export type AppShortcut =
   | "zoom-in"
   | "zoom-out"
   | "zoom-reset"
-  | "toggle-sidebar";
+  | "toggle-sidebar"
+  | "toggle-focus";
 
 const letters: Record<string, AppShortcut> = {
   k: "search-hosts",
@@ -162,6 +163,11 @@ export function resolveGlobalShortcut(input: KeyInput, mac: boolean, inTerminal:
   const slash = input.key === "/" || input.key === "?" || input.code === "Slash";
   const comma = input.key === "," || input.key === "<" || input.code === "Comma";
   const page = input.code ? pages[input.code] : undefined;
+  // Focus mode (only the tabs and the terminal): F11 as in Windows Terminal's
+  // full screen, ⌃⌘Z on macOS (⌃⌘F is the system's full screen). Both work
+  // inside a terminal; full-screen programs use F1–F10.
+  if (!mac && input.key === "F11" && !input.ctrlKey && !input.metaKey && !shiftKey) return "toggle-focus";
+  if (mac && input.metaKey && input.ctrlKey && !shiftKey && (letter === "z" || input.code === "KeyZ")) return "toggle-focus";
   if (mac && input.metaKey && input.ctrlKey && !shiftKey && (letter === "s" || input.code === "KeyS")) return "toggle-sidebar";
   if (mac) {
     if (!input.metaKey || input.ctrlKey || shiftKey) return null;
@@ -187,6 +193,9 @@ export function resolveGlobalShortcut(input: KeyInput, mac: boolean, inTerminal:
   // keyboard.md: Ctrl+B shows or hides the sidebar. Inside a terminal Ctrl+B is
   // the shell's (and tmux's prefix), and Ctrl+Shift+B is broadcast.
   if (letter === "b" && !inTerminal) return "toggle-sidebar";
+  // In a terminal the sidebar is Ctrl+Shift+S, so it folds away without
+  // leaving the terminal.
+  if ((letter === "s" || input.code === "KeyS") && inTerminal) return "toggle-sidebar";
   return null;
 }
 
