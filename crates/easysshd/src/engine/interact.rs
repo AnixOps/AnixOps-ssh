@@ -97,6 +97,12 @@ impl Interaction for DaemonInteraction {
             .await
     }
 
+    async fn saved_password(&self, prompt: &str) -> Option<String> {
+        // The same once-only answer as `password`: whichever of the two the
+        // server asks through first uses it up.
+        self.saved_password.as_ref().and_then(|s| s.take(prompt))
+    }
+
     async fn keyboard_interactive(
         &self,
         name: &str,
@@ -229,6 +235,39 @@ mod tests {
             touch: Mutex::default(),
         });
         (interaction, shown, closed)
+    }
+
+    #[tokio::test]
+    async fn the_saved_password_answers_a_keyboard_interactive_password_round_once() {
+        let (interaction, shown, _) = recording().await;
+        let interaction = DaemonInteraction {
+            hub: interaction.hub.clone(),
+            hostkeys: interaction.hostkeys.clone(),
+            label: "web".into(),
+            saved_password: Some(saved_with(Some("pw"))),
+            touch: Mutex::default(),
+        };
+        // A jump host's round is never answered from the vault.
+        assert_eq!(
+            interaction.saved_password("ops@bastion's password").await,
+            None
+        );
+        assert_eq!(
+            interaction
+                .saved_password("me@example.com's password")
+                .await
+                .as_deref(),
+            Some("pw")
+        );
+        // Used up: neither a second round nor the password method gets it,
+        // and nothing was shown to the user for it.
+        assert_eq!(
+            interaction
+                .saved_password("me@example.com's password")
+                .await,
+            None
+        );
+        assert!(lock(&shown).is_empty());
     }
 
     #[tokio::test]

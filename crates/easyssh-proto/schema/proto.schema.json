@@ -1081,6 +1081,7 @@
         "xshell",
         "finalshell",
         "termius",
+        "ansible",
         "csv",
         "openssh"
       ],
@@ -3433,6 +3434,72 @@
         "home"
       ],
       "additionalProperties": false
+    },
+    "MonitorSampleParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "boolean",
+          "description": "Also list every process's owner, command line and executable."
+        }
+      },
+      "required": [
+        "host_id"
+      ],
+      "additionalProperties": false,
+      "description": "Command `monitor.sample` payload (russh engine): reads the server's load, memory, network, disks and processes on the connection the terminal already has. Never connects. Reply: MonitorSampleResult."
+    },
+    "MonitorSampleResult": {
+      "type": "object",
+      "properties": {
+        "output": {
+          "type": "string",
+          "description": "What the read-only sample script printed (`@section` markers, raw /proc and df text)."
+        },
+        "latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Keepalive round trip; null when the server did not answer it."
+        }
+      },
+      "required": [
+        "output",
+        "latency_ms"
+      ],
+      "additionalProperties": false
+    },
+    "MonitorSignalParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "signal": {
+          "type": "string",
+          "enum": [
+            "TERM",
+            "KILL",
+            "HUP",
+            "INT"
+          ]
+        }
+      },
+      "required": [
+        "host_id",
+        "pid",
+        "signal"
+      ],
+      "additionalProperties": false,
+      "description": "Command `monitor.signal` payload (russh engine): sends a signal to a process as the login user, on the existing connection."
     },
     "SftpListParams": {
       "type": "object",

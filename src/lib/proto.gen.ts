@@ -121,7 +121,7 @@ export type Reply =
  * via the `definition` "ImportFormat".
  */
 export type ImportFormat =
-  "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "csv" | "openssh";
+  "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "ansible" | "csv" | "openssh";
 /**
  * What to do with an imported host that matches a stored one (same hostname, port and user).
  *
@@ -600,7 +600,7 @@ export interface HostsImportPreviewParams {
   /**
    * Overrides detection.
    */
-  format?: "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "csv" | "openssh";
+  format?: "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "ansible" | "csv" | "openssh";
   /**
    * Directory OpenSSH `Include` paths resolve in and may not leave. Only for the user's own `~/.ssh`, on their explicit action.
    */
@@ -1801,6 +1801,44 @@ export interface SftpOpenParams {
 export interface SftpOpenResult {
   sftp_id: string;
   home: string;
+}
+/**
+ * Command `monitor.sample` payload (russh engine): reads the server's load, memory, network, disks and processes on the connection the terminal already has. Never connects. Reply: MonitorSampleResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "MonitorSampleParams".
+ */
+export interface MonitorSampleParams {
+  host_id: string;
+  /**
+   * Also list every process's owner, command line and executable.
+   */
+  detail?: boolean;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "MonitorSampleResult".
+ */
+export interface MonitorSampleResult {
+  /**
+   * What the read-only sample script printed (`@section` markers, raw /proc and df text).
+   */
+  output: string;
+  /**
+   * Keepalive round trip; null when the server did not answer it.
+   */
+  latency_ms: number | null;
+}
+/**
+ * Command `monitor.signal` payload (russh engine): sends a signal to a process as the login user, on the existing connection.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "MonitorSignalParams".
+ */
+export interface MonitorSignalParams {
+  host_id: string;
+  pid: number;
+  signal: "TERM" | "KILL" | "HUP" | "INT";
 }
 /**
  * Command `sftp.list` payload. Reply: SftpListResult.
