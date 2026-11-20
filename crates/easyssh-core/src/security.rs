@@ -60,8 +60,22 @@ pub fn validate_serial(serial: &SerialSettings) -> Result<(), ValidationError> {
 pub fn validate_alias(value: &str) -> Result<(), ValidationError> {
     validate_token(value, "alias", true)
 }
+/// A user name: letters, digits, `_`, `-`, `.`, and `@`. The last two exist
+/// for gateways that carry the target in the user name (JumpServer KoKo:
+/// `jms_user@account@10.0.0.5`); ssh splits `user@host` at the last `@`, so
+/// the host is still the one after it. No leading `-`, nothing else special.
 pub fn validate_username(value: &str) -> Result<(), ValidationError> {
-    validate_token(value, "username", false)
+    if value.is_empty() {
+        return Err(ValidationError::Required { field: "username" });
+    }
+    if value.starts_with('-')
+        || !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '@'))
+    {
+        return Err(ValidationError::Unsafe { field: "username" });
+    }
+    Ok(())
 }
 pub fn validate_host(value: &str) -> Result<(), ValidationError> {
     if value.is_empty() {
@@ -140,6 +154,15 @@ pub fn serialized_has_sensitive_keys(value: &serde_json::Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gateway_style_user_names_are_accepted_but_not_options() {
+        assert!(validate_username("jms@root@10.0.0.5").is_ok());
+        assert!(validate_username("first.last").is_ok());
+        for bad in ["", "-oProxyCommand=x", "a b", "a;b", "a$b", "a\nb"] {
+            assert!(validate_username(bad).is_err(), "{bad:?}");
+        }
+    }
+
     #[test]
     fn rejects_argument_injection() {
         assert!(validate_host("-oProxyCommand=x").is_err());

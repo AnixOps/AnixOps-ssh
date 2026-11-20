@@ -203,13 +203,20 @@ export type {
 export type ImportSource = { kind: "file"; path: string } | { kind: "ssh_config" } | { kind: "service"; request: ServiceRequest };
 
 /** The services hosts can be imported from. */
-export type ServiceId = "control";
+export type ServiceId = "control" | "jumpserver";
 
 /** The plain settings of a service import (what the form remembers). */
 export interface ServiceForm {
   url: string;
   default_user: string;
   identity_file: string | null;
+  /** JumpServer only: */
+  access_key_id: string;
+  org_id: string;
+  gateway: boolean;
+  gateway_host: string;
+  gateway_port: number;
+  gateway_user: string;
 }
 
 /** What the form opens with: the saved settings, and whether a credential is saved in the vault. */

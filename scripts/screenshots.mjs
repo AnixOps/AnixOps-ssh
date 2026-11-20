@@ -53,6 +53,31 @@ const scenes = [
     waitText: "测试连接",
   },
   {
+    name: "import-jumpserver",
+    query: "lang=en",
+    clicks: [{ name: "Add host" }, { name: "^Import hosts", role: "menuitem", regex: true }, { name: "JumpServer" }],
+    fills: [
+      { placeholder: "https://panel.example.com", value: "https://jms.example.com" },
+      { label: "^Access Key ID", value: "7a1b2c3d-1111-4222-8333-444455556666" },
+      { label: "^Access Key Secret$", value: "0f0e0d0c-aaaa-4bbb-8ccc-123456789abc" },
+      { label: "^JumpServer user name", value: "alice" },
+    ],
+    waitText: "Test connection",
+  },
+  {
+    name: "import-jumpserver-preview",
+    query: "lang=en",
+    clicks: [{ name: "Add host" }, { name: "^Import hosts", role: "menuitem", regex: true }, { name: "JumpServer" }],
+    fills: [
+      { placeholder: "https://panel.example.com", value: "https://jms.example.com" },
+      { label: "^Access Key ID", value: "7a1b2c3d-1111-4222-8333-444455556666" },
+      { label: "^Access Key Secret$", value: "0f0e0d0c-aaaa-4bbb-8ccc-123456789abc" },
+      { label: "^JumpServer user name", value: "alice" },
+    ],
+    clicksAfter: [{ name: "Preview" }],
+    waitText: "HK-edge-01",
+  },
+  {
     name: "import-service-preview",
     query: "lang=en",
     clicks: [{ name: "Add host" }, { name: "^Import hosts", role: "menuitem", regex: true }, { name: "AnixOps Control" }],
@@ -149,7 +174,8 @@ for (const colorScheme of ["light", "dark"]) {
     }
     for (const step of scene.clicks ?? [])
       await page.getByRole(step.role ?? "button", { name: step.regex ? new RegExp(step.name) : step.name, exact: step.regex ? undefined : (step.exact ?? true) }).first().click();
-    for (const field of scene.fills ?? []) await page.getByPlaceholder(field.placeholder).fill(field.value);
+    for (const field of scene.fills ?? [])
+      await (field.label ? page.getByLabel(new RegExp(field.label)) : page.getByPlaceholder(field.placeholder)).first().fill(field.value);
     for (const step of scene.clicksAfter ?? [])
       await page.getByRole(step.role ?? "button", { name: step.regex ? new RegExp(step.name) : step.name, exact: step.regex ? undefined : (step.exact ?? true) }).first().click();
     if (scene.waitText) await page.getByText(scene.waitText).first().waitFor();

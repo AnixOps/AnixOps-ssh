@@ -89,6 +89,22 @@ Windows 10/11 在“设置 → 系统 → 可选功能 → 添加 OpenSSH 客户
   面板里已经不存在的节点只会列出来提醒，不会自动删除。
 - 如果填了密钥文件路径，它会写入主机备注，文件本身不会被读取。
 
+**JumpServer**：填 JumpServer 地址（同样必须是 https）、Access Key ID 和 Access Key Secret
+（JumpServer“个人信息 → API Key”里创建），组织 ID 留空表示默认组织。Secret 加密保存在保险库里，
+只用来给每个请求签名（HTTP Signature），不会出现在地址里。
+
+- 导入资产（主机）：名称、地址、SSH 端口（取资产的 `ssh` 协议，没有协议信息时用 22），
+  分组是“JumpServer 域名 / 资产的节点路径”。已停用的资产、没有 SSH 协议的资产（例如用 RDP 的 Windows）
+  会被跳过，并在警告里列出。
+- **通过 KoKo SSH 网关连接**（默认开启）：导入的主机都连接到 JumpServer 的 KoKo 网关
+  （网关地址默认是 JumpServer 的地址，端口默认 2222），填你的 JumpServer 用户名和资产账号（默认 `root`）。
+  每个主机的 SSH 用户名是 `JumpServer用户名@资产账号@资产地址`（等同于
+  `ssh -p2222 admin@root@192.168.1.10@jms.example.com`），连接后直接进入该资产；
+  这是 JumpServer 2.x 和 3.x 文档里的直接登录写法，很旧的版本格式可能不同。
+  资产账号留空时，用户名只有 JumpServer 用户名，连上后在 KoKo 菜单里选择资产（输入 `/` 加资产名搜索，回车进入）。
+  JumpServer 的密码和 MFA 验证码不会被保存，由 KoKo 在连接时询问，在 AnixOps SSH 里和平常一样弹出输入框。
+  关闭这个选项时，主机直接连接资产的地址，用你填的默认用户。
+
 ## 设置、备份与同步
 
 - 主题（跟随系统 / 浅色 / 深色）、语言、终端字号和滚动缓冲；
