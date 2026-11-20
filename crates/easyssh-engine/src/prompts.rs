@@ -384,6 +384,7 @@ mod tests {
                     password: Some(SecretText::new("pw")),
                     private_key: None,
                     passphrase: None,
+                    proxy_password: None,
                 })
             }
             fn secret_flags(&self, _: &str) -> Result<SecretFlags, VaultError> {
@@ -391,6 +392,7 @@ mod tests {
                     password: true,
                     private_key: false,
                     passphrase: false,
+                    proxy_password: false,
                 })
             }
         }
