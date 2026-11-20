@@ -72,6 +72,15 @@ pub trait Interaction: Send + Sync {
     /// The login password, e.g. `"pwuser@example.com's password"`.
     async fn password(&self, prompt: &str) -> Option<String>;
 
+    /// A saved login password for `prompt` (the same text as
+    /// [`Interaction::password`] gets), used to answer a keyboard-interactive
+    /// round that only asks for the password. `None`, the default, means
+    /// nothing is saved (or it was used already), and the round goes to
+    /// [`Interaction::keyboard_interactive`]. Must not ask the user.
+    async fn saved_password(&self, _prompt: &str) -> Option<String> {
+        None
+    }
+
     /// One keyboard-interactive round. Return one answer per prompt.
     async fn keyboard_interactive(
         &self,
