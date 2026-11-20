@@ -36,6 +36,9 @@ pub struct Settings {
     /// Remote programs may write (never read) the clipboard with OSC 52.
     #[serde(default = "yes")]
     terminal_osc52: bool,
+    /// Reconnect by itself, with backoff, when a connection drops.
+    #[serde(default = "yes")]
+    terminal_auto_reconnect: bool,
 }
 
 fn yes() -> bool {
@@ -62,6 +65,7 @@ struct TerminalBehaviour {
     right_click: RightClick,
     copy_on_select: bool,
     osc52: bool,
+    auto_reconnect: bool,
 }
 
 impl Default for TerminalBehaviour {
@@ -72,6 +76,7 @@ impl Default for TerminalBehaviour {
             right_click: RightClick::Menu,
             copy_on_select: false,
             osc52: true,
+            auto_reconnect: true,
         }
     }
 }
@@ -102,6 +107,7 @@ pub fn settings_get() -> Result<Settings, String> {
         terminal_right_click: behaviour.right_click,
         terminal_copy_on_select: behaviour.copy_on_select,
         terminal_osc52: behaviour.osc52,
+        terminal_auto_reconnect: behaviour.auto_reconnect,
     })
 }
 
@@ -139,6 +145,7 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
         right_click: settings.terminal_right_click,
         copy_on_select: settings.terminal_copy_on_select,
         osc52: settings.terminal_osc52,
+        auto_reconnect: settings.terminal_auto_reconnect,
     };
     if behaviour != terminal_behaviour() {
         store
@@ -226,6 +233,7 @@ mod tests {
         let empty: TerminalBehaviour = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, TerminalBehaviour::default());
         assert!(empty.warn_multiline_paste && empty.osc52 && !empty.copy_on_select);
+        assert!(empty.auto_reconnect);
         let partial: TerminalBehaviour =
             serde_json::from_str(r#"{"right_click":"paste"}"#).unwrap();
         assert_eq!(partial.right_click, RightClick::Paste);
