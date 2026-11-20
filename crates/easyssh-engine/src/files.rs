@@ -572,7 +572,7 @@ impl SftpEntry {
 
     pub async fn remove(&self, path: &str, directory: bool) -> Result<(), SshError> {
         if directory {
-            self.sftp.remove_dir(path).await
+            self.sftp.remove_dir_all(path).await
         } else {
             self.sftp.remove_file(path).await
         }

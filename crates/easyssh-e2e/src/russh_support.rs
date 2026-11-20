@@ -87,6 +87,7 @@ impl Interaction for Scripted {
             KnownHostStatus::Changed { .. } => "changed",
             KnownHostStatus::Trusted => "trusted",
             KnownHostStatus::Revoked => "revoked",
+            KnownHostStatus::OtherTypes { .. } => "other-types",
         };
         assert!(fingerprint.starts_with("SHA256:"), "{fingerprint}");
         self.record(format!("hostkey {host}:{port} {kind}"));

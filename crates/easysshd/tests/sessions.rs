@@ -4,7 +4,7 @@
 use easyssh_core::{ConfigStore, Connection};
 use easyssh_proto as proto;
 use easysshd::askpass;
-use easysshd::link::{AskpassPrompt, Link, LinkHandler, SessionMsg};
+use easysshd::link::{AskpassPrompt, ExitReason, Link, LinkHandler, SessionMsg};
 use easysshd::{Client, Daemon, DaemonConfig, Server};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -659,10 +659,10 @@ async fn link_survives_a_reload_like_the_app_does() {
     link.resize_session(&id, 90, 20).unwrap();
     link.write_session(&id, "exit 7\n").unwrap();
     eventually("exit", || {
-        second
-            .lock()
-            .unwrap()
-            .contains(&SessionMsg::Exit { code: Some(7) })
+        second.lock().unwrap().contains(&SessionMsg::Exit {
+            code: Some(7),
+            reason: ExitReason::Exit,
+        })
     })
     .await;
     link.close_session(&id);

@@ -47,13 +47,62 @@ fn disconnected() -> LinkError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionMsg {
     /// Output text starting at stream offset `seq`.
-    Data {
-        seq: u64,
-        data: String,
-    },
+    Data { seq: u64, data: String },
     Exit {
         code: Option<u32>,
+        reason: ExitReason,
     },
+}
+
+/// Why a session ended, as `session.exit` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExitReason {
+    /// The shell ended and reported its exit code.
+    Exit,
+    /// The shell was killed by this signal (`TERM`, without `SIG`).
+    Signal(String),
+    /// No status: the connection dropped, or the daemon lost the session.
+    Disconnected,
+}
+
+impl ExitReason {
+    /// The reason for an end that only has a code: an exit when there is
+    /// one, a lost connection when there is none.
+    pub fn from_code(code: Option<u32>) -> Self {
+        match code {
+            Some(_) => ExitReason::Exit,
+            None => ExitReason::Disconnected,
+        }
+    }
+
+    /// From a `session.exit` payload. `reason` is optional (older daemons
+    /// sent only the code), so a missing one falls back to [`Self::from_code`].
+    pub fn from_payload(payload: &Value) -> Self {
+        match payload["reason"].as_str() {
+            Some("exit") => ExitReason::Exit,
+            Some("signal") => {
+                ExitReason::Signal(payload["signal"].as_str().unwrap_or_default().to_owned())
+            }
+            Some("disconnected") => ExitReason::Disconnected,
+            _ => Self::from_code(payload["code"].as_u64().map(|code| code as u32)),
+        }
+    }
+
+    /// `exit`, `signal` or `disconnected`, as the UI receives it.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ExitReason::Exit => "exit",
+            ExitReason::Signal(_) => "signal",
+            ExitReason::Disconnected => "disconnected",
+        }
+    }
+
+    pub fn signal(&self) -> Option<&str> {
+        match self {
+            ExitReason::Signal(name) => Some(name),
+            _ => None,
+        }
+    }
 }
 
 /// How [`Link::connect_with`] introduces itself.
@@ -197,7 +246,10 @@ impl Inner {
         lock(&self.pending).clear();
         let sinks: Vec<_> = lock(&self.sinks).drain().collect();
         for (_, mut sink) in sinks {
-            sink(SessionMsg::Exit { code: None });
+            sink(SessionMsg::Exit {
+                code: None,
+                reason: ExitReason::Disconnected,
+            });
         }
         self.handler.lost();
     }
@@ -264,6 +316,7 @@ impl Inner {
                 if let Some(mut sink) = lock(&self.sinks).remove(sid) {
                     sink(SessionMsg::Exit {
                         code: payload["code"].as_u64().map(|c| c as u32),
+                        reason: ExitReason::from_payload(payload),
                     });
                 }
             }
@@ -639,4 +692,39 @@ async fn write_loop(
         }
     }
     inner.mark_lost();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ExitReason;
+    use serde_json::json;
+
+    #[test]
+    fn reads_why_a_session_ended() {
+        let reason = |payload| ExitReason::from_payload(&payload);
+        assert_eq!(
+            reason(json!({"code": 0, "reason": "exit"})),
+            ExitReason::Exit
+        );
+        let killed = reason(json!({"code": null, "reason": "signal", "signal": "HUP"}));
+        assert_eq!(killed, ExitReason::Signal("HUP".into()));
+        assert_eq!((killed.kind(), killed.signal()), ("signal", Some("HUP")));
+        assert_eq!(
+            reason(json!({"code": null, "reason": "disconnected"})).kind(),
+            "disconnected"
+        );
+    }
+
+    #[test]
+    fn an_older_daemon_without_a_reason_is_read_from_the_code() {
+        let reason = |payload| ExitReason::from_payload(&payload);
+        assert_eq!(
+            reason(json!({"session_id": "s", "code": 1})),
+            ExitReason::Exit
+        );
+        assert_eq!(
+            reason(json!({"session_id": "s", "code": null})),
+            ExitReason::Disconnected
+        );
+    }
 }

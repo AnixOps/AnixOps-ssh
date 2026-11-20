@@ -34,6 +34,8 @@ mod security_key_windows;
 #[cfg(all(feature = "hardware-key", windows))]
 mod security_key_winhello;
 mod session;
+#[cfg(test)]
+mod session_tests;
 mod sftp;
 pub mod socks5;
 
@@ -45,11 +47,13 @@ pub use error::{AuthMethod, Error, Result};
 pub use forward::{Forward, ForwardFailures, ForwardKind};
 pub use interaction::{Decision, DenyAll, HostKeyDetails, Interaction, KbdPrompt};
 pub use known_hosts::{KnownHostStatus, KnownHosts, KnownHostsFile, MemoryKnownHosts};
-pub use params::{AgentSource, ConnectParams, MemoryIdentity};
+pub use params::{
+    AgentSource, ConnectParams, MemoryIdentity, DEFAULT_KEEPALIVE, DEFAULT_KEEPALIVE_MAX,
+};
 pub use security_key::{
     default_security_key, hardware_backend_available, sign_with_security_key, HidSecurityKey,
     SecurityKey, SkAlgorithm, SkAssertion, SkError, SkKeyInfo, SkSignRequest, WebAuthnSecurityKey,
     FLAG_USER_PRESENCE, FLAG_USER_VERIFICATION,
 };
-pub use session::Session;
+pub use session::{Session, CHANNEL_OPEN_TIMEOUT};
 pub use sftp::{DirEntry, EntryKind, FileStat, Sftp, SftpFile};

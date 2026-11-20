@@ -16,6 +16,7 @@
 use crate::events::Events;
 use crate::supervisor::ReconnectPolicy;
 use crate::Lease;
+use easyssh_core::tunnel::bare_host;
 use easyssh_core::{Tunnel, TunnelKind};
 use easyssh_ssh::{Error as SshError, Forward, ForwardFailures};
 use serde_json::{json, Value};
@@ -113,10 +114,11 @@ fn announce(
 }
 
 /// The address to listen on: OpenSSH's default is the loopback interface.
+/// `localhost` and `*` are passed on as they are: the forward listens on
+/// both IPv4 and IPv6 for them.
 fn bind_host(tunnel: &Tunnel) -> &str {
-    match tunnel.bind_address.as_deref() {
-        None | Some("") | Some("localhost") => "127.0.0.1",
-        Some("*") => "0.0.0.0",
+    match tunnel.bind_address.as_deref().map(bare_host) {
+        None | Some("") | Some("localhost") => "localhost",
         Some(other) => other,
     }
 }
@@ -132,6 +134,11 @@ pub fn ui_status(payload: &Value) -> Value {
     match state {
         "running" => {
             let mut value = json!({ "state": "running" });
+            // The port that listens: the UI shows it for a tunnel saved with
+            // port 0 (any free port).
+            if let Some(port) = payload["bind_port"].as_u64() {
+                value["port"] = json!(port);
+            }
             if let Some(count) = payload["channel_errors"].as_u64().filter(|n| *n > 0) {
                 value["errorCount"] = json!(count);
                 value["lastError"] = payload["last_channel_error"].clone();
@@ -169,6 +176,7 @@ async fn open_forward(
         let host = tunnel
             .target_host
             .as_deref()
+            .map(bare_host)
             .filter(|h| !h.is_empty())
             .ok_or_else(|| SshError::Forward("the target host is required".into()))?;
         let port = tunnel
@@ -186,7 +194,12 @@ async fn open_forward(
         }
         TunnelKind::Remote => {
             let (host, port) = target()?;
-            let bind = tunnel.bind_address.as_deref().unwrap_or("localhost");
+            let bind = tunnel
+                .bind_address
+                .as_deref()
+                .map(bare_host)
+                .filter(|b| !b.is_empty())
+                .unwrap_or("localhost");
             session.forward_remote(bind, bind_port, host, port).await
         }
         TunnelKind::Dynamic => session.forward_dynamic(bind_host(tunnel), bind_port).await,
@@ -466,11 +479,12 @@ mod tests {
 
     #[test]
     fn the_default_bind_is_loopback() {
-        assert_eq!(bind_host(&tunnel(None)), "127.0.0.1");
-        assert_eq!(bind_host(&tunnel(Some(""))), "127.0.0.1");
-        assert_eq!(bind_host(&tunnel(Some("localhost"))), "127.0.0.1");
-        assert_eq!(bind_host(&tunnel(Some("*"))), "0.0.0.0");
+        assert_eq!(bind_host(&tunnel(None)), "localhost");
+        assert_eq!(bind_host(&tunnel(Some(""))), "localhost");
+        assert_eq!(bind_host(&tunnel(Some("localhost"))), "localhost");
+        assert_eq!(bind_host(&tunnel(Some("*"))), "*");
         assert_eq!(bind_host(&tunnel(Some("10.0.0.2"))), "10.0.0.2");
+        assert_eq!(bind_host(&tunnel(Some("[::1]"))), "::1");
     }
 
     #[test]
@@ -506,6 +520,10 @@ mod tests {
         assert_eq!(
             ui_status_event(&json!({"id": "t", "state": "failed", "error": "lost"})),
             json!({"id": "t", "status": {"state": "failed", "message": "lost"}})
+        );
+        assert_eq!(
+            ui_status_event(&json!({"id": "t", "state": "running", "bind_port": 40123})),
+            json!({"id": "t", "status": {"state": "running", "port": 40123}})
         );
         assert_eq!(
             Tunnels::default().ui_status_of("never-ran"),
@@ -547,7 +565,7 @@ mod tests {
         easyssh_proto::validate("TunnelListResult", &tunnels.list()).unwrap();
         assert_eq!(
             tunnels.ui_status_of("t"),
-            json!({"state": "running", "errorCount": 3, "lastError": "db:5432: connect failed"})
+            json!({"state": "running", "port": 8080, "errorCount": 3, "lastError": "db:5432: connect failed"})
         );
     }
 }

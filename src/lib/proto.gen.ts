@@ -130,6 +130,13 @@ export type ImportDuplicatePolicy = "skip" | "update" | "keep-both";
  */
 export type ImportGroupMode = "source" | "none" | "existing";
 /**
+ * Why a session ended: the shell exited with `code`, was killed by `signal`, or ended without a status (the connection dropped).
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SessionExitReason".
+ */
+export type SessionExitReason = "exit" | "signal" | "disconnected";
+/**
  * `locked`: signed in, but the vault is locked, so the account secrets cannot be opened yet.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -537,6 +544,14 @@ export interface ImportHost {
   openssh_only?: string[];
   notes?: string;
   /**
+   * Tags to put on the host (service imports bring the service's own).
+   */
+  tags?: string[];
+  /**
+   * Stable key of the host at its origin (service imports, for example `control:https://panel.example.com#12`). A later import of the same key updates the host it created, even when its address changed.
+   */
+  source?: string;
+  /**
    * Preview only: a stored host has the same hostname, port and user. Ignored by hosts.import_apply.
    */
   exists?: boolean;
@@ -593,6 +608,10 @@ export interface HostsImportPreviewResult {
    * Records recognised but not importable.
    */
   skipped: number;
+  /**
+   * Service imports: names of stored hosts an earlier import created that the service no longer lists. Nothing is removed.
+   */
+  removed?: string[];
 }
 /**
  * Command `hosts.import_apply` payload. Reply: HostsImportApplyResult. Adds and updates only; nothing stored is ever removed. Broadcasts `hosts.changed` when something changed.
@@ -940,7 +959,7 @@ export interface SessionOutputEvent {
   seq?: number;
 }
 /**
- * Event `session.exit` payload.
+ * Event `session.exit` payload. `reason` and `signal` are optional: daemons before they were added send only the code.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "SessionExitEvent".
@@ -948,6 +967,11 @@ export interface SessionOutputEvent {
 export interface SessionExitEvent {
   session_id: string;
   code: number | null;
+  reason?: SessionExitReason;
+  /**
+   * The signal's name without `SIG` (`TERM`), when `reason` is `signal`.
+   */
+  signal?: string;
 }
 /**
  * Event `askpass.prompt` payload.
@@ -1639,7 +1663,7 @@ export interface HostkeyPromptEvent {
   fingerprint: string;
   status: HostKeyStatus;
   /**
-   * Fingerprints on record when the key changed.
+   * Fingerprints on record: of the changed key, or of the other key types when the key is of a new type.
    */
   expected?: string[];
 }

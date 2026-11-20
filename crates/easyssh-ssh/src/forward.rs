@@ -6,7 +6,7 @@ use crate::socks5;
 use russh::client::{ChannelOpenHandle, Msg};
 use russh::{Channel, ChannelOpenFailure};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -108,7 +108,7 @@ impl Forward {
             let _ = task.await;
         }
         if let Some((session, bind, port)) = self.remote.take() {
-            session.remote_forwards().remove(port);
+            session.remote_forwards().remove(&bind, port);
             session.cancel_remote_forward(&bind, port).await?;
         }
         Ok(())
@@ -166,33 +166,40 @@ impl RemoteTarget {
     }
 }
 
-/// The remote forwards of one connection, by the port the server listens on.
+/// The remote forwards of one connection, by the address and port the
+/// server listens on: one port can be forwarded on two addresses (say
+/// `127.0.0.1:8080` and `10.0.0.5:8080`) to different targets.
 #[derive(Default)]
 pub(crate) struct RemoteForwards {
-    targets: Mutex<HashMap<u32, RemoteTarget>>,
+    targets: Mutex<HashMap<(String, u32), RemoteTarget>>,
 }
 
 impl RemoteForwards {
-    pub(crate) fn get(&self, port: u32) -> Option<RemoteTarget> {
-        self.targets
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(&port)
-            .cloned()
+    fn targets(&self) -> std::sync::MutexGuard<'_, HashMap<(String, u32), RemoteTarget>> {
+        self.targets.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn insert(&self, port: u32, target: RemoteTarget) {
-        self.targets
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(port, target);
+    /// The target for a connection the server accepted on
+    /// `address:port`. The address is the one the forward asked for; when
+    /// the server names it differently, the only forward on that port is it.
+    pub(crate) fn get(&self, address: &str, port: u32) -> Option<RemoteTarget> {
+        let targets = self.targets();
+        if let Some(target) = targets.get(&(address.to_owned(), port)) {
+            return Some(target.clone());
+        }
+        let mut on_port = targets.iter().filter(|((_, p), _)| *p == port);
+        match (on_port.next(), on_port.next()) {
+            (Some((_, target)), None) => Some(target.clone()),
+            _ => None,
+        }
     }
 
-    pub(crate) fn remove(&self, port: u32) {
-        self.targets
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&port);
+    fn insert(&self, address: &str, port: u32, target: RemoteTarget) {
+        self.targets().insert((address.to_owned(), port), target);
+    }
+
+    pub(crate) fn remove(&self, address: &str, port: u32) {
+        self.targets().remove(&(address.to_owned(), port));
     }
 }
 
@@ -207,14 +214,14 @@ impl Session {
         target_host: &str,
         target_port: u16,
     ) -> Result<Forward> {
-        let listener = listen(bind_host, bind_port).await?;
-        let local_addr = listener.local_addr().ok();
+        let listeners = listen(bind_host, bind_port).await?;
+        let local_addr = listeners[0].local_addr().ok();
         let (stop_tx, stop_rx) = watch::channel(false);
         let failures: Failures = Arc::new(watch::channel(ForwardFailures::default()).0);
         let session = self.clone();
         let target_host = target_host.to_owned();
         let failed = failures.clone();
-        let task = tokio::spawn(accept_loop(listener, stop_rx, move |tcp, peer, stop| {
+        let task = tokio::spawn(accept_all(listeners, stop_rx, move |tcp, peer, stop| {
             let session = session.clone();
             let target_host = target_host.clone();
             let failed = failed.clone();
@@ -241,14 +248,14 @@ impl Session {
     /// `-D`: a SOCKS5 proxy on `bind_host:bind_port` whose connections leave
     /// from the server.
     pub async fn forward_dynamic(&self, bind_host: &str, bind_port: u16) -> Result<Forward> {
-        let listener = listen(bind_host, bind_port).await?;
-        let local_addr = listener.local_addr().ok();
+        let listeners = listen(bind_host, bind_port).await?;
+        let local_addr = listeners[0].local_addr().ok();
         let (stop_tx, stop_rx) = watch::channel(false);
         let failures: Failures = Arc::new(watch::channel(ForwardFailures::default()).0);
         let session = self.clone();
         let failed = failures.clone();
-        let task = tokio::spawn(accept_loop(
-            listener,
+        let task = tokio::spawn(accept_all(
+            listeners,
             stop_rx,
             move |mut tcp, peer, stop| {
                 let session = session.clone();
@@ -272,7 +279,7 @@ impl Session {
                         .await
                     {
                         Ok(channel) => {
-                            if socks5::send_reply(&mut tcp, socks5::reply::SUCCEEDED)
+                            if socks5::reply_to(&mut tcp, &request, socks5::reply::SUCCEEDED)
                                 .await
                                 .is_ok()
                             {
@@ -290,7 +297,7 @@ impl Session {
                                 ) => socks5::reply::NOT_ALLOWED,
                                 _ => socks5::reply::GENERAL_FAILURE,
                             };
-                            let _ = socks5::send_reply(&mut tcp, code).await;
+                            let _ = socks5::reply_to(&mut tcp, &request, code).await;
                         }
                     }
                 }
@@ -327,17 +334,17 @@ impl Session {
         let table = self.remote_forwards();
         // Registered first so no early connection finds nothing.
         if bind_port != 0 {
-            table.insert(u32::from(bind_port), target.clone());
+            table.insert(bind_host, u32::from(bind_port), target.clone());
         }
         let port = match self.request_remote_forward(bind_host, bind_port).await {
             Ok(port) => port,
             Err(e) => {
-                table.remove(u32::from(bind_port));
+                table.remove(bind_host, u32::from(bind_port));
                 return Err(e);
             }
         };
         if bind_port == 0 {
-            table.insert(port, target);
+            table.insert(bind_host, port, target);
         }
         Ok(Forward {
             kind: ForwardKind::Remote,
@@ -350,10 +357,62 @@ impl Session {
     }
 }
 
-async fn listen(host: &str, port: u16) -> Result<TcpListener> {
-    TcpListener::bind((host, port))
+/// What to listen on for `host`: like OpenSSH, `localhost` is 127.0.0.1
+/// and ::1, and `*` (or empty) every IPv4 and IPv6 address. The second
+/// address is best effort (a machine without IPv6, a port taken there).
+fn bind_addresses(host: &str) -> (&str, Option<Ipv6Addr>) {
+    match host {
+        "localhost" => ("127.0.0.1", Some(Ipv6Addr::LOCALHOST)),
+        "*" | "" => ("0.0.0.0", Some(Ipv6Addr::UNSPECIFIED)),
+        other => (other, None),
+    }
+}
+
+/// Listens on `host:port` (see [`bind_addresses`]); the first listener is
+/// the main one, and its port is the one the others use.
+async fn listen(host: &str, port: u16) -> Result<Vec<TcpListener>> {
+    let (first, second) = bind_addresses(host);
+    let primary = TcpListener::bind((first, port))
         .await
-        .map_err(|e| Error::Forward(format!("cannot listen on {host}:{port}: {e}")))
+        .map_err(|e| Error::Forward(format!("cannot listen on {host}:{port}: {e}")))?;
+    let mut listeners = vec![primary];
+    if let Some(ip) = second {
+        let port = listeners[0].local_addr().map_or(port, |a| a.port());
+        match listen_v6_only(SocketAddr::from((ip, port))) {
+            Ok(listener) => listeners.push(listener),
+            Err(e) => tracing::debug!("not listening on [{ip}]:{port} too: {e}"),
+        }
+    }
+    Ok(listeners)
+}
+
+/// An IPv6 listener that leaves IPv4 to the other one (a dual-stack socket
+/// would clash with it on the same port).
+fn listen_v6_only(address: SocketAddr) -> std::io::Result<TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_only_v6(true)?;
+    // As tokio's own bind does: a restarted forward can take its port back
+    // while old connections linger in TIME_WAIT.
+    #[cfg(not(windows))]
+    socket.set_reuse_address(true)?;
+    socket.bind(&address.into())?;
+    socket.listen(1024)?;
+    socket.set_nonblocking(true)?;
+    TcpListener::from_std(socket.into())
+}
+
+/// Runs [`accept_loop`] on every listener until the forward stops.
+async fn accept_all<F, Fut>(listeners: Vec<TcpListener>, stop: watch::Receiver<bool>, handler: F)
+where
+    F: Fn(TcpStream, SocketAddr, watch::Receiver<bool>) -> Fut + Clone + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let mut loops = tokio::task::JoinSet::new();
+    for listener in listeners {
+        loops.spawn(accept_loop(listener, stop.clone(), handler.clone()));
+    }
+    while loops.join_next().await.is_some() {}
 }
 
 async fn accept_loop<F, Fut>(listener: TcpListener, mut stop: watch::Receiver<bool>, handler: F)
@@ -415,5 +474,65 @@ mod tests {
             ),
             "db:5432: connect failed"
         );
+    }
+
+    fn target(host: &str) -> RemoteTarget {
+        RemoteTarget {
+            host: host.into(),
+            port: 1,
+            stop: watch::channel(false).1,
+            failures: Arc::new(watch::channel(ForwardFailures::default()).0),
+        }
+    }
+
+    #[test]
+    fn remote_targets_are_found_by_address_and_port() {
+        let table = RemoteForwards::default();
+        table.insert("127.0.0.1", 8080, target("a"));
+        table.insert("10.0.0.5", 8080, target("b"));
+        table.insert("localhost", 9090, target("c"));
+        assert_eq!(table.get("127.0.0.1", 8080).unwrap().host, "a");
+        assert_eq!(table.get("10.0.0.5", 8080).unwrap().host, "b");
+        // Two forwards on 8080: an address that is neither is not guessed.
+        assert!(table.get("192.168.1.1", 8080).is_none());
+        // One forward on 9090: the server's name for the address may differ.
+        assert_eq!(table.get("127.0.0.1", 9090).unwrap().host, "c");
+        // After one of the two is removed, the other is the only one on 8080.
+        table.remove("127.0.0.1", 8080);
+        assert_eq!(table.get("10.0.0.5", 8080).unwrap().host, "b");
+        assert_eq!(table.get("127.0.0.1", 8080).unwrap().host, "b");
+        assert!(table.get("x", 1).is_none());
+    }
+
+    #[test]
+    fn localhost_and_the_wildcard_mean_both_address_families() {
+        assert_eq!(
+            bind_addresses("localhost"),
+            ("127.0.0.1", Some(Ipv6Addr::LOCALHOST))
+        );
+        assert_eq!(
+            bind_addresses("*"),
+            ("0.0.0.0", Some(Ipv6Addr::UNSPECIFIED))
+        );
+        assert_eq!(bind_addresses("127.0.0.1"), ("127.0.0.1", None));
+        assert_eq!(bind_addresses("::1"), ("::1", None));
+    }
+
+    #[tokio::test]
+    async fn localhost_listens_on_one_port_for_both_families() {
+        let listeners = listen("localhost", 0).await.unwrap();
+        let first = listeners[0].local_addr().unwrap();
+        assert_eq!(first.ip(), std::net::Ipv4Addr::LOCALHOST);
+        assert_ne!(first.port(), 0);
+        // Where the machine has IPv6, the same port listens on ::1 as well.
+        if let Some(second) = listeners.get(1) {
+            let second = second.local_addr().unwrap();
+            assert_eq!(second.ip(), Ipv6Addr::LOCALHOST);
+            assert_eq!(second.port(), first.port());
+            TcpStream::connect(second).await.unwrap();
+        }
+        TcpStream::connect(first).await.unwrap();
+        // An address of its own is only that address.
+        assert_eq!(listen("127.0.0.1", 0).await.unwrap().len(), 1);
     }
 }
