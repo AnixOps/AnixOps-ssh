@@ -1,3 +1,4 @@
+import type { ISearchDecorationOptions } from "@xterm/addon-search";
 import type { ITheme } from "@xterm/xterm";
 
 /* The terminal palette comes from the live AnixOps tokens (guidelines/terminal.md),
@@ -40,6 +41,18 @@ export function terminalTheme(): ITheme {
     cursor: token("--accent"),
     cursorAccent: token("--bg"),
     selectionBackground: token("--accent-soft"),
+  };
+}
+
+/** Find-bar match highlights; the search addon needs #RRGGBB values, which the tokens are. */
+export function searchDecorations(): ISearchDecorationOptions {
+  const match = token("--warning");
+  const active = token("--accent");
+  return {
+    matchBackground: match,
+    matchOverviewRuler: match,
+    activeMatchBackground: active,
+    activeMatchColorOverviewRuler: active,
   };
 }
 

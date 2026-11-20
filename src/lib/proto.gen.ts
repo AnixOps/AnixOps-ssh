@@ -1779,7 +1779,7 @@ export interface EngineConnectionsResult {
   connections: EngineConnection[];
 }
 /**
- * `modified` is Unix seconds.
+ * `modified` is Unix seconds. `uid` and `gid` are present when the server sent them.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "SftpEntry".
@@ -1790,6 +1790,8 @@ export interface SftpEntry {
   size: number;
   modified: number | null;
   permissions: number | null;
+  uid?: number;
+  gid?: number;
 }
 /**
  * Command `sftp.open` payload (russh engine). Reply: SftpOpenResult.
@@ -1896,6 +1898,18 @@ export interface SftpRenameParams {
   to: string;
 }
 /**
+ * Command `sftp.chmod` payload. `mode` holds the permission bits (`0o755` style, with setuid, setgid and sticky). `recursive` applies it to everything inside a folder too; links are skipped, never followed.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SftpChmodParams".
+ */
+export interface SftpChmodParams {
+  sftp_id: string;
+  path: string;
+  mode: number;
+  recursive?: boolean;
+}
+/**
  * Command `sftp.close` payload.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -1925,6 +1939,27 @@ export interface TransferStartResult {
   transfer_id: string;
 }
 /**
+ * Command `transfer.enqueue` payload (russh engine): like `transfer.start`, but on the host's transfer queue instead of a file session of its own. At most a few transfers per host run at once, the others wait (`queued` in the reply) and report `transfer.started` when their turn comes. Reply: TransferEnqueueResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferEnqueueParams".
+ */
+export interface TransferEnqueueParams {
+  host_id: string;
+  direction: TransferDirection;
+  local_path: string;
+  remote_path: string;
+  recursive?: boolean;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferEnqueueResult".
+ */
+export interface TransferEnqueueResult {
+  transfer_id: string;
+  queued: boolean;
+}
+/**
  * Command `transfer.cancel` payload.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -1934,7 +1969,7 @@ export interface TransferCancelParams {
   transfer_id: string;
 }
 /**
- * Event `transfer.progress` payload: bytes moved so far.
+ * Event `transfer.progress` payload: bytes moved so far, and the total when known.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "TransferProgressEvent".
@@ -1942,6 +1977,19 @@ export interface TransferCancelParams {
 export interface TransferProgressEvent {
   transfer_id: string;
   bytes: number;
+  /**
+   * Bytes the whole transfer will move (a folder: the sum of its files), when known.
+   */
+  total?: number;
+}
+/**
+ * Event `transfer.started` payload: a queued transfer left the queue and runs.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferStartedEvent".
+ */
+export interface TransferStartedEvent {
+  transfer_id: string;
 }
 /**
  * Event `transfer.done` payload.

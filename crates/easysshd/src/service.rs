@@ -1192,6 +1192,17 @@ impl Daemon {
                     Ok(Value::Null)
                 })
             }
+            "sftp.chmod" => {
+                let p: proto::SftpChmodParams = parse(payload)?;
+                let entry = self.sftp(&p.sftp_id)?;
+                self.background(outbox, req_id, async move {
+                    entry
+                        .chmod(&p.path, p.mode as u32, p.recursive.unwrap_or(false))
+                        .await
+                        .map_err(ssh_fail)?;
+                    Ok(Value::Null)
+                })
+            }
             "sftp.close" => {
                 let p: proto::SftpCloseParams = parse(payload)?;
                 let me = self.upgrade()?;
@@ -1213,6 +1224,33 @@ impl Daemon {
                     self.broadcaster(),
                 );
                 ok(json!({"transfer_id": id}))
+            }
+            "transfer.enqueue" => {
+                let p: proto::TransferEnqueueParams = parse(payload)?;
+                let me = self.upgrade()?;
+                let broadcast = self.broadcaster();
+                self.background(outbox, req_id, async move {
+                    let plan = me.russh_plan(&p.host_id).await?;
+                    let upload = serde_json::to_value(p.direction).ok() == Some(json!("upload"));
+                    let leasing = me.clone();
+                    let open: engine::files::Opener = Box::pin(async move {
+                        leasing
+                            .engine
+                            .lease(&plan, None)
+                            .await
+                            .map_err(|error| error.to_string())
+                    });
+                    let (id, queued) = me.engine.files.start_queued_transfer(
+                        &p.host_id,
+                        open,
+                        upload,
+                        PathBuf::from(&p.local_path),
+                        p.remote_path.clone(),
+                        p.recursive.unwrap_or(false),
+                        broadcast,
+                    );
+                    Ok(json!({"transfer_id": id, "queued": queued}))
+                })
             }
             "transfer.cancel" => {
                 let p: proto::TransferCancelParams = parse(payload)?;

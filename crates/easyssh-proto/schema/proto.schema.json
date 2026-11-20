@@ -3398,6 +3398,14 @@
               "type": "null"
             }
           ]
+        },
+        "uid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gid": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "required": [
@@ -3408,7 +3416,7 @@
         "permissions"
       ],
       "additionalProperties": false,
-      "description": "`modified` is Unix seconds."
+      "description": "`modified` is Unix seconds. `uid` and `gid` are present when the server sent them."
     },
     "SftpOpenParams": {
       "type": "object",
@@ -3596,6 +3604,32 @@
       "additionalProperties": false,
       "description": "Command `sftp.rename` payload."
     },
+    "SftpChmodParams": {
+      "type": "object",
+      "properties": {
+        "sftp_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4095
+        },
+        "recursive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sftp_id",
+        "path",
+        "mode"
+      ],
+      "additionalProperties": false,
+      "description": "Command `sftp.chmod` payload. `mode` holds the permission bits (`0o755` style, with setuid, setgid and sticky). `recursive` applies it to everything inside a folder too; links are skipped, never followed."
+    },
     "SftpCloseParams": {
       "type": "object",
       "properties": {
@@ -3649,6 +3683,50 @@
       ],
       "additionalProperties": false
     },
+    "TransferEnqueueParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/TransferDirection"
+        },
+        "local_path": {
+          "type": "string"
+        },
+        "remote_path": {
+          "type": "string"
+        },
+        "recursive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "host_id",
+        "direction",
+        "local_path",
+        "remote_path"
+      ],
+      "additionalProperties": false,
+      "description": "Command `transfer.enqueue` payload (russh engine): like `transfer.start`, but on the host's transfer queue instead of a file session of its own. At most a few transfers per host run at once, the others wait (`queued` in the reply) and report `transfer.started` when their turn comes. Reply: TransferEnqueueResult."
+    },
+    "TransferEnqueueResult": {
+      "type": "object",
+      "properties": {
+        "transfer_id": {
+          "type": "string"
+        },
+        "queued": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "transfer_id",
+        "queued"
+      ],
+      "additionalProperties": false
+    },
     "TransferCancelParams": {
       "type": "object",
       "properties": {
@@ -3671,6 +3749,11 @@
         "bytes": {
           "type": "integer",
           "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bytes the whole transfer will move (a folder: the sum of its files), when known."
         }
       },
       "required": [
@@ -3678,7 +3761,20 @@
         "bytes"
       ],
       "additionalProperties": false,
-      "description": "Event `transfer.progress` payload: bytes moved so far."
+      "description": "Event `transfer.progress` payload: bytes moved so far, and the total when known."
+    },
+    "TransferStartedEvent": {
+      "type": "object",
+      "properties": {
+        "transfer_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "transfer_id"
+      ],
+      "additionalProperties": false,
+      "description": "Event `transfer.started` payload: a queued transfer left the queue and runs."
     },
     "TransferDoneEvent": {
       "type": "object",

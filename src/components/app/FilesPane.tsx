@@ -12,6 +12,7 @@ import {
   FolderUp,
   Link2,
   LoaderCircle,
+  Info,
   Pencil,
   RotateCw,
   Trash2,
@@ -19,11 +20,12 @@ import {
   X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useConfirm } from "@/components/ui/confirm";
 import { Notice } from "@/components/ui/form";
+import { FilePropertiesDialog } from "@/components/app/FilePropertiesDialog";
 import { Menu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
@@ -39,8 +41,21 @@ import {
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { shortcutHint } from "@/lib/shortcutTable";
+import { isMac } from "@/lib/shortcuts";
+import {
+  clickSelect,
+  emptySelection,
+  neighbour,
+  selectAll,
+  selectOnly,
+  targetsOf,
+  type ClickModifiers,
+  type Selection,
+} from "@/lib/fileSelection";
+import { resolveRenameTarget } from "@/lib/renameTarget";
 import { appear, duration, ease } from "@/lib/motion";
-import { locate, localName, parentPath, resolvePath, uploadConflicts } from "@/lib/remotePath";
+import { failureMessage, formatDuration, nextRate, secondsLeft, type Rate } from "@/lib/transferProgress";
+import { baseName, formatSize, locate, localName, parentPath, resolvePath, uploadConflicts } from "@/lib/remotePath";
 import { cn } from "@/lib/utils";
 
 interface TransferItem {
@@ -48,27 +63,18 @@ interface TransferItem {
   name: string;
   upload: boolean;
   local: string;
-  state: "running" | "done" | "failed" | "cancelled";
+  /** The remote file or folder, for failure messages. */
+  remote: string;
+  state: "queued" | "running" | "done" | "failed" | "cancelled";
   bytes: number;
   total: number | null;
+  rate?: Rate;
   message?: string;
 }
 
 type Editing = { kind: "mkdir"; value: string } | { kind: "rename"; from: string; value: string };
 
 const joinPath = (dir: string, name: string) => (dir.endsWith("/") ? dir + name : `${dir}/${name}`);
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
-}
 
 function sortEntries(entries: RemoteFile[]): RemoteFile[] {
   return [...entries].sort((a, b) => {
@@ -97,7 +103,9 @@ export function FilesPane({
   const [entries, setEntries] = useState<RemoteFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Selection>(emptySelection);
+  /** The entry whose Properties dialog is open. */
+  const [properties, setProperties] = useState<RemoteFile | null>(null);
   /** An entry to scroll to and focus once the listing renders. */
   const [reveal, setReveal] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
@@ -121,7 +129,7 @@ export function FilesPane({
         setCwd(found.dir);
         setPathInput(found.dir);
         cwdRef.current = found.dir;
-        setSelected(found.select);
+        setSelection(found.select ? selectOnly(found.select) : emptySelection);
         setReveal(found.select);
         setEditing(null);
       } catch (reason) {
@@ -186,11 +194,32 @@ export function FilesPane({
       const early: TransferEvent[] = [];
       const onEvent = (event: TransferEvent) => (ready ? apply(event) : early.push(event));
       const apply = (event: TransferEvent) => {
-        if (event.kind === "progress") updateTransfer(id, { bytes: event.bytes });
-        else if (event.kind === "done") {
-          updateTransfer(id, { state: "done", bytes: total ?? 0 });
+        if (event.kind === "started") updateTransfer(id, { state: "running" });
+        else if (event.kind === "progress") {
+          // The backend sizes the work once it runs, so `total` can arrive after the row exists.
+          setTransfers((all) =>
+            all.map((item) =>
+              item.id === id
+                ? {
+                    ...item,
+                    state: "running",
+                    bytes: event.bytes,
+                    total: event.total ?? item.total,
+                    rate: nextRate(item.rate, event.bytes, Date.now()),
+                  }
+                : item,
+            ),
+          );
+        } else if (event.kind === "done") {
+          setTransfers((all) =>
+            all.map((item) => (item.id === id ? { ...item, state: "done", bytes: item.total ?? item.bytes } : item)),
+          );
           if (upload && handle && cwdRef.current === targetDir) void navigate(handle, targetDir);
-        } else if (event.kind === "failed") updateTransfer(id, { state: "failed", message: event.message });
+        } else if (event.kind === "failed") {
+          setTransfers((all) =>
+            all.map((item) => (item.id === id ? { ...item, state: "failed", message: failureMessage(item.remote, event.message) } : item)),
+          );
+        }
         else updateTransfer(id, { state: "cancelled" });
       };
       try {
@@ -202,7 +231,8 @@ export function FilesPane({
             name: localName(upload ? started.local : started.remote),
             upload,
             local: started.local,
-            state: "running",
+            remote: started.remote,
+            state: started.queued ? "queued" : "running",
             bytes: 0,
             total,
           },
@@ -263,13 +293,126 @@ export function FilesPane({
     else void transfer(false, path, undefined, entry.size);
   };
 
+  /** Renames `name` in the shown folder, or moves it when `input` has a `/`. */
+  const renameEntry = async (name: string, input: string) => {
+    if (!handle) return;
+    const from = joinPath(cwd, name);
+    const target = resolveRenameTarget(input, from, cwd, handle.home);
+    if (!target.ok) {
+      if (target.reason === "inside") setActionError(t.renameInside.replace("{path}", from));
+      else if (target.reason === "invalid") setActionError(t.renameInvalid);
+      return;
+    }
+    const toDir = parentPath(target.to);
+    const toName = baseName(target.to);
+    let siblings = entriesRef.current;
+    if (toDir !== cwd) {
+      try {
+        siblings = await handle.list(toDir);
+      } catch (reason) {
+        setActionError(`${t.renameMissingFolder.replace("{path}", toDir)} ${String(reason)}`);
+        return;
+      }
+    }
+    const moved = entriesRef.current.find((entry) => entry.name === name);
+    const existing = siblings.find((entry) => entry.name === toName);
+    if (existing) {
+      // Only a file may replace a file; a folder is never replaced.
+      if (existing.kind === "directory" || moved?.kind === "directory") {
+        setActionError(t.renameExists.replace("{path}", target.to));
+        return;
+      }
+      const title = t.renameReplaceTitle.replace("{path}", target.to);
+      if (!(await confirm({ title, body: t.renameReplaceBody, verb: t.replace }))) return;
+      await run(async () => {
+        await handle.remove(target.to, false);
+        await handle.rename(from, target.to);
+      });
+      return;
+    }
+    await run(() => handle.rename(from, target.to));
+  };
+
   const submitEdit = () => {
     if (!editing || !handle) return;
     const value = editing.value.trim();
-    if (!value || value.includes("/")) return;
-    if (editing.kind === "mkdir") void run(() => handle.mkdir(joinPath(cwd, value)));
-    else if (value !== editing.from) void run(() => handle.rename(joinPath(cwd, editing.from), joinPath(cwd, value)));
+    if (!value) return;
+    if (editing.kind === "mkdir") {
+      if (value.includes("/")) return;
+      void run(() => handle.mkdir(joinPath(cwd, value)));
+    } else if (value !== editing.from) void renameEntry(editing.from, value);
     setEditing(null);
+  };
+
+  const order = entries.map((entry) => entry.name);
+  const selectedNames = new Set(selection.names);
+
+  const downloadEntries = (names: string[]) => {
+    for (const name of names) {
+      const entry = entries.find((candidate) => candidate.name === name);
+      if (entry) void transfer(false, joinPath(cwd, name), undefined, entry.kind === "file" ? entry.size : null);
+    }
+  };
+
+  /** Deletes after one confirmation naming the count and the first names. */
+  const removeEntries = async (names: string[]) => {
+    if (!handle) return;
+    const picked = names
+      .map((name) => entries.find((entry) => entry.name === name))
+      .filter((entry): entry is RemoteFile => entry !== undefined);
+    if (picked.length === 0) return;
+    const folders = picked.some((entry) => entry.kind === "directory");
+    const single = picked.length === 1 ? picked[0] : null;
+    const confirmed = await confirm(
+      single
+        ? {
+            title: t.fileDeleteTitle.replace("{name}", single.name),
+            body: single.kind === "directory" ? t.folderDeleteBody : t.fileDeleteBody,
+            verb: t.delete,
+          }
+        : {
+            title: t.filesDeleteManyTitle.replace("{n}", String(picked.length)),
+            body: folders ? t.filesDeleteManyFoldersBody : t.filesDeleteManyBody,
+            verb: t.delete,
+            items: picked.map((entry) => entry.name),
+          },
+    );
+    if (!confirmed) return;
+    // Every entry is tried; the ones that fail are named with the reason.
+    const failures: string[] = [];
+    for (const entry of picked) {
+      try {
+        await handle.remove(joinPath(cwd, entry.name), entry.kind === "directory");
+      } catch (reason) {
+        failures.push(`${joinPath(cwd, entry.name)}: ${String(reason)}`);
+      }
+    }
+    await navigate(handle, cwd);
+    if (failures.length > 0) {
+      setActionError(
+        picked.length === 1 ? failures[0] : `${t.filesDeleteSomeFailed.replace("{n}", String(failures.length))}\n${failures.join("\n")}`,
+      );
+    }
+  };
+
+  const click = (name: string, event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
+    const modifiers: ClickModifiers = { toggle: isMac ? event.metaKey : event.ctrlKey, shift: event.shiftKey };
+    setSelection((current) => clickSelect(current, order, name, modifiers));
+  };
+
+  const move = (name: string, step: 1 | -1, extend: boolean) => {
+    const next = neighbour(order, name, step);
+    if (!next) return;
+    setSelection((current) =>
+      extend ? clickSelect(current.anchor ? current : selectOnly(name), order, next, { toggle: false, shift: true }) : selectOnly(next),
+    );
+    setReveal(next);
+  };
+
+  const applyMode = async (entry: RemoteFile, mode: number, recursive: boolean) => {
+    if (!handle) return;
+    await handle.chmod(joinPath(cwd, entry.name), mode, recursive);
+    await navigate(handle, cwd);
   };
 
   if (connectError) {
@@ -300,7 +443,7 @@ export function FilesPane({
     );
   }
 
-  const finished = transfers.some((item) => item.state !== "running");
+  const finished = transfers.some((item) => !isActive(item));
 
   return (
     <PaneFrame
@@ -348,13 +491,41 @@ export function FilesPane({
         </div>
       )}
 
+      {selection.names.length > 1 && (
+        <div role="status" className="mx-3 mb-2 flex items-center gap-1 rounded-sm bg-accent-soft py-1 pr-1 pl-3">
+          <span className="mr-auto text-callout font-medium text-label-1">
+            {t.selectedCount.replace("{n}", String(selection.names.length))}
+          </span>
+          <Button variant="quiet" size="sm" onClick={() => downloadEntries(selection.names)}>
+            <Download />
+            {t.download}
+          </Button>
+          <Button variant="danger" size="sm" onClick={() => void removeEntries(selection.names)}>
+            <Trash2 />
+            {t.delete}
+          </Button>
+          <IconButton label={t.clearSelection} onClick={() => setSelection(emptySelection)}>
+            <X />
+          </IconButton>
+        </div>
+      )}
+
       <div
         className={cn(
           "relative min-h-0 flex-1 overflow-y-auto px-2 pb-2 transition-opacity duration-micro",
           loading && "opacity-60",
         )}
         role="listbox"
+        aria-multiselectable
         aria-label={cwd}
+        onKeyDown={(event) => {
+          // Ctrl/⌘+A selects every entry, only while an entry has the focus.
+          if (!(event.target instanceof HTMLElement) || event.target.getAttribute("role") !== "option") return;
+          if ((isMac ? event.metaKey : event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "a") {
+            event.preventDefault();
+            setSelection(selectAll(order));
+          } else if (event.key === "Escape" && selection.names.length > 1) setSelection(emptySelection);
+        }}
       >
         {editing?.kind === "mkdir" && (
           <EditRow
@@ -375,6 +546,7 @@ export function FilesPane({
               key={entry.name}
               icon={<EntryIcon entry={entry} />}
               value={editing.value}
+              placeholder={t.renameHint}
               onChange={(value) => setEditing({ ...editing, value })}
               onSubmit={submitEdit}
               onCancel={() => setEditing(null)}
@@ -383,18 +555,14 @@ export function FilesPane({
             <EntryRow
               key={entry.name}
               entry={entry}
-              selected={selected === entry.name}
-              onSelect={() => setSelected(entry.name)}
+              selected={selectedNames.has(entry.name)}
+              onSelect={(event) => click(entry.name, event)}
               onOpen={() => open(entry)}
-              onDownload={() => void transfer(false, joinPath(cwd, entry.name), undefined, entry.kind === "file" ? entry.size : null)}
+              onMove={(step, extend) => move(entry.name, step, extend)}
+              onDownload={() => downloadEntries(targetsOf(selection, entry.name))}
               onRename={() => setEditing({ kind: "rename", from: entry.name, value: entry.name })}
-              onDelete={async () => {
-                const directory = entry.kind === "directory";
-                const title = t.fileDeleteTitle.replace("{name}", entry.name);
-                const body = directory ? t.folderDeleteBody : t.fileDeleteBody;
-                if (await confirm({ title, body, verb: t.delete }))
-                  void run(() => handle.remove(joinPath(cwd, entry.name), directory));
-              }}
+              onProperties={() => setProperties(entry)}
+              onDelete={() => void removeEntries(targetsOf(selection, entry.name))}
             />
           ),
         )}
@@ -418,7 +586,7 @@ export function FilesPane({
                 variant="quiet"
                 size="sm"
                 className="ml-auto"
-                onClick={() => setTransfers((current) => current.filter((item) => item.state === "running"))}
+                onClick={() => setTransfers((current) => current.filter(isActive))}
               >
                 {t.clearFinished}
               </Button>
@@ -436,6 +604,17 @@ export function FilesPane({
           </ul>
         </section>
       )}
+
+      <AnimatePresence>
+        {properties && (
+          <FilePropertiesDialog
+            entry={properties}
+            dir={cwd}
+            onApply={(mode, recursive) => applyMode(properties, mode, recursive)}
+            onClose={() => setProperties(null)}
+          />
+        )}
+      </AnimatePresence>
     </PaneFrame>
   );
 }
@@ -508,16 +687,20 @@ function EntryRow({
   selected,
   onSelect,
   onOpen,
+  onMove,
   onDownload,
   onRename,
+  onProperties,
   onDelete,
 }: {
   entry: RemoteFile;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (event: MouseEvent<HTMLDivElement>) => void;
   onOpen: () => void;
+  onMove: (step: 1 | -1, extend: boolean) => void;
   onDownload: () => void;
   onRename: () => void;
+  onProperties: () => void;
   onDelete: () => void;
 }) {
   return (
@@ -530,17 +713,16 @@ function EntryRow({
       onDoubleClick={onOpen}
       onKeyDown={(event) => {
         // Keyboard.md, lists: Enter opens, F2 renames, Delete removes after a confirmation.
-        if (event.key === "Enter") onOpen();
+        if (event.key === "Enter" && event.altKey) onProperties();
+        else if (event.key === "Enter") onOpen();
         else if (event.key === "F2") onRename();
         else if (event.key === "Delete") onDelete();
-        else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-          const next = event.currentTarget[event.key === "ArrowDown" ? "nextElementSibling" : "previousElementSibling"];
-          if (next instanceof HTMLElement && next.getAttribute("role") === "option") next.focus();
-        } else return;
+        else if (event.key === "ArrowDown" || event.key === "ArrowUp") onMove(event.key === "ArrowDown" ? 1 : -1, event.shiftKey);
+        else return;
         event.preventDefault();
       }}
       className={cn(
-        "group relative flex h-7 items-center gap-2 rounded-xs px-2 text-callout transition-colors duration-micro",
+        "group relative flex h-7 items-center gap-2 rounded-xs px-2 text-callout transition-colors duration-micro select-none",
         selected ? "bg-accent-soft" : "hover:bg-fill-1",
       )}
     >
@@ -561,6 +743,7 @@ function EntryRow({
           label={t.more}
           items={[
             { key: "rename", label: t.rename, icon: <Pencil />, shortcut: shortcutHint("rename"), onSelect: onRename },
+            { key: "properties", label: t.properties, icon: <Info />, shortcut: shortcutHint("properties"), onSelect: onProperties },
             "separator",
             { key: "delete", label: t.delete, icon: <Trash2 />, danger: true, shortcut: shortcutHint("remove"), onSelect: onDelete },
           ]}
@@ -604,6 +787,9 @@ function EditRow({
   );
 }
 
+/** Queued and running transfers can be cancelled and are kept in the list. */
+const isActive = (item: TransferItem) => item.state === "running" || item.state === "queued";
+
 function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => void }) {
   const progress = item.total ? Math.min(1, item.bytes / item.total) : null;
   const Direction = item.upload ? ArrowUp : ArrowDown;
@@ -613,7 +799,7 @@ function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => v
         <Direction className="size-4 shrink-0 text-label-2" strokeWidth={1.5} aria-label={item.upload ? t.upload : t.download} />
         <span className="min-w-0 flex-1 truncate">{item.name}</span>
         <TransferStatus item={item} />
-        {item.state === "running" && (
+        {isActive(item) && (
           <IconButton label={t.cancelTransfer} onClick={onCancel}>
             <X />
           </IconButton>
@@ -632,6 +818,7 @@ function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => v
           />
         </div>
       )}
+      {item.state === "running" && <TransferDetail item={item} />}
       {item.state === "failed" && item.message && (
         <p className="selectable mt-1 text-callout break-all text-danger">{item.message}</p>
       )}
@@ -641,11 +828,12 @@ function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => v
 
 function TransferStatus({ item }: { item: TransferItem }) {
   const text = "shrink-0 text-callout";
+  if (item.state === "queued") return <span className={cn(text, "text-label-3")}>{t.transferQueued}</span>;
   if (item.state === "running") {
     return (
       <span className={cn(text, "flex items-center gap-1 text-label-2")}>
         <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" strokeWidth={1.5} />
-        {item.bytes > 0 ? formatSize(item.bytes) : ""}
+        {progressPercent(item)}
       </span>
     );
   }
@@ -666,4 +854,18 @@ function TransferStatus({ item }: { item: TransferItem }) {
     );
   }
   return <span className={cn(text, "text-label-3")}>{t.transferCancelled}</span>;
+}
+
+function progressPercent(item: TransferItem): string {
+  return item.total ? `${Math.min(100, Math.floor((item.bytes / item.total) * 100))}%` : item.bytes > 0 ? formatSize(item.bytes) : "";
+}
+
+/** Bytes moved of the total, the speed and the time left. */
+function TransferDetail({ item }: { item: TransferItem }) {
+  const perSecond = item.rate?.perSecond ?? 0;
+  const left = secondsLeft(item.bytes, item.total, perSecond);
+  const parts = [item.total ? `${formatSize(item.bytes)} / ${formatSize(item.total)}` : formatSize(item.bytes)];
+  if (perSecond > 0) parts.push(`${formatSize(perSecond)}/s`);
+  if (left !== null) parts.push(t.transferTimeLeft.replace("{time}", formatDuration(left)));
+  return <p className="mt-1 text-callout text-label-3 tabular-nums">{parts.join(" · ")}</p>;
 }

@@ -1742,16 +1742,28 @@ pub struct SessionWriteParams {
     pub data: ::std::string::String,
     pub session_id: ::std::string::String,
 }
+///Command `sftp.chmod` payload. `mode` holds the permission bits (`0o755` style, with setuid, setgid and sticky). `recursive` applies it to everything inside a folder too; links are skipped, never followed.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SftpChmodParams {
+    pub mode: i64,
+    pub path: ::std::string::String,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub recursive: ::std::option::Option<bool>,
+    pub sftp_id: ::std::string::String,
+}
 ///Command `sftp.close` payload.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct SftpCloseParams {
     pub sftp_id: ::std::string::String,
 }
-///`modified` is Unix seconds.
+///`modified` is Unix seconds. `uid` and `gid` are present when the server sent them.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct SftpEntry {
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub gid: ::std::option::Option<u64>,
     pub kind: SftpEntryKind,
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub modified: ::std::option::Option<u64>,
@@ -1759,6 +1771,8 @@ pub struct SftpEntry {
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub permissions: ::std::option::Option<u64>,
     pub size: u64,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub uid: ::std::option::Option<u64>,
 }
 ///`SftpEntryKind`
 #[derive(
@@ -2427,11 +2441,32 @@ impl ::std::convert::TryFrom<::std::string::String> for TransferDoneEventStatus 
         value.parse()
     }
 }
-///Event `transfer.progress` payload: bytes moved so far.
+///Command `transfer.enqueue` payload (russh engine): like `transfer.start`, but on the host's transfer queue instead of a file session of its own. At most a few transfers per host run at once, the others wait (`queued` in the reply) and report `transfer.started` when their turn comes. Reply: TransferEnqueueResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferEnqueueParams {
+    pub direction: TransferDirection,
+    pub host_id: ::std::string::String,
+    pub local_path: ::std::string::String,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub recursive: ::std::option::Option<bool>,
+    pub remote_path: ::std::string::String,
+}
+///`TransferEnqueueResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferEnqueueResult {
+    pub queued: bool,
+    pub transfer_id: ::std::string::String,
+}
+///Event `transfer.progress` payload: bytes moved so far, and the total when known.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TransferProgressEvent {
     pub bytes: u64,
+    ///Bytes the whole transfer will move (a folder: the sum of its files), when known.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub total: ::std::option::Option<u64>,
     pub transfer_id: ::std::string::String,
 }
 ///Command `transfer.start` payload. Both paths are final (an upload names the remote file, not its directory). Progress and the end arrive as events. Reply: TransferStartResult.
@@ -2449,6 +2484,12 @@ pub struct TransferStartParams {
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TransferStartResult {
+    pub transfer_id: ::std::string::String,
+}
+///Event `transfer.started` payload: a queued transfer left the queue and runs.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferStartedEvent {
     pub transfer_id: ::std::string::String,
 }
 ///`TransferStatus`

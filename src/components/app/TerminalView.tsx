@@ -5,7 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ChevronDown, ChevronUp, ClipboardPaste, Copy, Eraser, LoaderCircle, Search, RotateCw, Sparkles, SquareArrowOutUpRight, Unplug, X } from "lucide-react";
+import { CaseSensitive, ChevronDown, ChevronUp, ClipboardPaste, Copy, Eraser, LoaderCircle, Regex, RotateCw, Search, Sparkles, SquareArrowOutUpRight, Unplug, WholeWord, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CompletionPopup, type PopupPlacement } from "@/components/app/CompletionPopup";
@@ -55,6 +55,7 @@ import { ShellIntegrationLineSource } from "@/lib/shellIntegration/lineSource";
 import { pasteNeedsConfirm, type BroadcastScope, targetsFor } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
 import { duration, ease, enter, leave } from "@/lib/motion";
+import { animationFrameSchedule, OutputBuffer } from "@/lib/outputBuffer";
 import { onSettings, settings } from "@/lib/settings";
 import { appShortcut, isMac } from "@/lib/shortcuts";
 import { shortcutHint } from "@/lib/shortcutTable";
@@ -62,7 +63,8 @@ import { parseOsc52, sanitizeTitle, shouldOpenLink } from "@/lib/terminalInput";
 import { registerTerminal, terminalFor } from "@/lib/terminals";
 import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { exitTitle, RESIZE_DEBOUNCE_MS, TERMINAL_RESET, trailingDebounce, type SessionEnd } from "@/lib/terminalSession";
-import { terminalFont, terminalTheme } from "@/lib/terminalTheme";
+import { searchDecorations, terminalFont, terminalTheme } from "@/lib/terminalTheme";
+import { cn } from "@/lib/utils";
 
 /** The SSH engine a session runs on, and why. */
 export interface EngineInfo {
@@ -128,6 +130,11 @@ export function TerminalView({
   const aiReady = useAiReady();
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
+  const [regex, setRegex] = useState(false);
+  const [results, setResults] = useState<{ index: number; count: number } | null>(null);
+  const [badPattern, setBadPattern] = useState(false);
   const findInputRef = useRef<HTMLInputElement>(null);
   const [pendingPaste, setPendingPaste] = useState<{ text: string; count: number } | null>(null);
   const pasteRef = useRef<(text: string, all: boolean) => void>(() => {});
@@ -192,6 +199,15 @@ export function TerminalView({
       }
     }
     fit.fit();
+    // Output is written once per frame. The daemon protocol has no flow
+    // control to pause reads, so this only coalesces (see outputBuffer.ts).
+    const output = new OutputBuffer({
+      write: (data, done) => terminal.write(data, done),
+      schedule: animationFrameSchedule,
+    });
+    const searchResults = search.onDidChangeResults(({ resultIndex, resultCount }) =>
+      setResults({ index: resultIndex, count: resultCount }),
+    );
 
     // Command completion: follows what is typed and shows a list at the cursor.
     let files: FilesHandle | null = null;
@@ -285,6 +301,9 @@ export function TerminalView({
       } else if (shortcut === "find") {
         setFindOpen(true);
         window.requestAnimationFrame(() => findInputRef.current?.select());
+      } else if (shortcut === "clear-terminal") {
+        // ⌘K on macOS: the screen and the scrollback; the prompt line stays.
+        terminal.clear();
       } else if (shortcut === "prev-prompt" || shortcut === "next-prompt") {
         integration.jump(shortcut === "prev-prompt" ? "previous" : "next");
       }
@@ -472,7 +491,7 @@ export function TerminalView({
       const onEvent = (event: SessionEvent) => {
         if (disposed) return;
         if (event.kind === "data") {
-          terminal.write(event.data);
+          output.push(event.data);
           if (!connected) {
             up();
             report({ state: "connected", engine });
@@ -556,6 +575,7 @@ export function TerminalView({
       }
       // Undo modes the old session left on (alternate screen, mouse
       // reporting, bracketed paste) before the new one starts.
+      output.flush();
       terminal.write(TERMINAL_RESET + "\r\n");
       start();
       terminal.focus();
@@ -572,7 +592,7 @@ export function TerminalView({
     scheme.addEventListener("change", updateTheme);
     const stopSettings = onSettings((next) => {
       terminal.options.fontSize = next.terminalFontSize;
-      Object.assign(terminal.options, liveTerminalOptions(next));
+      Object.assign(terminal.options, liveTerminalOptions(next, terminalFont()));
       updateTheme();
       if (container.clientWidth > 0) fit.fit();
     });
@@ -590,6 +610,8 @@ export function TerminalView({
       integration.dispose();
       integrationRef.current = null;
       writeParsed.dispose();
+      searchResults.dispose();
+      output.dispose();
       bufferChange.dispose();
       controller.dispose();
       controllerRef.current = null;
@@ -665,14 +687,37 @@ export function TerminalView({
     terminalRef.current?.focus();
   };
 
-  const find = (forward: boolean) => {
-    if (!query) return;
-    if (forward) searchRef.current?.findNext(query);
-    else searchRef.current?.findPrevious(query);
+  const find = (forward: boolean, incremental = false) => {
+    const search = searchRef.current;
+    if (!search) return;
+    if (!query) {
+      search.clearDecorations();
+      setResults(null);
+      setBadPattern(false);
+      return;
+    }
+    const options = { caseSensitive, wholeWord, regex, incremental, decorations: searchDecorations() };
+    try {
+      setBadPattern(false);
+      if (forward) search.findNext(query, options);
+      else search.findPrevious(query, options);
+    } catch {
+      // An unfinished regular expression while typing.
+      setBadPattern(true);
+      setResults(null);
+    }
   };
+
+  // Highlights follow the text and the toggles as they change.
+  useEffect(() => {
+    if (!findOpen) return;
+    find(true, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findOpen, query, caseSensitive, wholeWord, regex]);
 
   const closeFind = () => {
     setFindOpen(false);
+    setResults(null);
     searchRef.current?.clearDecorations();
     terminalRef.current?.focus();
   };
@@ -778,6 +823,7 @@ export function TerminalView({
           animate={{ opacity: 1, y: 0, transition: { duration: duration.toggle, ease: ease.emphasized } }}
           exit={{ opacity: 0, y: -6, transition: leave }}
           style={{ right: askOpen ? `calc(${ASK_AI_WIDTH} + 1rem)` : aiReady ? "3.25rem" : "1rem" }}
+          onKeyDown={(event) => event.key === "Escape" && closeFind()}
           className="material-bar absolute top-3 z-dropdown flex items-center gap-1 rounded-sm p-1 shadow-2 ring-1 ring-separator"
         >
           <Input
@@ -786,12 +832,24 @@ export function TerminalView({
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") find(!event.shiftKey);
-              if (event.key === "Escape") closeFind();
             }}
             placeholder={t.find}
             aria-label={t.find}
-            className="h-7 w-52"
+            aria-invalid={badPattern || undefined}
+            className={cn("h-7 w-44", badPattern && "text-danger")}
           />
+          <ToggleButton label={t.findCaseSensitive} on={caseSensitive} onClick={() => setCaseSensitive((on) => !on)}>
+            <CaseSensitive />
+          </ToggleButton>
+          <ToggleButton label={t.findWholeWord} on={wholeWord} onClick={() => setWholeWord((on) => !on)}>
+            <WholeWord />
+          </ToggleButton>
+          <ToggleButton label={t.findRegex} on={regex} onClick={() => setRegex((on) => !on)}>
+            <Regex />
+          </ToggleButton>
+          <span aria-live="polite" className="min-w-12 px-1 text-center text-callout tabular-nums text-label-2">
+            {findCount(query, results)}
+          </span>
           <IconButton label={t.findPrevious} onClick={() => find(false)}>
             <ChevronUp />
           </IconButton>
@@ -903,6 +961,40 @@ function IconButton({
   return (
     <Tooltip label={label}>
       <Button variant="quiet" size="icon-sm" aria-label={label} onClick={onClick}>
+        {children}
+      </Button>
+    </Tooltip>
+  );
+}
+
+/** "3/17" for the current match, the count alone when it is unknown (past the addon's limit), or "No results". */
+function findCount(query: string, results: { index: number; count: number } | null): string {
+  if (!query || !results) return "";
+  if (results.count === 0) return t.findNoMatch;
+  return results.index < 0 ? `${results.count}+` : `${results.index + 1}/${results.count}`;
+}
+
+function ToggleButton({
+  label,
+  on,
+  onClick,
+  children,
+}: {
+  label: string;
+  on: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip label={label}>
+      <Button
+        variant="quiet"
+        size="icon-sm"
+        aria-label={label}
+        aria-pressed={on}
+        onClick={onClick}
+        className={cn(on && "bg-accent-soft text-accent hover:text-accent")}
+      >
         {children}
       </Button>
     </Tooltip>

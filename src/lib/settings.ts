@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { isTauri, type SshEngine } from "./backend";
 import { readMirror, writeMirror, type LocaleSetting, type ThemeSetting } from "./prefsMirror";
 
+export type CursorStyle = "block" | "bar" | "underline";
 /** What a right-click in the terminal does: a menu, or paste (PuTTY style). */
 export type TerminalRightClick = "menu" | "paste";
 
@@ -12,6 +13,12 @@ export interface Settings {
   terminalScrollback: number;
   /** macOS: Option sends Meta (Esc prefix) instead of typing layout characters. */
   terminalOptionAsMeta: boolean;
+  /** A font name or CSS font list; empty uses the built-in monospace stack. */
+  terminalFontFamily: string;
+  /** 1.0 to 1.6. */
+  terminalLineHeight: number;
+  terminalCursorStyle: CursorStyle;
+  terminalCursorBlink: boolean;
   /** Ask before a multi-line paste into a shell without bracketed paste. */
   terminalWarnMultilinePaste: boolean;
   terminalRightClick: TerminalRightClick;
@@ -35,6 +42,10 @@ let current: Settings = {
   terminalFontSize: 13,
   terminalScrollback: 10000,
   terminalOptionAsMeta: false,
+  terminalFontFamily: "",
+  terminalLineHeight: 1.2,
+  terminalCursorStyle: "block",
+  terminalCursorBlink: true,
   terminalWarnMultilinePaste: true,
   terminalRightClick: "menu",
   terminalCopyOnSelect: false,
