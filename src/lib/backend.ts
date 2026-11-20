@@ -967,6 +967,12 @@ export interface SshStatus {
   sshConfigHosts: number;
 }
 
+/** Installed monospace font families, for the terminal font list; empty outside the app. */
+export async function monospaceFonts(): Promise<string[]> {
+  if (!isTauri) return ["Menlo", "Consolas", "JetBrains Mono", "Fira Code"];
+  return invoke<string[]>("monospace_fonts");
+}
+
 /** Checks OpenSSH and the SSH agent. `?ssh=missing` previews a bare machine. */
 export async function sshStatus(): Promise<SshStatus> {
   if (!isTauri) {

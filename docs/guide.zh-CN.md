@@ -30,7 +30,7 @@ Windows 10/11 在“设置 → 系统 → 可选功能 → 添加 OpenSSH 客户
 
 - 点一台主机就在新标签页打开终端；已经打开的会直接切过去。
 - `Ctrl+Shift+T` 打开本地终端（Windows 上优先用 PowerShell 7）。
-- 复制粘贴 `Ctrl+Shift+C / V`，查找 `Ctrl+Shift+F`。字号和滚动缓冲在设置里调。
+- 复制粘贴 `Ctrl+Shift+C / V`，查找 `Ctrl+Shift+F`。查找支持区分大小写、全字匹配和正则表达式。字体、行高、光标样式、字号和滚动缓冲在设置里调。
 - 连接断开后，底部会出现“重新连接”和“在系统终端中打开”。
 - 应用快捷键都带 Shift（macOS 用 ⌘），所以 `Ctrl+W`、`Ctrl+K` 这些仍然交给 shell。
 
@@ -71,7 +71,7 @@ Windows 10/11 在“设置 → 系统 → 可选功能 → 添加 OpenSSH 客户
 
 ## 命令面板
 
-按 `Ctrl+Shift+K`（macOS 为 `⌘K`），在一个搜索框里找主机、命令片段、隧道和常用操作，回车执行。
+按 `Ctrl+Shift+K`（macOS 为 `⌘⇧K`；在终端外也可用 `⌘K`，终端内 `⌘K` 用于清屏），在一个搜索框里找主机、命令片段、隧道和常用操作，回车执行。
 
 ![命令面板](screenshots/palette-dark.png)
 
@@ -122,7 +122,8 @@ Windows 10/11 在“设置 → 系统 → 可选功能 → 添加 OpenSSH 客户
 
 | 操作 | Windows / Linux | macOS |
 |---|---|---|
-| 命令面板 | Ctrl+Shift+K | ⌘K |
+| 命令面板 | Ctrl+Shift+K | ⌘⇧K（终端外为 ⌘K） |
+| 清屏并清除回滚 | — | ⌘K |
 | 本地终端 | Ctrl+Shift+T | ⌘T |
 | 关闭标签页 | Ctrl+Shift+W | ⌘W |
 | 文件面板 | Ctrl+Shift+E | ⌘E |
