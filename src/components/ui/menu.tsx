@@ -1,4 +1,4 @@
-import { Ellipsis } from "lucide-react";
+import { Check, Ellipsis } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
@@ -19,6 +19,10 @@ export type MenuEntry =
       /** E4: red text. Destructive items go last, after a separator (O3). */
       danger?: boolean;
       disabled?: boolean;
+      /** A choice of one among several: shown with a check (role menuitemradio). */
+      checked?: boolean;
+      /** One line under the label that says what the item does. */
+      hint?: string;
       onSelect: () => void;
     };
 
@@ -35,6 +39,10 @@ export function Menu({
   disabled,
   buttonProps,
   touch = false,
+  text,
+  className,
+  wide = false,
+  tooltip,
 }: {
   /** The accessible name and tooltip of the button, in the words of the labelled action. */
   label?: string;
@@ -48,6 +56,13 @@ export function Menu({
   buttonProps?: Record<string, unknown>;
   /** Rows of 44 px for a finger (layout.md), on the phone. */
   touch?: boolean;
+  /** A visible word beside the icon: the trigger becomes a text button. */
+  text?: ReactNode;
+  className?: string;
+  /** A wider list, for items with a hint line. */
+  wide?: boolean;
+  /** The tooltip, when it should say more than the label (also shown while disabled). */
+  tooltip?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [place, setPlace] = useState<{ top: number; left: number; inModal: boolean } | null>(null);
@@ -91,7 +106,8 @@ export function Menu({
       ref={buttonRef}
       type="button"
       variant={variant}
-      size={touch ? "icon-lg" : size}
+      size={text !== undefined ? "md" : touch ? "icon-lg" : size}
+      className={className}
       aria-label={label}
       aria-haspopup="menu"
       aria-expanded={open}
@@ -107,12 +123,24 @@ export function Menu({
       }}
     >
       {icon}
+      {text}
     </Button>
   );
 
   return (
     <>
-      {touch ? trigger : <Tooltip label={label}>{trigger}</Tooltip>}
+      {touch ? (
+        trigger
+      ) : disabled ? (
+        // A disabled button gets no pointer events: the wrapper carries the tooltip.
+        <Tooltip label={tooltip ?? label}>
+          <span tabIndex={0} className="inline-flex rounded-sm">
+            {trigger}
+          </span>
+        </Tooltip>
+      ) : (
+        <Tooltip label={tooltip ?? label}>{trigger}</Tooltip>
+      )}
       <MenuList
         id={id}
         listRef={listRef}
@@ -120,6 +148,7 @@ export function Menu({
         place={open ? place : null}
         align={align}
         touch={touch}
+        wide={wide}
         items={items}
         onClose={close}
       />
@@ -135,10 +164,12 @@ function MenuList({
   place,
   align,
   touch,
+  wide = false,
   items,
   onClose,
 }: {
   id: string;
+  wide?: boolean;
   listRef: RefObject<HTMLDivElement | null>;
   label: string;
   /** `inModal`: the list must sit above an open dialog's layer. */
@@ -150,11 +181,11 @@ function MenuList({
   onClose: (returnFocus: boolean) => void;
 }) {
   useEffect(() => {
-    if (place) listRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')?.focus();
+    if (place) listRef.current?.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')?.focus();
   }, [place, listRef]);
 
   const keys = (event: KeyboardEvent) => {
-    const items = [...(listRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? [])];
+    const items = [...(listRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]:not([disabled])') ?? [])];
     const index = items.indexOf(document.activeElement as HTMLElement);
     const go = (next: number) => {
       event.preventDefault();
@@ -183,7 +214,7 @@ function MenuList({
           style={{ top: place.top, left: place.left, zIndex: place.inModal ? "calc(var(--z-modal) + 1)" : undefined }}
           className={cn(
             "fixed z-dropdown rounded-sm bg-bg-elevated p-1 shadow-2 ring-1 ring-separator",
-            touch ? "w-64" : "w-52",
+            wide ? "w-80" : touch ? "w-64" : "w-52",
             align === "end" ? "origin-top-right -translate-x-full" : "origin-top-left",
           )}
           initial={{ opacity: 0 }}
@@ -197,7 +228,8 @@ function MenuList({
               <button
                 key={entry.key}
                 type="button"
-                role="menuitem"
+                role={entry.checked === undefined ? "menuitem" : "menuitemradio"}
+                aria-checked={entry.checked}
                 disabled={entry.disabled}
                 onClick={() => {
                   onClose(true);
@@ -205,13 +237,23 @@ function MenuList({
                 }}
                 className={cn(
                   "flex w-full items-center rounded-xs text-left text-callout hover:bg-fill-1 focus-visible:bg-fill-1 focus-visible:outline-none disabled:opacity-40 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:stroke-[1.5]",
-                  touch ? "h-11 gap-3 px-3" : "h-8 gap-2 px-2",
+                  entry.hint ? "min-h-8 gap-2 px-2 py-1.5" : touch ? "h-11 gap-3 px-3" : "h-8 gap-2 px-2",
                   entry.danger ? "text-danger" : "text-label-1 [&_svg]:text-label-2",
                 )}
               >
+                {entry.checked !== undefined && (
+                  <Check aria-hidden className={cn("self-start", entry.hint && "mt-0.5", !entry.checked && "invisible")} />
+                )}
                 {entry.icon}
-                <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-                {entry.shortcut && <kbd className="font-sans text-caption text-label-3">{entry.shortcut}</kbd>}
+                {entry.hint ? (
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{entry.label}</span>
+                    <span className="block text-label-2">{entry.hint}</span>
+                  </span>
+                ) : (
+                  <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+                )}
+                {entry.shortcut && <kbd className={cn("font-sans text-caption text-label-3", entry.hint && "self-start mt-0.5")}>{entry.shortcut}</kbd>}
               </button>
             ),
           )}

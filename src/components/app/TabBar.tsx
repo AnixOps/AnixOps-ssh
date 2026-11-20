@@ -1,11 +1,11 @@
-import { Activity, Bell, Cable, Columns2, FolderOpen, LoaderCircle, Plus, Radio, RadioTower, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
+import { Activity, Bell, Cable, Columns2, FolderOpen, LoaderCircle, Plus, Radio, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
 import type { KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Menu, type MenuEntry } from "@/components/ui/menu";
 import type { SessionStatus } from "@/components/app/TerminalView";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
-import { scopeOf, toggleGlobalBroadcast, toggleTabBroadcast, useBroadcast } from "@/lib/broadcast";
+import { scopeOf, setBroadcastScope, useBroadcast } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
 import { exitTitle } from "@/lib/terminalSession";
 import { appear } from "@/lib/motion";
@@ -65,7 +65,6 @@ export function TabBar({
 }) {
   const activeTab = tabs.find((tab) => tab.key === activeKey);
   const broadcast = useBroadcast();
-  const tabBroadcast = activeTab ? broadcast.tabs.has(activeTab.key) : false;
   // One Tab stop for the strip; arrows move and select (K7), Delete closes.
   const tabKeys = (event: KeyboardEvent, key: string) => {
     const index = tabs.findIndex((tab) => tab.key === key);
@@ -154,30 +153,7 @@ export function TabBar({
               <Rows2 />
             </Button>
           </Tooltip>
-          <Tooltip label={`${t.broadcastTab} (${shortcutHint("toggle-broadcast")})`}>
-            <Button
-              variant="quiet"
-              size="icon"
-              aria-label={t.broadcastTab}
-              aria-pressed={tabBroadcast}
-              onClick={() => toggleTabBroadcast(activeTab.key)}
-              className={cn(tabBroadcast && "bg-accent-soft text-(--accent) hover:bg-accent-soft hover:text-(--accent)")}
-            >
-              <Radio />
-            </Button>
-          </Tooltip>
-          <Tooltip label={t.broadcastAll}>
-            <Button
-              variant="quiet"
-              size="icon"
-              aria-label={t.broadcastAll}
-              aria-pressed={broadcast.global}
-              onClick={toggleGlobalBroadcast}
-              className={cn(broadcast.global && "bg-accent-soft text-(--accent) hover:bg-accent-soft hover:text-(--accent)")}
-            >
-              <RadioTower />
-            </Button>
-          </Tooltip>
+          <BroadcastMenu tabKey={activeTab.key} />
         </div>
       )}
       {activeTab?.hostId && monitorAvailable && (
@@ -282,6 +258,49 @@ function TabIcon({ tab }: { tab: Tab }) {
       aria-label={t.connected}
       className="size-2 shrink-0 rounded-full"
       style={{ backgroundColor: hostColor(tab.color) ?? "var(--accent)" }}
+    />
+  );
+}
+
+/** One labelled control for broadcast input: a menu that says what each
+ *  scope does and how many terminals it reaches. Off while there is only
+ *  one terminal, since there is nowhere else to send to. */
+function BroadcastMenu({ tabKey }: { tabKey: string }) {
+  const broadcast = useBroadcast();
+  const scope = scopeOf(broadcast, tabKey);
+  const inTab = broadcast.panes.get(tabKey)?.length ?? 0;
+  const total = [...broadcast.panes.values()].reduce((sum, ids) => sum + ids.length, 0);
+  const items: MenuEntry[] = [
+    { key: "off", label: t.broadcastOff, hint: t.broadcastOffHint, checked: scope === null, onSelect: () => setBroadcastScope(tabKey, null) },
+    {
+      key: "tab",
+      label: t.broadcastTabItem.replace("{n}", String(inTab)),
+      hint: t.broadcastTabHint,
+      shortcut: shortcutHint("toggle-broadcast"),
+      checked: scope === "tab",
+      disabled: inTab < 2 && scope !== "tab",
+      onSelect: () => setBroadcastScope(tabKey, "tab"),
+    },
+    {
+      key: "global",
+      label: t.broadcastAllItem.replace("{n}", String(total)),
+      hint: t.broadcastAllHint,
+      checked: scope === "global",
+      disabled: total < 2 && scope !== "global",
+      onSelect: () => setBroadcastScope(tabKey, "global"),
+    },
+  ];
+  return (
+    <Menu
+      label={t.broadcastMenu}
+      tooltip={total < 2 && scope === null ? t.broadcastNeedsTwo : t.broadcastMenu}
+      icon={<Radio />}
+      text={scope ? t.broadcastOnShort : t.broadcast}
+      variant="quiet"
+      wide
+      disabled={total < 2 && scope === null}
+      className={cn(scope && "bg-warning-soft text-warning hover:bg-warning-soft hover:text-warning")}
+      items={items}
     />
   );
 }

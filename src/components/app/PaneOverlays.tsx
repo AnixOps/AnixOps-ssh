@@ -23,6 +23,22 @@ export function BroadcastBadge({ scope }: { scope: Exclude<BroadcastScope, null>
   );
 }
 
+/** Above the terminals while typing is broadcast: says plainly where input
+ *  goes and how many terminals get it, with the way out next to it. */
+export function BroadcastBar({ scope, count, onStop }: { scope: Exclude<BroadcastScope, null>; count: number; onStop: () => void }) {
+  return (
+    <div role="status" className="flex items-center gap-2 border-b bg-warning-soft py-1.5 pr-2 pl-4 text-callout text-label-1">
+      <Radio className="size-4 shrink-0 text-warning" strokeWidth={1.5} aria-hidden />
+      <p className="min-w-0 flex-1 truncate">
+        {(scope === "global" ? t.broadcastBannerAll : t.broadcastBannerTab).replace("{n}", String(count))}
+      </p>
+      <Button variant="secondary" size="sm" onClick={onStop}>
+        {t.stopBroadcast}
+      </Button>
+    </div>
+  );
+}
+
 /** Asked before a paste with a newline goes to several panes at once, or
  *  (`count` 0) into one shell that would run each line as it arrives.
  *  `onChoose(true)` pastes everywhere, `false` only here, `null` cancels. */

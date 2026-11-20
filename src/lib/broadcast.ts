@@ -102,6 +102,15 @@ export function toggleGlobalBroadcast() {
   publish({ ...snapshot, global: !snapshot.global });
 }
 
+/** Sets where what is typed in `tabKey` goes: nowhere else, the tab's other
+ *  panes, or every pane. Choosing one scope turns the other off. */
+export function setBroadcastScope(tabKey: string, scope: BroadcastScope) {
+  const tabs = new Set(snapshot.tabs);
+  if (scope === "tab") tabs.add(tabKey);
+  else tabs.delete(tabKey);
+  publish({ ...snapshot, global: scope === "global", tabs });
+}
+
 /** Panes (other than `source`) that should mirror what it receives. */
 export function targetsFor(source: string, isConnected: (paneId: string) => boolean): string[] {
   return broadcastTargets(snapshot, snapshot.panes, source, isConnected);
