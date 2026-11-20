@@ -338,7 +338,7 @@ fn open_in_process(
 }
 
 fn pump(
-    reader: Box<dyn Read + Send>,
+    mut reader: Box<dyn Read + Send>,
     events: &Channel<SessionEvent>,
     exit: &mpsc::Receiver<Option<u32>>,
 ) {
