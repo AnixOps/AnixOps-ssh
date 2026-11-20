@@ -199,6 +199,18 @@ async function runAndWait(page, command, marker = null, { timeout = 15000 } = {}
   await waitScreen(page, new RegExp(token), { timeout });
 }
 
+/** Output of a command run in the terminal (between two markers). */
+async function remoteOutput(page, command) {
+  const token = Math.random().toString(36).slice(2, 8);
+  await page.locator(".xterm-screen").last().click();
+  await run(page, `clear; echo B${token}''; ${command}; echo E${token}''`);
+  const text = await waitScreen(page, new RegExp(`^E${token}$`, "m"));
+  const lines = text.split("\n");
+  const start = lines.findIndex((line) => line === `B${token}`);
+  const end = lines.findIndex((line) => line === `E${token}`);
+  return lines.slice(start + 1, end).join("\n").trim();
+}
+
 function term(page, fn, arg) {
   return page.evaluate(
     ({ source, arg }) => {
@@ -631,12 +643,24 @@ check("全屏程序", "htop", "htop/btop：全屏 TUI 正确绘制（鼠标点�
 check("窗口", "resize", "窗口变化后远端 stty size 跟着变", async (page) => {
   await openHost(page);
   await page.setViewportSize({ width: 900, height: 560 });
-  await page.waitForTimeout(800);
-  const { cols, rows } = await term(page, (t) => ({ cols: t.cols, rows: t.rows }));
-  await runAndWait(page, "stty size");
-  const text = await screen(page);
-  if (!text.includes(`${rows} ${cols}`)) throw new Error(`stty size does not show ${rows} ${cols}`);
-  return `stty size = ${rows} ${cols}`;
+  // The side panes refit after a resize (the monitor folds in a narrow
+  // window), so the size settles in steps: wait until it holds still.
+  const size = () => term(page, (t) => `${t.rows} ${t.cols}`);
+  let settled = await size();
+  for (let i = 0; i < 20; i++) {
+    await page.waitForTimeout(250);
+    const next = await size();
+    if (next === settled && i > 2) break;
+    settled = next;
+  }
+  // The shell sees the size the terminal has now.
+  let text = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    text = await remoteOutput(page, "stty size");
+    if (text === (await size())) return `stty size = ${text}`;
+    await page.waitForTimeout(500);
+  }
+  throw new Error(`stty size ${text}，终端是 ${await size()}`);
 });
 
 check("字体", "zoom", "Ctrl+=/Ctrl+-/Ctrl+0（⌘+/⌘-/⌘0）放大、缩小、复位字号", async (page) => {
