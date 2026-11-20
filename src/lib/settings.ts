@@ -2,6 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { isTauri, type SshEngine } from "./backend";
 import { readMirror, writeMirror, type LocaleSetting, type ThemeSetting } from "./prefsMirror";
 
+/** What a right-click in the terminal does: a menu, or paste (PuTTY style). */
+export type TerminalRightClick = "menu" | "paste";
+
 export interface Settings {
   theme: ThemeSetting;
   locale: LocaleSetting;
@@ -9,6 +12,13 @@ export interface Settings {
   terminalScrollback: number;
   /** macOS: Option sends Meta (Esc prefix) instead of typing layout characters. */
   terminalOptionAsMeta: boolean;
+  /** Ask before a multi-line paste into a shell without bracketed paste. */
+  terminalWarnMultilinePaste: boolean;
+  terminalRightClick: TerminalRightClick;
+  /** Selecting text copies it. */
+  terminalCopyOnSelect: boolean;
+  /** Remote programs may write the clipboard with OSC 52 (never read it). */
+  terminalOsc52: boolean;
   /** The SSH engine for hosts that follow the global setting: the built-in
    * engine unless OpenSSH was chosen (an advanced option kept for compatibility). */
   sshEngine: SshEngine;
@@ -23,6 +33,10 @@ let current: Settings = {
   terminalFontSize: 13,
   terminalScrollback: 10000,
   terminalOptionAsMeta: false,
+  terminalWarnMultilinePaste: true,
+  terminalRightClick: "menu",
+  terminalCopyOnSelect: false,
+  terminalOsc52: true,
   sshEngine: "russh",
   crashReports: null,
   usageStats: false,

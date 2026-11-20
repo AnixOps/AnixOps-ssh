@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openUrl as openWithSystem, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { previewCancel, previewFiles, previewTransfer } from "./previewFiles";
 import {
   previewApplyImport,
@@ -366,6 +366,12 @@ export async function attachSession(
     events,
   });
   return sessionHandle(id, attached.engine, attached.engineReason);
+}
+
+/** Opens a web link in the default browser. Callers check it first (shouldOpenLink). */
+export async function openUrl(url: string): Promise<void> {
+  if (isTauri) await openWithSystem(url);
+  else window.open(url, "_blank", "noopener,noreferrer");
 }
 
 export async function copyText(text: string): Promise<void> {

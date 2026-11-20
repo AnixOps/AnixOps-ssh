@@ -1,10 +1,11 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ChevronDown, ChevronUp, LoaderCircle, RotateCw, Sparkles, SquareArrowOutUpRight, Unplug, X } from "lucide-react";
+import { ChevronDown, ChevronUp, ClipboardPaste, Copy, Eraser, LoaderCircle, Search, RotateCw, Sparkles, SquareArrowOutUpRight, Unplug, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CompletionPopup, type PopupPlacement } from "@/components/app/CompletionPopup";
@@ -12,6 +13,7 @@ import { AskAiPanel, ASK_AI_WIDTH } from "@/components/app/AskAiPanel";
 import { useAiReady } from "@/lib/aiBackend";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ContextMenu, type MenuEntry } from "@/components/ui/menu";
 import { PasteConfirm, BroadcastBadge } from "@/components/app/PaneOverlays";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
@@ -22,6 +24,7 @@ import {
   openFiles,
   openExternal,
   openSession,
+  openUrl,
   pasteText,
   type FilesHandle,
   type SessionEvent,
@@ -42,7 +45,9 @@ import { pasteNeedsConfirm, type BroadcastScope, targetsFor } from "@/lib/broadc
 import { t } from "@/lib/i18n";
 import { duration, ease, enter, leave } from "@/lib/motion";
 import { onSettings, settings } from "@/lib/settings";
-import { appShortcut } from "@/lib/shortcuts";
+import { appShortcut, isMac } from "@/lib/shortcuts";
+import { shortcutHint } from "@/lib/shortcutTable";
+import { parseOsc52, sanitizeTitle, shouldOpenLink } from "@/lib/terminalInput";
 import { registerTerminal, terminalFor } from "@/lib/terminals";
 import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { exitTitle, RESIZE_DEBOUNCE_MS, TERMINAL_RESET, trailingDebounce, type SessionEnd } from "@/lib/terminalSession";
@@ -54,12 +59,22 @@ export interface EngineInfo {
   reason: string | null;
 }
 
-export type SessionStatus =
+/** What the remote side said about itself during one session. */
+export interface SessionMeta {
+  /** The window title the remote program set (OSC 0/2), sanitized. */
+  remoteTitle?: string;
+  /** The bell rang while the pane was not in front. */
+  bell?: boolean;
+}
+
+export type SessionStatus = (
   | { state: "connecting" }
   | { state: "connected"; engine?: EngineInfo }
   /** The connection to the background daemon dropped; the session is re-attached when it is back. */
   | { state: "reconnecting" }
-  | ({ state: "exited"; error?: string } & SessionEnd);
+  | ({ state: "exited"; error?: string } & SessionEnd)
+) &
+  SessionMeta;
 
 export function TerminalView({
   tabKey,
@@ -102,14 +117,29 @@ export function TerminalView({
   const findInputRef = useRef<HTMLInputElement>(null);
   const [pendingPaste, setPendingPaste] = useState<{ text: string; count: number } | null>(null);
   const pasteRef = useRef<(text: string, all: boolean) => void>(() => {});
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const actionsRef = useRef({ copy: () => {}, paste: () => {}, clear: () => {} });
+  const metaRef = useRef<SessionMeta>({});
+  const statusRef = useRef<SessionStatus>({ state: "connecting" });
+  const activeRef = useRef(active);
+  activeRef.current = active;
 
   const report = useCallback(
     (next: SessionStatus) => {
       endedRef.current = next.state === "exited";
-      setStatus(next);
-      onStatus(tabKey, next);
+      const full = { ...next, ...metaRef.current };
+      statusRef.current = full;
+      setStatus(full);
+      onStatus(tabKey, full);
     },
     [onStatus, tabKey],
+  );
+  const updateMeta = useCallback(
+    (patch: SessionMeta) => {
+      metaRef.current = { ...metaRef.current, ...patch };
+      report(statusRef.current);
+    },
+    [report],
   );
 
   useEffect(() => {
@@ -122,6 +152,18 @@ export function TerminalView({
     const search = new SearchAddon();
     terminal.loadAddon(fit);
     terminal.loadAddon(search);
+    // Links open with Ctrl-click (⌘-click), so a plain click still selects.
+    terminal.loadAddon(
+      new WebLinksAddon(
+        (event, uri) => {
+          if (shouldOpenLink(uri, event, isMac)) void openUrl(uri).catch(console.error);
+        },
+        {
+          hover: () => (container.title = t.openLinkHint.replace("{key}", isMac ? "⌘" : "Ctrl")),
+          leave: () => container.removeAttribute("title"),
+        },
+      ),
+    );
     terminal.loadAddon(new Unicode11Addon());
     terminal.unicode.activeVersion = UNICODE_VERSION;
     terminal.open(container);
@@ -264,20 +306,67 @@ export function TerminalView({
       terminal.focus();
     };
     pasteRef.current = pasteEverywhere;
+    // One pane: ask before a multi-line paste the shell would run line by
+    // line (no bracketed paste), unless that was turned off.
+    const singleNeedsConfirm = (text: string) =>
+      pasteNeedsConfirm(text, 0, {
+        bracketedPaste: terminal.modes.bracketedPasteMode,
+        warnMultiline: settings().terminalWarnMultilinePaste,
+      });
     function routePaste(text: string) {
       const count = receivers().length;
-      if (count === 0) terminal.paste(text);
-      else if (pasteNeedsConfirm(text, count)) setPendingPaste({ text, count });
+      if (count === 0 ? singleNeedsConfirm(text) : pasteNeedsConfirm(text, count)) setPendingPaste({ text, count });
+      else if (count === 0) terminal.paste(text);
       else pasteEverywhere(text, true);
     }
     const onPaste = (event: ClipboardEvent) => {
       const text = event.clipboardData?.getData("text") ?? "";
-      if (!text || receivers().length === 0) return;
+      if (!text || (receivers().length === 0 && !singleNeedsConfirm(text))) return;
       event.preventDefault();
       event.stopPropagation();
       routePaste(text);
     };
     container.addEventListener("paste", onPaste, true);
+
+    const copySelection = () => {
+      const selection = terminal.getSelection();
+      if (selection) void copyText(selection).catch(console.error);
+    };
+    actionsRef.current = {
+      copy: copySelection,
+      paste: () => void pasteText().then((text) => text && routePaste(text)),
+      clear: () => terminal.clear(),
+    };
+    // Copy on select: once the mouse is released, not on every move of a drag.
+    const onMouseUp = (event: MouseEvent) => {
+      if (event.button === 0 && settings().terminalCopyOnSelect && terminal.hasSelection()) copySelection();
+    };
+    container.addEventListener("mouseup", onMouseUp);
+    // Right-click: the menu, or (as in PuTTY and Windows Terminal) copy the
+    // selection if there is one and paste otherwise.
+    const onContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+      if (settings().terminalRightClick === "paste") {
+        if (terminal.hasSelection()) {
+          copySelection();
+          terminal.clearSelection();
+        } else actionsRef.current.paste();
+      } else setMenuAt({ x: event.clientX, y: event.clientY });
+    };
+    container.addEventListener("contextmenu", onContextMenu);
+
+    // OSC 52: remote programs (tmux, Vim) may write the clipboard, never read it.
+    const osc52 = terminal.parser.registerOscHandler(52, (data) => {
+      if (settings().terminalOsc52) {
+        const text = parseOsc52(data);
+        if (text !== null) void copyText(text).catch(console.error);
+      }
+      return true;
+    });
+    const titleChange = terminal.onTitleChange((title) => updateMeta({ remoteTitle: sanitizeTitle(title) || undefined }));
+    const bell = terminal.onBell(() => {
+      if (!activeRef.current) updateMeta({ bell: true });
+    });
     // The view fits at once; the session hears the size once dragging
     // settles, so the remote app redraws once instead of on every frame.
     const sendResize = trailingDebounce(
@@ -289,6 +378,7 @@ export function TerminalView({
     // Only the first start may reattach; "Reconnect" opens a fresh session.
     let reattach = sessionId;
     const start = () => {
+      metaRef.current = {};
       report({ state: "connecting" });
       let connected = false;
       let exited = false;
@@ -405,6 +495,11 @@ export function TerminalView({
       setCompletion(null);
       for (const type of typingEvents) container.removeEventListener(type, markTyping, true);
       container.removeEventListener("paste", onPaste, true);
+      container.removeEventListener("mouseup", onMouseUp);
+      container.removeEventListener("contextmenu", onContextMenu);
+      osc52.dispose();
+      titleChange.dispose();
+      bell.dispose();
       window.clearTimeout(typingTimer);
       sendResize.cancel();
       scheme.removeEventListener("change", updateTheme);
@@ -417,16 +512,17 @@ export function TerminalView({
       terminal.dispose();
       terminalRef.current = null;
     };
-  }, [hostId, onSession, report, sessionId, tabKey]);
+  }, [hostId, onSession, report, sessionId, tabKey, updateMeta]);
 
   useEffect(() => {
     if (!active) return;
+    if (metaRef.current.bell) updateMeta({ bell: false });
     const frame = window.requestAnimationFrame(() => {
       fitRef.current?.fit();
       terminalRef.current?.focus();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [active]);
+  }, [active, updateMeta]);
 
   // The badge strip changes the usable height.
   useEffect(() => {
@@ -479,6 +575,40 @@ export function TerminalView({
     terminalRef.current?.focus();
   };
 
+  const closeMenu = useCallback(() => {
+    setMenuAt(null);
+    terminalRef.current?.focus();
+  }, []);
+  const menuItems: MenuEntry[] = [
+    {
+      key: "copy",
+      label: t.copy,
+      icon: <Copy />,
+      shortcut: shortcutHint("copy"),
+      disabled: !terminalRef.current?.hasSelection(),
+      onSelect: () => actionsRef.current.copy(),
+    },
+    {
+      key: "paste",
+      label: t.paste,
+      icon: <ClipboardPaste />,
+      shortcut: shortcutHint("paste"),
+      onSelect: () => actionsRef.current.paste(),
+    },
+    {
+      key: "find",
+      label: t.find,
+      icon: <Search />,
+      shortcut: shortcutHint("find", "terminal"),
+      onSelect: () => {
+        setFindOpen(true);
+        window.requestAnimationFrame(() => findInputRef.current?.select());
+      },
+    },
+    "separator",
+    { key: "clear", label: t.clearTerminal, icon: <Eraser />, onSelect: () => actionsRef.current.clear() },
+  ];
+
   return (
     <div ref={wrapperRef} className="relative h-full min-w-0 flex-1 bg-bg">
       {/* Broadcasting reserves a strip below the text for its badge. */}
@@ -486,9 +616,16 @@ export function TerminalView({
         style={{ right: askOpen ? ASK_AI_WIDTH : 0 }}
       />
       {broadcast && <BroadcastBadge scope={broadcast} />}
+      <ContextMenu
+        label={t.terminalMenu}
+        at={menuAt}
+        items={menuItems}
+        onClose={closeMenu}
+      />
       {pendingPaste && (
         <PasteConfirm
           count={pendingPaste.count}
+          lines={pendingPaste.text.split(/\r\n|\r|\n/).filter(Boolean).length}
           onChoose={(all) => {
             const { text } = pendingPaste;
             setPendingPaste(null);
