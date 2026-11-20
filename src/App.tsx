@@ -7,6 +7,7 @@ import { CommandPalette, type PaneAction } from "@/components/app/CommandPalette
 import { DeepLinkHandler } from "@/components/app/DeepLinkHandler";
 import { FilesPane } from "@/components/app/FilesPane";
 import { MonitorPane } from "@/components/app/MonitorPane";
+import { BroadcastBar } from "@/components/app/PaneOverlays";
 import { monitorOpenByDefault, rememberMonitorOpen } from "@/lib/monitorPrefs";
 import { ForwardsPanel } from "@/components/app/ForwardsPanel";
 import { HostEditor } from "@/components/app/HostEditor";
@@ -40,7 +41,7 @@ import {
   type SshStatus,
 } from "@/lib/backend";
 import { adhocId, formatTarget, parseAdhocId, type Target } from "@/lib/quickConnect";
-import { setPanes, toggleGlobalBroadcast, toggleTabBroadcast, useBroadcast } from "@/lib/broadcast";
+import { participants, scopeOf, setBroadcastScope, setPanes, toggleGlobalBroadcast, toggleTabBroadcast, useBroadcast } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
 import { serialHosts } from "@/lib/serialUi";
 import { loadLayout, planRestore, saveLayout, setWindowLabel } from "@/lib/layoutStore";
@@ -499,6 +500,13 @@ export function App() {
                 </Button>
               </div>
             )}
+          {activeTab && scopeOf(broadcast, activeTab.key) && (
+            <BroadcastBar
+              scope={scopeOf(broadcast, activeTab.key)!}
+              count={participants(broadcast, broadcast.panes, activeTab.key).length}
+              onStop={() => setBroadcastScope(activeTab.key, null)}
+            />
+          )}
           <div className="min-h-0 flex-1">
             {tabs.map((tab) => (
               <div key={tab.key} className="flex h-full" hidden={tab.key !== activeKey}>
