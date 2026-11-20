@@ -98,7 +98,7 @@ htop（修复前：表头和底栏 F1–F10 后面的字看不清）：
 - **连字（ligatures）**：Windows Terminal、WezTerm、iTerm2 支持 Fira Code/Cascadia 的连字；xterm.js 在 WebView 里需要额外插件且只对部分字体有效，暂未做。
 - **标签重命名**：Windows Terminal、iTerm2 可以给标签改名；本 PR 未做。
 - **macOS 按键**：⌘C/⌘V 依赖 WKWebView 的系统菜单，Chromium 里模拟不出来，需要在 Mac 上手测（RELEASING.md 冒烟测试）。
-- **窄窗口下监控栏占宽**：900 px 窗口里主机列表 + 监控栏后终端只剩 33 列；收起侧栏后可恢复，监控栏本身可折叠（#106）。是否在窄窗口自动折叠交给布局线程决定。
+- **窄窗口下监控栏占宽**：修复前 900 px 窗口里终端只剩 33 列；#113 起窄窗口自动把监控栏折成窄条（现在 67 列），再收起侧栏可更宽。
 
 ## 怎么在本地跑
 

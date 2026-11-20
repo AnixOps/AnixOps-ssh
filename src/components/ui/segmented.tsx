@@ -3,7 +3,8 @@ import { useId } from "react";
 import { toggle } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
-/** A pill segmented control whose selection slides between options. */
+/** A pill segmented control whose selection slides between options. Given
+ *  more width than it needs (a stacked settings row), the options share it. */
 export function Segmented<T extends string | boolean>({
   value,
   options,
@@ -30,7 +31,7 @@ export function Segmented<T extends string | boolean>({
             aria-checked={selected}
             onClick={() => onChange(option.value)}
             className={cn(
-              "relative rounded-pill transition-colors duration-toggle ease-standard",
+              "relative min-w-0 grow whitespace-nowrap rounded-pill transition-colors duration-toggle ease-standard",
               size === "sm" ? "h-6 px-2 text-callout" : "h-7 px-3 text-callout",
               selected ? "text-label-1" : "font-normal text-label-2 hover:text-label-1",
             )}
@@ -42,7 +43,7 @@ export function Segmented<T extends string | boolean>({
                 className="absolute inset-0 rounded-pill bg-bg-elevated shadow-1"
               />
             )}
-            <span className="relative">{option.label}</span>
+            <span className="relative block truncate" title={option.label}>{option.label}</span>
           </button>
         );
       })}

@@ -8,8 +8,9 @@ import { DeepLinkHandler } from "@/components/app/DeepLinkHandler";
 import { FilesPane } from "@/components/app/FilesPane";
 import { MonitorPane } from "@/components/app/MonitorPane";
 import { BroadcastBar } from "@/components/app/PaneOverlays";
-import { monitorOpenByDefault, rememberMonitorOpen } from "@/lib/monitorPrefs";
+import { monitorOpenByDefault, rememberMonitorOpen, useMonitorLayout } from "@/lib/monitorPrefs";
 import { rememberSidebarHidden, sidebarHiddenByDefault } from "@/lib/sidebarPrefs";
+import { fitWorkspace, useElementWidth } from "@/lib/workspaceFit";
 import { ForwardsPanel } from "@/components/app/ForwardsPanel";
 import { HostEditor } from "@/components/app/HostEditor";
 import { HostList } from "@/components/app/HostList";
@@ -150,6 +151,10 @@ export function App() {
     checkSsh();
   }, [checkSsh]);
   const searchRef = useRef<HTMLInputElement>(null);
+  // Side panes give way before the terminal gets too narrow (workspaceFit.ts).
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const workspaceWidth = useElementWidth(workspaceRef);
+  const monitorLayout = useMonitorLayout();
 
   const reload = useCallback(() => {
     loadHosts()
@@ -574,20 +579,25 @@ export function App() {
               onStop={() => setBroadcastScope(activeTab.key, null)}
             />
           )}
-          <div className="min-h-0 flex-1">
-            {tabs.map((tab) => (
-              <div key={tab.key} className="flex h-full" hidden={tab.key !== activeKey}>
-                {(() => {
-                  const host = monitorHost(tab.hostId);
-                  return host && tab.monitorOpen ? (
-                    <MonitorPane
-                      host={host}
-                      visible
-                      active={tab.key === activeKey}
-                      onClose={() => setMonitorOpen(tab.key, false)}
-                    />
-                  ) : null;
-                })()}
+          <div ref={workspaceRef} className="min-h-0 flex-1">
+            {tabs.map((tab) => {
+              const host = monitorHost(tab.hostId);
+              const fit = fitWorkspace({
+                width: workspaceWidth,
+                monitor: { open: Boolean(host && tab.monitorOpen), ...monitorLayout },
+                filesOpen: Boolean(tab.hostId && tab.filesMounted && tab.filesOpen),
+              });
+              return (
+              <div key={tab.key} className="relative flex h-full" hidden={tab.key !== activeKey}>
+                {host && tab.monitorOpen && (
+                  <MonitorPane
+                    host={host}
+                    visible
+                    active={tab.key === activeKey}
+                    forceRail={fit.monitorRail}
+                    onClose={() => setMonitorOpen(tab.key, false)}
+                  />
+                )}
                 <PaneArea
                   tabKey={tab.key}
                   hostId={tab.hostId}
@@ -608,12 +618,14 @@ export function App() {
                   <FilesPane
                     hostId={tab.hostId}
                     visible={tab.filesOpen}
+                    overlay={fit.filesOverlay}
                     active={tab.key === activeKey && tab.filesOpen}
                     onClose={() => setFilesOpen(tab.key, false)}
                   />
                 )}
               </div>
-            ))}
+              );
+            })}
             {!activeTab && <EmptyWorkspace onOpenLocal={openLocal} status={status} />}
           </div>
         </main>

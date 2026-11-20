@@ -100,7 +100,7 @@ export function AiSettings() {
         />
       </SettingsRow>
 
-      <SettingsRow label={t.aiProvider}>
+      <SettingsRow label={t.aiProvider} stacked>
         <Segmented
           size="sm"
           label={t.aiProvider}
