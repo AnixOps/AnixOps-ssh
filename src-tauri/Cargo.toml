@@ -41,8 +41,12 @@ easyssh-unlock = { path = "../crates/easyssh-unlock" }
 easyssh-vault = { path = "../crates/easyssh-vault", features = ["os-keyring"] }
 easysshd = { path = "../crates/easysshd" }
 portable-pty = "0.9"
+tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+# `deep-link`: a second launch with an anixops-ssh:// link hands it to the
+# running app instead of opening another one.
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 uuid.workspace = true
 zeroize = "1"
 

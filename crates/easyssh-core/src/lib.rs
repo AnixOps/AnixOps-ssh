@@ -4,6 +4,7 @@
 //! to a password manager. Authentication remains entirely with `ssh`, `scp`,
 //! and the system SSH agent inherited by their child processes.
 
+pub mod adhoc;
 pub mod config;
 pub mod domain;
 pub mod openssh;

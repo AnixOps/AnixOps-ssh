@@ -54,19 +54,22 @@ export function HostEditor({
   host,
   groups,
   serial: startSerial = false,
+  prefill,
   onDone,
   onCancel,
 }: {
   host: Host | null;
   groups: Group[];
   serial?: boolean;
+  /** Values for a new host, such as the connection a tab was opened with. */
+  prefill?: { name: string; fields: HostFields };
   onDone: () => void;
   onCancel: () => void;
 }) {
   const saved = host?.source === "saved";
-  const [name, setName] = useState(host?.name ?? "");
+  const [name, setName] = useState(host?.name ?? prefill?.name ?? "");
   const [byAlias, setByAlias] = useState(Boolean(host?.fields.alias));
-  const [fields, setFields] = useState<HostFields>(host?.fields ?? emptyFields);
+  const [fields, setFields] = useState<HostFields>(host?.fields ?? prefill?.fields ?? emptyFields);
   const [serialOn, setSerialOn] = useState(Boolean(host?.fields.serial) || (startSerial && !host));
   const [serial, setSerial] = useState<SerialFields>(host?.fields.serial ?? defaultSerial());
   const [ports, setPorts] = useState<SerialPortInfo[] | null>(null);

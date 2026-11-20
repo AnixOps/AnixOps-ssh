@@ -65,6 +65,18 @@ fn desktop_run() {
     daemon::run_if_requested();
 
     tauri::Builder::default()
+        // First, as the plugin requires: a second launch (an anixops-ssh://
+        // link opened while the app runs) hands its arguments to this
+        // process, which gets the link through the deep-link plugin, and
+        // exits. All this process does itself is bring its window forward.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -159,6 +171,16 @@ fn desktop_run() {
             session_logs::session_log_delete
         ])
         .setup(|app| {
+            // Installed packages register the scheme themselves (the deb, the
+            // NSIS installer, the macOS bundle). An AppImage and a development
+            // run have nothing installed, so register at run time.
+            #[cfg(any(target_os = "linux", windows))]
+            if cfg!(debug_assertions) || std::env::var_os("APPIMAGE").is_some() {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Err(error) = app.deep_link().register_all() {
+                    eprintln!("cannot register the anixops-ssh:// scheme: {error}");
+                }
+            }
             daemon::start(app.handle());
             telemetry::start_background();
             Ok(())
