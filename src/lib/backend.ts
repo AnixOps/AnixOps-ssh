@@ -69,6 +69,8 @@ export interface HostFields {
   engine?: EnginePreference | null;
   /** Opt-in: send the shell integration script after login. */
   shellIntegration: boolean;
+  /** X11 forwarding (`ssh -X`); the host then connects through OpenSSH. */
+  forwardX11?: boolean;
   /** An outbound proxy for the first hop; null or absent connects directly. Its password is a saved secret. */
   proxy?: ProxyFields | null;
   /** Set for a serial port; the SSH fields are then unused. */
@@ -962,6 +964,17 @@ const previewTunnels: Tunnel[] = [
     targetHost: "redis.internal",
     targetPort: 6379,
     status: { state: "running", port: 16379, lastError: "redis.internal:6379: connect failed", errorCount: 2 },
+  },
+  {
+    id: "tunnel-5",
+    name: "Docker",
+    hostId: "1",
+    kind: "local",
+    bindAddress: null,
+    bindPort: 2375,
+    targetHost: "/run/docker.sock",
+    targetPort: null,
+    status: { state: "stopped" },
   },
 ];
 

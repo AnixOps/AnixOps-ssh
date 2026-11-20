@@ -283,6 +283,7 @@ fn a_connection_with_every_field_set_roundtrips() {
     full.local_directories = vec!["/home/me/work".into()];
     full.remote_directories = vec!["/srv/app".into()];
     full.shell_integration = true;
+    full.forward_x11 = true;
     full.engine = Some(easyssh_core::EnginePreference::Russh);
     full.terminal = TerminalPreferences {
         font_size: 17.0,

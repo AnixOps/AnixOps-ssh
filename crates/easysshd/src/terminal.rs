@@ -453,6 +453,12 @@ impl TermSession {
         *lock(&self.engine) = Some((engine.to_owned(), reason.to_owned()));
     }
 
+    /// Shows a line of our own in the terminal, before or between the
+    /// program's output (a hint, not part of the remote session).
+    pub fn notice(&self, text: &str) {
+        self.output(text);
+    }
+
     pub fn engine(&self) -> Option<(String, String)> {
         lock(&self.engine).clone()
     }

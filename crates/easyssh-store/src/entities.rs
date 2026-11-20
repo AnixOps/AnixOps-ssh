@@ -196,6 +196,7 @@ impl Entity for Host {
             engine: row
                 .get::<_, Option<String>>("engine")?
                 .and_then(|name| serde_json::from_value(serde_json::Value::String(name)).ok()),
+            forward_x11: row.get::<_, i64>("forward_x11")? != 0,
             // A value this build cannot read (written by a newer one) means
             // no proxy rather than a host that cannot be listed.
             proxy: row
@@ -236,6 +237,7 @@ impl Entity for Host {
         fields.insert("terminal", Field::plain(&c.terminal));
         fields.insert("shell_integration", Field::plain(c.shell_integration));
         fields.insert("engine", Field::plain(c.engine));
+        fields.insert("forward_x11", Field::plain(c.forward_x11));
         fields.insert("proxy", Field::plain(&c.proxy));
         fields.insert("tags", Field::plain(clean_tags(&c.tags)));
         fields.insert("password", Field::secret(secrets.password));
@@ -315,6 +317,7 @@ impl Entity for Host {
             ("local_directories", json(&c.local_directories)?),
             ("remote_directories", json(&c.remote_directories)?),
             ("shell_integration", int(i64::from(c.shell_integration))),
+            ("forward_x11", int(i64::from(c.forward_x11))),
             (
                 "engine",
                 match c.engine {

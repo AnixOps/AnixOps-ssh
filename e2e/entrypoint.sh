@@ -1,6 +1,6 @@
 #!/bin/sh
 # TEST ONLY. Installs the generated public key for keyuser, starts a trivial
-# echo service on 127.0.0.1:7777 (the tunnel target), then runs sshd.
+# echo service on 127.0.0.1:7777 and /tmp/e2e-echo.sock (the tunnel targets), then runs sshd.
 set -eu
 
 if [ ! -f /keys/id_e2e.pub ]; then
@@ -19,5 +19,7 @@ done
 cat /etc/e2e/id_e2e_sk.pub >> /home/keyuser/.ssh/authorized_keys
 
 socat TCP-LISTEN:7777,bind=127.0.0.1,fork,reuseaddr EXEC:cat &
+# The same echo on a Unix socket (direct-streamlocal forwards).
+socat UNIX-LISTEN:/tmp/e2e-echo.sock,fork,mode=0666,unlink-early EXEC:cat &
 
 exec /usr/sbin/sshd -D -e

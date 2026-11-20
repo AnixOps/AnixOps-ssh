@@ -82,6 +82,11 @@ impl SshInvocation {
             validate_alias(jump)?;
             args.splice(0..0, ["-J".into(), jump.clone()]);
         }
+        if connection.forward_x11 {
+            // `ForwardX11Trusted yes` in the ssh config makes this trusted
+            // forwarding (`-Y`); `ssh` applies it by itself.
+            args.splice(0..0, ["-X".into()]);
+        }
         for forward in &connection.local_forwards {
             args.splice(0..0, ["-L".into(), validate_forward(forward)?]);
         }
@@ -475,6 +480,14 @@ mod tests {
             SshInvocation::master_args(Path::new("/run/cm-ab")),
             ["-M", "-S", "/run/cm-ab"]
         );
+    }
+
+    #[test]
+    fn x11_forwarding_adds_x_before_the_destination() {
+        let mut c = Connection::alias("Prod", "production");
+        c.forward_x11 = true;
+        let invocation = SshInvocation::for_connection(&OpenSsh, &c);
+        assert!(invocation.is_err() || invocation.unwrap().args == vec!["-X", "production"]);
     }
 
     #[test]

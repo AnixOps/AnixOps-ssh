@@ -1510,8 +1510,10 @@ impl Daemon {
             }
         }
         let mut chosen = None;
+        let mut x11 = false;
         if let Some(host_id) = &p.host_id {
             let (connection, resolution) = self.resolution(host_id).await?;
+            x11 = resolution.x11;
             if resolution.plan.is_none() {
                 if let Some(proxy) = &connection.proxy {
                     return Err(proxy_needs_builtin(proxy, &resolution.choice.reason));
@@ -1534,6 +1536,14 @@ impl Daemon {
         }
         let engine = chosen.map(|c| ("openssh", c.reason));
         let session = self.spawn_pty(&p, agent_sock).await?;
+        if x11 {
+            if let Some(hint) = engine::choice::x11_display_hint(
+                std::env::var("DISPLAY").ok().as_deref(),
+                std::env::consts::OS,
+            ) {
+                session.notice(&format!("\r\n[AnixOps SSH] {hint}\r\n\r\n"));
+            }
+        }
         self.publish(conn, outbox, req_id, session, engine).await;
         Ok(Outcome::Replied)
     }
