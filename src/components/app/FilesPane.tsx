@@ -40,6 +40,7 @@ import {
 import { t } from "@/lib/i18n";
 import { shortcutHint } from "@/lib/shortcutTable";
 import { appear, duration, ease } from "@/lib/motion";
+import { failureMessage, formatDuration, nextRate, secondsLeft, type Rate } from "@/lib/transferProgress";
 import { locate, localName, parentPath, resolvePath, uploadConflicts } from "@/lib/remotePath";
 import { cn } from "@/lib/utils";
 
@@ -48,9 +49,12 @@ interface TransferItem {
   name: string;
   upload: boolean;
   local: string;
-  state: "running" | "done" | "failed" | "cancelled";
+  /** The remote file or folder, for failure messages. */
+  remote: string;
+  state: "queued" | "running" | "done" | "failed" | "cancelled";
   bytes: number;
   total: number | null;
+  rate?: Rate;
   message?: string;
 }
 
@@ -186,11 +190,32 @@ export function FilesPane({
       const early: TransferEvent[] = [];
       const onEvent = (event: TransferEvent) => (ready ? apply(event) : early.push(event));
       const apply = (event: TransferEvent) => {
-        if (event.kind === "progress") updateTransfer(id, { bytes: event.bytes });
-        else if (event.kind === "done") {
-          updateTransfer(id, { state: "done", bytes: total ?? 0 });
+        if (event.kind === "started") updateTransfer(id, { state: "running" });
+        else if (event.kind === "progress") {
+          // The backend sizes the work once it runs, so `total` can arrive after the row exists.
+          setTransfers((all) =>
+            all.map((item) =>
+              item.id === id
+                ? {
+                    ...item,
+                    state: "running",
+                    bytes: event.bytes,
+                    total: event.total ?? item.total,
+                    rate: nextRate(item.rate, event.bytes, Date.now()),
+                  }
+                : item,
+            ),
+          );
+        } else if (event.kind === "done") {
+          setTransfers((all) =>
+            all.map((item) => (item.id === id ? { ...item, state: "done", bytes: item.total ?? item.bytes } : item)),
+          );
           if (upload && handle && cwdRef.current === targetDir) void navigate(handle, targetDir);
-        } else if (event.kind === "failed") updateTransfer(id, { state: "failed", message: event.message });
+        } else if (event.kind === "failed") {
+          setTransfers((all) =>
+            all.map((item) => (item.id === id ? { ...item, state: "failed", message: failureMessage(item.remote, event.message) } : item)),
+          );
+        }
         else updateTransfer(id, { state: "cancelled" });
       };
       try {
@@ -202,7 +227,8 @@ export function FilesPane({
             name: localName(upload ? started.local : started.remote),
             upload,
             local: started.local,
-            state: "running",
+            remote: started.remote,
+            state: started.queued ? "queued" : "running",
             bytes: 0,
             total,
           },
@@ -300,7 +326,7 @@ export function FilesPane({
     );
   }
 
-  const finished = transfers.some((item) => item.state !== "running");
+  const finished = transfers.some((item) => !isActive(item));
 
   return (
     <PaneFrame
@@ -418,7 +444,7 @@ export function FilesPane({
                 variant="quiet"
                 size="sm"
                 className="ml-auto"
-                onClick={() => setTransfers((current) => current.filter((item) => item.state === "running"))}
+                onClick={() => setTransfers((current) => current.filter(isActive))}
               >
                 {t.clearFinished}
               </Button>
@@ -604,6 +630,9 @@ function EditRow({
   );
 }
 
+/** Queued and running transfers can be cancelled and are kept in the list. */
+const isActive = (item: TransferItem) => item.state === "running" || item.state === "queued";
+
 function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => void }) {
   const progress = item.total ? Math.min(1, item.bytes / item.total) : null;
   const Direction = item.upload ? ArrowUp : ArrowDown;
@@ -613,7 +642,7 @@ function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => v
         <Direction className="size-4 shrink-0 text-label-2" strokeWidth={1.5} aria-label={item.upload ? t.upload : t.download} />
         <span className="min-w-0 flex-1 truncate">{item.name}</span>
         <TransferStatus item={item} />
-        {item.state === "running" && (
+        {isActive(item) && (
           <IconButton label={t.cancelTransfer} onClick={onCancel}>
             <X />
           </IconButton>
@@ -632,6 +661,7 @@ function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => v
           />
         </div>
       )}
+      {item.state === "running" && <TransferDetail item={item} />}
       {item.state === "failed" && item.message && (
         <p className="selectable mt-1 text-callout break-all text-danger">{item.message}</p>
       )}
@@ -641,11 +671,12 @@ function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => v
 
 function TransferStatus({ item }: { item: TransferItem }) {
   const text = "shrink-0 text-callout";
+  if (item.state === "queued") return <span className={cn(text, "text-label-3")}>{t.transferQueued}</span>;
   if (item.state === "running") {
     return (
       <span className={cn(text, "flex items-center gap-1 text-label-2")}>
         <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" strokeWidth={1.5} />
-        {item.bytes > 0 ? formatSize(item.bytes) : ""}
+        {progressPercent(item)}
       </span>
     );
   }
@@ -666,4 +697,18 @@ function TransferStatus({ item }: { item: TransferItem }) {
     );
   }
   return <span className={cn(text, "text-label-3")}>{t.transferCancelled}</span>;
+}
+
+function progressPercent(item: TransferItem): string {
+  return item.total ? `${Math.min(100, Math.floor((item.bytes / item.total) * 100))}%` : item.bytes > 0 ? formatSize(item.bytes) : "";
+}
+
+/** Bytes moved of the total, the speed and the time left. */
+function TransferDetail({ item }: { item: TransferItem }) {
+  const perSecond = item.rate?.perSecond ?? 0;
+  const left = secondsLeft(item.bytes, item.total, perSecond);
+  const parts = [item.total ? `${formatSize(item.bytes)} / ${formatSize(item.total)}` : formatSize(item.bytes)];
+  if (perSecond > 0) parts.push(`${formatSize(perSecond)}/s`);
+  if (left !== null) parts.push(t.transferTimeLeft.replace("{time}", formatDuration(left)));
+  return <p className="mt-1 text-callout text-label-3 tabular-nums">{parts.join(" · ")}</p>;
 }

@@ -315,6 +315,28 @@ impl Engine {
         self.files.open(lease).await.map_err(|error| fail(&error))
     }
 
+    /// Puts a transfer on the transfer queue of the host `key`: a few run at
+    /// once, each on a file session of the host's shared connection that is
+    /// reused for the next transfer, the others wait. Returns the transfer id
+    /// and whether it waits (`transfer.started` reports its turn).
+    #[allow(clippy::too_many_arguments)]
+    pub fn queue_transfer(
+        self: &Arc<Self>,
+        key: &str,
+        target: Target,
+        upload: bool,
+        local: std::path::PathBuf,
+        remote: String,
+        recursive: bool,
+        sink: Events,
+    ) -> (String, bool) {
+        let engine = self.clone();
+        let open: crate::files::Opener =
+            Box::pin(async move { engine.lease(&target).await.map_err(|error| error.message) });
+        self.files
+            .start_queued_transfer(key, open, upload, local, remote, recursive, sink)
+    }
+
     /// Starts the forward of `tunnel` on the host's shared connection and
     /// returns the port that listens. Progress is reported as `tunnel.status`
     /// events.

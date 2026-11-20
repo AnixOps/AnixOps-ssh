@@ -13,8 +13,8 @@ use zeroize::Zeroizing;
 pub enum AgentSource {
     /// Do not use an agent.
     Disabled,
-    /// `SSH_AUTH_SOCK` on Unix; on Windows `SSH_AUTH_SOCK` if set, else the
-    /// OpenSSH named pipe `\\.\pipe\openssh-ssh-agent`.
+    /// `SSH_AUTH_SOCK` if set; on Windows otherwise the OpenSSH named pipe
+    /// `\\.\pipe\openssh-ssh-agent`, then PuTTY's Pageant.
     #[default]
     Environment,
     /// A Unix socket path, or a Windows named pipe name (for example the
