@@ -21,11 +21,33 @@ pub struct Settings {
     crash_reports: Option<bool>,
     #[serde(default)]
     usage_stats: bool,
+    /// macOS: Option sends Meta instead of layout characters. Off by default.
+    #[serde(default)]
+    terminal_option_as_meta: bool,
+}
+
+/// Terminal behaviour only the app's terminal view reads. Kept under its own
+/// key so the shared `terminal` preferences and their schema stay unchanged;
+/// a missing or older value falls back to the defaults field by field.
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
+#[serde(default)]
+struct TerminalBehaviour {
+    option_as_meta: bool,
+}
+
+const TERMINAL_BEHAVIOUR: &str = "terminal_behaviour";
+
+fn terminal_behaviour() -> TerminalBehaviour {
+    open_store()
+        .ok()
+        .and_then(|store| store.get_setting_as(TERMINAL_BEHAVIOUR).ok().flatten())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
 pub fn settings_get() -> Result<Settings, String> {
     let config = load_config()?;
+    let behaviour = terminal_behaviour();
     Ok(Settings {
         theme: config.theme,
         locale: config.locale,
@@ -34,6 +56,7 @@ pub fn settings_get() -> Result<Settings, String> {
         ssh_engine: config.ssh_engine.unwrap_or_default(),
         crash_reports: config.telemetry.crash_reports,
         usage_stats: config.telemetry.usage_stats,
+        terminal_option_as_meta: behaviour.option_as_meta,
     })
 }
 
@@ -65,6 +88,14 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     store
         .set_setting_as("terminal", &terminal)
         .map_err(stored)?;
+    let behaviour = TerminalBehaviour {
+        option_as_meta: settings.terminal_option_as_meta,
+    };
+    if behaviour != terminal_behaviour() {
+        store
+            .set_setting_as(TERMINAL_BEHAVIOUR, &behaviour)
+            .map_err(stored)?;
+    }
     let mut telemetry = load_config()?.telemetry;
     telemetry.crash_reports = settings.crash_reports;
     telemetry.usage_stats = settings.usage_stats;
@@ -139,7 +170,16 @@ pub async fn ssh_status() -> Result<SshStatus, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_state, AgentState};
+    use super::{agent_state, AgentState, TerminalBehaviour};
+
+    #[test]
+    fn terminal_behaviour_defaults_when_missing_or_partial() {
+        let empty: TerminalBehaviour = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty, TerminalBehaviour::default());
+        assert!(!empty.option_as_meta);
+        let on: TerminalBehaviour = serde_json::from_str(r#"{"option_as_meta":true}"#).unwrap();
+        assert!(on.option_as_meta);
+    }
 
     #[test]
     fn tells_an_empty_agent_from_a_missing_one() {

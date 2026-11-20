@@ -4,19 +4,25 @@
 //! sent, so a report written by an older build cannot leak what a newer
 //! scrubber knows about.
 //!
+//! The placeholders and the core rules are the AnixOps shared redaction rule
+//! set (anix-kit `redact`, AnixOps Net `client-health`); the vectors in
+//! `tests/data/anixops-redact-vectors.json` must all pass. The path, MAC and
+//! account rules below are stricter, AnixOps SSH specific additions.
+//!
 //! What it removes, each replaced by a fixed placeholder:
 //!
 //! | looks like | placeholder |
 //! |---|---|
 //! | `scheme://...` URL | `<url>` |
+//! | UUID (`3f2504e0-4f89-11d3-9a0c-0305e82c3301`) | `<id>` |
 //! | `name@domain.tld` | `<email>` |
 //! | `user@host` (no dot) | `<account>` |
 //! | `C:\Users\name\...`, any drive path, UNC share | `<path>` |
 //! | `/home/x/..`, `/Users/x/..`, `/root/..`, `~/..`, any absolute Unix path with two or more segments | `<path>` |
 //! | MAC address | `<mac>` |
-//! | 16+ hex digits, 20+ base64-like characters with a digit | `<token>` |
-//! | IPv4 and IPv6 addresses | `<ip>` |
-//! | dotted host names (`a.b.tld`) | `<host>` |
+//! | 16+ hex digits, 20+ base64-like characters with a digit (a `key=` prefix is part of the match) | `<secret>` |
+//! | IPv4 and IPv6 addresses, with an optional `[..]` and `:port` | `<ip>` |
+//! | dotted host names (`a.b.tld`), with an optional `:port` | `<host>` |
 //!
 //! Known limit: a single-label name with no dot (`prod-db`) cannot be told
 //! from an ordinary word. Nothing in a message is trusted because of that:
@@ -46,13 +52,17 @@ static UNIX_HOME: LazyLock<Regex> = LazyLock::new(|| {
 static UNIX_PATH: LazyLock<Regex> = LazyLock::new(|| {
     re(r"(^|[^A-Za-z0-9_.)\]>/:])(/[A-Za-z0-9._@+%~=-]+(?:/[A-Za-z0-9._@+%~=-]*)+)")
 });
+static UUID: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\b")
+});
 static MAC: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b"));
 static HEX: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:0[xX])?[0-9A-Fa-f]{16,}\b"));
-static BASE64: LazyLock<Regex> = LazyLock::new(|| re(r"[A-Za-z0-9+/_-]{20,}={0,2}"));
-static IPV4: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"));
+static BASE64: LazyLock<Regex> =
+    LazyLock::new(|| re(r"((?:[A-Za-z0-9_.-]{1,40}=)?)([A-Za-z0-9+/_-]{20,}={0,2})"));
+static IPV4: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:\d{1,3}\.){3}\d{1,3}\b(?::\d{1,5}\b)?"));
 static HOST: LazyLock<Regex> = LazyLock::new(|| {
     re(
-        r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+(?:[A-Za-z]{2,63}|xn--[A-Za-z0-9-]{1,59})\b",
+        r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+(?:[A-Za-z]{2,63}|xn--[A-Za-z0-9-]{1,59})\b(?::\d{1,5}\b)?",
     )
 });
 
@@ -60,7 +70,7 @@ static HOST: LazyLock<Regex> = LazyLock::new(|| {
 /// host under: `main.rs`, `index.js`. Kept short on purpose.
 const FILE_EXTENSIONS: &[&str] = &[
     "rs", "toml", "json", "lock", "md", "js", "ts", "tsx", "jsx", "mjs", "css", "html", "log",
-    "so", "dll", "exe", "dylib", "yml", "yaml", "txt", "sql", "plist",
+    "so", "dll", "exe", "dylib", "yml", "yaml", "txt", "sql", "plist", "swift", "c", "h",
 ];
 
 /// Removes everything in the table of the module documentation. Idempotent:
@@ -80,19 +90,27 @@ pub fn scrub(input: &str) -> String {
     let s = UNIX_HOME.replace_all(&s, "${1}<path>");
     let s = UNIX_PATH.replace_all(&s, "${1}<path>");
     let s = MAC.replace_all(&s, "<mac>");
-    let s = HEX.replace_all(&s, "<token>");
+    let s = UUID.replace_all(&s, "<id>");
+    let s = HEX.replace_all(&s, "<secret>");
     let s = BASE64.replace_all(&s, |c: &Captures| {
-        let t = &c[0];
+        let t = &c[2];
         if t.bytes().any(|b| b.is_ascii_digit()) && t.bytes().any(|b| b.is_ascii_alphabetic()) {
-            "<token>".to_owned()
+            "<secret>".to_owned()
         } else {
-            t.to_owned()
+            c[0].to_owned()
         }
     });
     let s = scrub_ipv6(&s);
     let s = IPV4.replace_all(&s, "<ip>");
     let s = HOST.replace_all(&s, |c: &Captures| {
-        let tld = c[0].rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        let tld = c[0]
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .rsplit('.')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
         if FILE_EXTENSIONS.contains(&tld.as_str()) {
             c[0].to_owned()
         } else {
@@ -155,9 +173,21 @@ fn scrub_ipv6(s: &str) -> String {
         if run.is_empty() {
             continue;
         }
-        out.push_str(&s[last..start]);
+        let mut from = start;
+        let mut to = start + run.len();
+        if s[..start].ends_with('[') && s[to..].starts_with(']') {
+            from -= 1;
+            to += 1;
+            let digits = s[to..]
+                .strip_prefix(':')
+                .map_or(0, |p| p.bytes().take_while(u8::is_ascii_digit).count());
+            if digits > 0 {
+                to += 1 + digits;
+            }
+        }
+        out.push_str(&s[last..from]);
         out.push_str("<ip>");
-        last = start + run.len();
+        last = to;
     }
     out.push_str(&s[last..]);
     out
@@ -268,16 +298,21 @@ mod tests {
         let cases = [
             ("ssh root@prod-db failed", "ssh <account> failed"),
             ("mail a.b@example.com", "mail <email>"),
-            ("peer 10.0.0.5:22", "peer <ip>:22"),
-            ("bind [::1]:22", "bind [<ip>]:22"),
+            ("peer 10.0.0.5:22", "peer <ip>"),
+            ("bind [::1]:22", "bind <ip>"),
             ("x db1.example.com y", "x <host> y"),
             ("open /home/alice/a/b.txt now", "open <path> now"),
             ("open ~/x/y now", "open <path> now"),
             (r"C:\Users\Dave\x.txt", "<path>"),
             ("see https://example.com/x for more", "see <url> for more"),
             ("mac aa:bb:cc:dd:ee:ff", "mac <mac>"),
-            ("0123456789abcdef", "<token>"),
+            ("0123456789abcdef", "<secret>"),
             ("a /etc/hosts.", "a <path>"),
+            ("id 3f2504e0-4f89-11d3-9a0c-0305e82c3301.", "id <id>."),
+            ("to db.example.com:2222 now", "to <host> now"),
+            ("bind [2001:db8::1]:443 ok", "bind <ip> ok"),
+            ("key=Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MA==", "<secret>"),
+            ("at src/lib.rs:42:7: x", "at src/lib.rs:42:7: x"),
         ];
         for (input, want) in cases {
             assert_eq!(scrub(input), want, "{input:?}");
@@ -321,7 +356,7 @@ mod tests {
 
     #[test]
     fn placeholders_do_not_collide_with_patterns() {
-        let all = "<url> <email> <account> <path> <mac> <token> <ip> <host>";
+        let all = "<url> <email> <account> <path> <mac> <secret> <id> <ip> <host>";
         assert_eq!(scrub(all), all);
     }
 
@@ -329,7 +364,7 @@ mod tests {
     fn handles_multiple_secrets_in_one_message() {
         let out =
             scrub("user@h.example.org from 10.0.0.1 opened /home/u/.ssh/id_rsa via [fe80::1]");
-        assert_eq!(out, "<email> from <ip> opened <path> via [<ip>]");
+        assert_eq!(out, "<email> from <ip> opened <path> via <ip>");
     }
 
     #[test]

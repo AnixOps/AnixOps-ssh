@@ -84,6 +84,12 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "EngineConnectionsParams",
         "EngineConnectionsResult",
     ),
+    (
+        "monitor.sample",
+        "MonitorSampleParams",
+        "MonitorSampleResult",
+    ),
+    ("monitor.signal", "MonitorSignalParams", ""),
     ("sftp.open", "SftpOpenParams", "SftpOpenResult"),
     ("sftp.list", "SftpListParams", "SftpListResult"),
     ("sftp.mkdir", "SftpMkdirParams", ""),

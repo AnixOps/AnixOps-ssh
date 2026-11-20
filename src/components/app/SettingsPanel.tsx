@@ -29,6 +29,7 @@ import { completionPrefs, onCompletionPrefs, updateCompletionPrefs } from "@/lib
 import { t } from "@/lib/i18n";
 import type { LocaleSetting, ThemeSetting } from "@/lib/prefsMirror";
 import { onSettings, settings, updateSettings, type Settings } from "@/lib/settings";
+import { isMac } from "@/lib/shortcuts";
 import { pendingText, privacyView, type TelemetryStatus } from "@/lib/telemetry";
 import { cn } from "@/lib/utils";
 
@@ -134,6 +135,15 @@ export function SettingsPanel({
               ))}
             </Select>
           </SettingsRow>
+          {isMac && (
+            <SettingsRow label={t.optionAsMeta} hint={t.optionAsMetaHint}>
+              <Switch
+                on={current.terminalOptionAsMeta}
+                label={t.optionAsMeta}
+                onClick={() => update({ terminalOptionAsMeta: !current.terminalOptionAsMeta })}
+              />
+            </SettingsRow>
+          )}
         </SettingsGroup>
 
         <SettingsGroup title={t.completion}>

@@ -20,6 +20,8 @@ mod import;
 #[cfg(desktop)]
 mod known_hosts;
 #[cfg(desktop)]
+mod monitor;
+#[cfg(desktop)]
 mod serial;
 #[cfg(desktop)]
 mod session_logs;
@@ -132,6 +134,8 @@ fn desktop_run() {
             files::sftp_close,
             files::transfer_start,
             files::transfer_cancel,
+            monitor::monitor_sample,
+            monitor::monitor_signal,
             askpass::askpass_reply,
             askpass::askpass_unlock,
             sync::sync_call,
