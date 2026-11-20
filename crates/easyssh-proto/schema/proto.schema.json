@@ -1077,6 +1077,7 @@
         "xshell",
         "finalshell",
         "termius",
+        "ansible",
         "csv",
         "openssh"
       ],

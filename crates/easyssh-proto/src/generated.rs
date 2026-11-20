@@ -980,6 +980,8 @@ pub enum ImportFormat {
     Finalshell,
     #[serde(rename = "termius")]
     Termius,
+    #[serde(rename = "ansible")]
+    Ansible,
     #[serde(rename = "csv")]
     Csv,
     #[serde(rename = "openssh")]
@@ -994,6 +996,7 @@ impl ::std::fmt::Display for ImportFormat {
             Self::Xshell => f.write_str("xshell"),
             Self::Finalshell => f.write_str("finalshell"),
             Self::Termius => f.write_str("termius"),
+            Self::Ansible => f.write_str("ansible"),
             Self::Csv => f.write_str("csv"),
             Self::Openssh => f.write_str("openssh"),
         }
@@ -1011,6 +1014,7 @@ impl ::std::str::FromStr for ImportFormat {
             "xshell" => Ok(Self::Xshell),
             "finalshell" => Ok(Self::Finalshell),
             "termius" => Ok(Self::Termius),
+            "ansible" => Ok(Self::Ansible),
             "csv" => Ok(Self::Csv),
             "openssh" => Ok(Self::Openssh),
             _ => Err("invalid value".into()),
