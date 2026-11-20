@@ -58,6 +58,21 @@ first. Details per phase are in
 | 6 | v2.x | Terminal | Splits and broadcast, shell integration, completion specs, AI with your own key (done: Anthropic, OpenAI-compatible and Ollama, review before send, secret scrubbing), encrypted logs (done: per-host recording, viewer, export, retention; sharing through a vault is a hook only) |
 | 7 | — | Mobile | Tauri mobile app with the embedded engine. Viability prototype done: engine crates build for Android and iOS (`easyssh-engine`), CI builds an Android debug APK and an iOS simulator app, a touch UI has the host list and a terminal with a key bar. Recommendation: commit, Android first, after one device test; evidence and blockers in [docs/mobile-prototype.md](docs/mobile-prototype.md). Vault on mobile done (compiled in CI, not yet run on a device): Android Keystore and iOS Keychain key stores, biometric unlock bound to the sensor with the passphrase as fallback, saved passwords and keys, lock on background, first-run flow and vault settings. Terminal experience done (Playwright touch tests in CI, not yet run on a device): IME and soft-keyboard handling, full and customisable key bar, touch selection with handles and copy/paste, one- and two-finger scrolling, pinch font size, hardware shortcuts on tablets, background policy with clean close, tmux/screen attach with automatic reconnect, optional Android foreground notification, accessibility pass. The connection registry, SFTP, tunnels and sync live in the engine, and the phone has files, port forwards (local, remote and SOCKS, with the phone's limits shown), jump hosts that use their own saved login, groups and tags and sync sign-in; terminal, files and forwards on a host share one connection that uses the saved login (also compiled in CI, not yet run on a device) |
 
+## 2.2.x and 2.3.0
+
+Planned 2026-11-20; details in [docs/roadmap-2.2.md](docs/roadmap-2.2.md).
+
+| Version | Theme | Scope |
+|---|---|---|
+| v2.2.1 | Transfers | Transfer queue within the server's MaxSessions, pipelined SFTP on the built-in engine, progress for uploads and folders, paths in errors |
+| v2.2.2 | Connections | Automatic reconnect for desktop terminals, Pageant on Windows, jump hosts on mobile like desktop |
+| v2.2.3 | Terminal and files | Font family, line height and cursor settings, a better find bar, ⌘K clears on macOS, back-pressure for large output, multi-select, chmod, rename to move |
+| v2.3 | Daily-use features | Server monitor for OpenSSH-engine hosts and on mobile, edit remote files in a local editor, files pane follows the terminal's folder, rz/sz (ZMODEM and trzsz), X11 forwarding through OpenSSH, Unix socket forwards, quick connect, `anixops-ssh://` links |
+
+Owner tasks that do not block this work: a hosted sync offer, device tests
+on real phones and machines, store and signing secrets, and checking the
+update feed secrets.
+
 ## Not doing
 
 Our own hosted-only cloud (the server is always self-hostable and open
