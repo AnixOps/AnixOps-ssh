@@ -43,8 +43,9 @@ export const shortcutTable: ShortcutRow[] = [
   { id: "row-menu", group: "list", title: () => t.more, pc: "Shift+F10", mac: "⌃↵" },
 ];
 
-/** The shortcut for a command, as the platform writes it; "" when there is none. */
-export function shortcutHint(id: ShortcutId): string {
-  const row = shortcutTable.find((candidate) => candidate.id === id);
+/** The shortcut for a command, as the platform writes it; "" when there is none.
+ *  `group` picks the row of a command listed twice (find: hosts or terminal). */
+export function shortcutHint(id: ShortcutId, group?: ShortcutRow["group"]): string {
+  const row = shortcutTable.find((candidate) => candidate.id === id && (!group || candidate.group === group));
   return row ? (isMac ? row.mac : row.pc) : "";
 }

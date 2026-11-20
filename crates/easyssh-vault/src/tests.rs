@@ -368,6 +368,7 @@ fn secret_source_returns_saved_values_and_locked_when_locked() {
                     password: set("pw"),
                     private_key: set("KEY"),
                     passphrase: set("phrase"),
+                    ..SecretsUpdate::default()
                 },
             )
             .unwrap();

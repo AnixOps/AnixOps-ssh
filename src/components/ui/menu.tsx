@@ -1,6 +1,6 @@
 import { Ellipsis } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Button, type ButtonVariant } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -50,7 +50,7 @@ export function Menu({
   touch?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [place, setPlace] = useState<{ top: number; left: number } | null>(null);
+  const [place, setPlace] = useState<{ top: number; left: number; inModal: boolean } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -63,7 +63,9 @@ export function Menu({
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) return;
     const box = buttonRef.current.getBoundingClientRect();
-    setPlace({ top: box.bottom + 6, left: align === "end" ? box.right : box.left });
+    // Inside a dialog the list must sit above the dialog's layer.
+    const inModal = buttonRef.current.closest('[aria-modal="true"]') !== null;
+    setPlace({ top: box.bottom + 6, left: align === "end" ? box.right : box.left, inModal });
   }, [open, align]);
 
   useEffect(() => {
@@ -83,27 +85,6 @@ export function Menu({
     };
   }, [open]);
 
-  useEffect(() => {
-    if (open && place) listRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')?.focus();
-  }, [open, place]);
-
-  const keys = (event: KeyboardEvent) => {
-    const items = [...(listRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? [])];
-    const index = items.indexOf(document.activeElement as HTMLElement);
-    const go = (next: number) => {
-      event.preventDefault();
-      items[(next + items.length) % items.length]?.focus();
-    };
-    if (event.key === "ArrowDown") go(index + 1);
-    else if (event.key === "ArrowUp") go(index - 1);
-    else if (event.key === "Home") go(0);
-    else if (event.key === "End") go(items.length - 1);
-    else if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      close(true);
-    } else if (event.key === "Tab") close(false);
-  };
 
   const trigger = (
     <Button
@@ -132,55 +113,169 @@ export function Menu({
   return (
     <>
       {touch ? trigger : <Tooltip label={label}>{trigger}</Tooltip>}
-      {createPortal(
-        <AnimatePresence>
-          {open && place && (
-            <motion.div
-              id={id}
-              ref={listRef}
-              role="menu"
-              aria-label={label}
-              onKeyDown={keys}
-              style={{ top: place.top, left: place.left }}
-              className={cn(
-                "fixed z-dropdown rounded-sm bg-bg-elevated p-1 shadow-2 ring-1 ring-separator",
-                touch ? "w-64" : "w-52",
-                align === "end" ? "origin-top-right -translate-x-full" : "origin-top-left",
-              )}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1, transition: { duration: duration.micro, ease: ease.standard } }}
-              exit={{ opacity: 0, transition: { duration: duration.micro, ease: ease.exit } }}
-            >
-              {items.map((entry, index) =>
-                entry === "separator" ? (
-                  <div key={`sep-${index}`} role="separator" className="my-1 h-px bg-separator" />
-                ) : (
-                  <button
-                    key={entry.key}
-                    type="button"
-                    role="menuitem"
-                    disabled={entry.disabled}
-                    onClick={() => {
-                      close(true);
-                      entry.onSelect();
-                    }}
-                    className={cn(
-                      "flex w-full items-center rounded-xs text-left text-callout hover:bg-fill-1 focus-visible:bg-fill-1 focus-visible:outline-none disabled:opacity-40 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:stroke-[1.5]",
-                      touch ? "h-11 gap-3 px-3" : "h-8 gap-2 px-2",
-                      entry.danger ? "text-danger" : "text-label-1 [&_svg]:text-label-2",
-                    )}
-                  >
-                    {entry.icon}
-                    <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-                    {entry.shortcut && <kbd className="font-sans text-caption text-label-3">{entry.shortcut}</kbd>}
-                  </button>
-                ),
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>,
-        document.body,
-      )}
+      <MenuList
+        id={id}
+        listRef={listRef}
+        label={label}
+        place={open ? place : null}
+        align={align}
+        touch={touch}
+        items={items}
+        onClose={close}
+      />
     </>
+  );
+}
+
+/** The list of a menu, rendered into <body> at `place` (hidden when null). */
+function MenuList({
+  id,
+  listRef,
+  label,
+  place,
+  align,
+  touch,
+  items,
+  onClose,
+}: {
+  id: string;
+  listRef: RefObject<HTMLDivElement | null>;
+  label: string;
+  /** `inModal`: the list must sit above an open dialog's layer. */
+  place: { top: number; left: number; inModal?: boolean } | null;
+  align: "start" | "end";
+  touch: boolean;
+  items: MenuEntry[];
+  /** `returnFocus`: Escape or a chosen item, as opposed to Tab away. */
+  onClose: (returnFocus: boolean) => void;
+}) {
+  useEffect(() => {
+    if (place) listRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')?.focus();
+  }, [place, listRef]);
+
+  const keys = (event: KeyboardEvent) => {
+    const items = [...(listRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? [])];
+    const index = items.indexOf(document.activeElement as HTMLElement);
+    const go = (next: number) => {
+      event.preventDefault();
+      items[(next + items.length) % items.length]?.focus();
+    };
+    if (event.key === "ArrowDown") go(index + 1);
+    else if (event.key === "ArrowUp") go(index - 1);
+    else if (event.key === "Home") go(0);
+    else if (event.key === "End") go(items.length - 1);
+    else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      onClose(true);
+    } else if (event.key === "Tab") onClose(false);
+  };
+
+  return createPortal(
+    <AnimatePresence>
+      {place && (
+        <motion.div
+          id={id}
+          ref={listRef}
+          role="menu"
+          aria-label={label}
+          onKeyDown={keys}
+          style={{ top: place.top, left: place.left, zIndex: place.inModal ? "calc(var(--z-modal) + 1)" : undefined }}
+          className={cn(
+            "fixed z-dropdown rounded-sm bg-bg-elevated p-1 shadow-2 ring-1 ring-separator",
+            touch ? "w-64" : "w-52",
+            align === "end" ? "origin-top-right -translate-x-full" : "origin-top-left",
+          )}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1, transition: { duration: duration.micro, ease: ease.standard } }}
+          exit={{ opacity: 0, transition: { duration: duration.micro, ease: ease.exit } }}
+        >
+          {items.map((entry, index) =>
+            entry === "separator" ? (
+              <div key={`sep-${index}`} role="separator" className="my-1 h-px bg-separator" />
+            ) : (
+              <button
+                key={entry.key}
+                type="button"
+                role="menuitem"
+                disabled={entry.disabled}
+                onClick={() => {
+                  onClose(true);
+                  entry.onSelect();
+                }}
+                className={cn(
+                  "flex w-full items-center rounded-xs text-left text-callout hover:bg-fill-1 focus-visible:bg-fill-1 focus-visible:outline-none disabled:opacity-40 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:stroke-[1.5]",
+                  touch ? "h-11 gap-3 px-3" : "h-8 gap-2 px-2",
+                  entry.danger ? "text-danger" : "text-label-1 [&_svg]:text-label-2",
+                )}
+              >
+                {entry.icon}
+                <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+                {entry.shortcut && <kbd className="font-sans text-caption text-label-3">{entry.shortcut}</kbd>}
+              </button>
+            ),
+          )}
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body,
+  );
+}
+
+/** The same list opened at the pointer by a right-click (`at`, in viewport
+ *  pixels; null hides it). Clicking elsewhere, blurring the window or Escape
+ *  closes it; `onClose` then gives focus back to where it came from. */
+export function ContextMenu({
+  label,
+  at,
+  items,
+  onClose,
+}: {
+  label: string;
+  at: { x: number; y: number } | null;
+  items: MenuEntry[];
+  onClose: () => void;
+}) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const id = useId();
+  const [place, setPlace] = useState<{ top: number; left: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!at) return setPlace(null);
+    // Keep the list on screen: open up or to the left near the edges.
+    const width = 208;
+    const height = (listRef.current?.offsetHeight ?? 0) || items.length * 32 + 8;
+    setPlace({
+      left: Math.max(4, Math.min(at.x, window.innerWidth - width - 4)),
+      top: at.y + height > window.innerHeight - 4 ? Math.max(4, at.y - height) : at.y,
+    });
+  }, [at, items.length]);
+
+  useEffect(() => {
+    if (!at) return;
+    const outside = (event: MouseEvent) => {
+      if (!listRef.current?.contains(event.target as Node)) onClose();
+    };
+    document.addEventListener("mousedown", outside);
+    window.addEventListener("blur", onClose);
+    window.addEventListener("resize", onClose);
+    return () => {
+      document.removeEventListener("mousedown", outside);
+      window.removeEventListener("blur", onClose);
+      window.removeEventListener("resize", onClose);
+    };
+  }, [at, onClose]);
+
+  return (
+    <MenuList
+      id={id}
+      listRef={listRef}
+      label={label}
+      place={place}
+      align="start"
+      touch={false}
+      items={items}
+      onClose={onClose}
+    />
   );
 }

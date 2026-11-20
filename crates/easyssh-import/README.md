@@ -143,6 +143,39 @@ like the account API objects (`label`, `address`, `group`, `ssh_config.port`,
 for jump hosts). Passwords and keys are never imported. Expect to adjust this
 against real exports.
 
+### Ansible inventory (`ansible`)
+
+Static inventories, YAML and INI (dynamic inventory scripts are not run).
+YAML: groups under `all` / top-level keys with `hosts`, `children` (nested
+arbitrarily) and `vars`; aliases and merge keys work, vault values are dropped.
+INI: `[group]`, `[group:children]`, `[group:vars]`, `host key=value` with shell
+quoting, `host:port`, hosts before any section in `ungrouped`. Ranges
+(`web[01:03].example.com`, `[a:c]`, `[1:9:2]`) expand to at most 1024 hosts per
+pattern and 20000 per inventory, with a warning beyond.
+
+Variables apply as in Ansible: `all` < parent group < child group (deeper
+wins, same depth by name) < host. Mapping: inventory name -> `label`;
+`ansible_host` (else the name) -> `hostname`; `ansible_user` /
+`ansible_ssh_user`; `ansible_port` / `ansible_ssh_port`;
+`ansible_ssh_private_key_file` -> `identity_file` (a path, never read);
+`-J x` or `-o ProxyJump=x` in `ansible_ssh_common_args` / `ansible_ssh_extra_args`
+-> `jump` (a `ProxyCommand` there is only a warning).
+
+`group_path` is the chain of child groups above the host (`all` and `ungrouped`
+left out; with several parents the first defined is followed). A host in
+several groups is filed under the **deepest** one (ties: the group listed first
+for that host); its other groups go to the notes as `Tags: a, b`.
+
+Not imported, each with a warning: passwords (`ansible_password`,
+`ansible_ssh_pass`, `ansible_become_pass`, ...), `{{ templated }}` values (the
+field stays empty; a templated `ansible_host` falls back to the inventory name),
+hosts whose `ansible_connection` is not SSH (`local`, `winrm`, `docker`, ...,
+counted in `skipped`). Detection needs `hosts:`/`children:` keys (YAML) or
+`:children` / `:vars` sections or `ansible_*=` variables (INI), so plain INI
+host lists must be chosen by hand. The YAML reader is `serde_norway`, a
+maintained fork of the archived `serde_yaml` (its alias-expansion limit stops
+"billion laughs" inputs).
+
 ### CSV (`csv_format`)
 
 EasySSH's own format; the header row is required, columns are case-insensitive

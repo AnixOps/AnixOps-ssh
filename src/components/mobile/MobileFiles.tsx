@@ -36,7 +36,7 @@ import { deliver, forget, shareOptions, type ShareChoice } from "@/lib/mobileSha
 import { discardStaged, stageFile } from "@/lib/mobileStage";
 import { cn } from "@/lib/utils";
 
-type Phase = "preparing" | "running" | "done" | "failed" | "cancelled";
+type Phase = "preparing" | "queued" | "running" | "done" | "failed" | "cancelled";
 
 interface Transfer {
   key: number;
@@ -161,7 +161,8 @@ export function MobileFiles({
   // ---- transfers --------------------------------------------------------
 
   const track = (key: number, event: TransferEvent, folder: string | null) => {
-    if (event.kind === "progress") update(key, { bytes: event.bytes });
+    if (event.kind === "started") update(key, { phase: "running" });
+    else if (event.kind === "progress") update(key, { bytes: event.bytes, phase: "running" });
     else if (event.kind === "done") {
       update(key, { phase: "done" });
       if (folder === pathRef.current) go(folder);
@@ -191,7 +192,7 @@ export function MobileFiles({
           { hostId: host.id, upload: true, remote: folder, local: staged },
           (event) => track(key, event, folder),
         );
-        update(key, { id: started.id });
+        update(key, { id: started.id, ...(started.queued ? { phase: "queued" as const } : {}) });
       } catch (reason) {
         discardStaged(staged);
         update(key, { phase: "failed", message: String(reason) });
@@ -210,7 +211,7 @@ export function MobileFiles({
         { hostId: host.id, upload: false, remote: joinPath(pathRef.current, entry.name) },
         (event) => track(key, event, null),
       );
-      update(key, { id: started.id, local: started.local });
+      update(key, { id: started.id, local: started.local, ...(started.queued ? { phase: "queued" as const } : {}) });
     } catch (reason) {
       update(key, { phase: "failed", message: String(reason) });
     }
@@ -470,12 +471,14 @@ function TransferRow({
   onDismiss: () => void;
   onHand: (choice: ShareChoice) => void;
 }) {
-  const active = item.phase === "preparing" || item.phase === "running";
+  const active = item.phase === "preparing" || item.phase === "queued" || item.phase === "running";
   const percent = item.total > 0 ? Math.min(100, Math.round((item.bytes / item.total) * 100)) : 0;
   const status =
     item.phase === "preparing"
       ? t.mobilePreparing
-      : item.phase === "running"
+      : item.phase === "queued"
+        ? t.transferQueued
+        : item.phase === "running"
         ? item.total > 0
           ? `${formatSize(item.bytes)} / ${formatSize(item.total)}`
           : formatSize(item.bytes)

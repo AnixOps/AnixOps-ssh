@@ -27,6 +27,8 @@ struct Client {
     password: Mutex<Option<String>>,
     host_keys: Mutex<Vec<HostKeyPrompt>>,
     asks: Mutex<Vec<AskpassPrompt>>,
+    /// `(kind, transfer id, status)` of `transfer.started` and `transfer.done`.
+    transfers: Mutex<Vec<(String, String, String)>>,
 }
 
 impl Client {
@@ -37,6 +39,7 @@ impl Client {
             password: Mutex::new(None),
             host_keys: Mutex::new(Vec::new()),
             asks: Mutex::new(Vec::new()),
+            transfers: Mutex::new(Vec::new()),
         })
     }
 
@@ -55,6 +58,21 @@ impl LinkHandler for Client {
         self.asks.lock().unwrap().push(prompt);
         let answer = self.password.lock().unwrap().clone();
         let _ = self.link().askpass_reply(id, answer);
+    }
+
+    fn transfer_started(&self, transfer_id: &str) {
+        self.transfers
+            .lock()
+            .unwrap()
+            .push(("started".into(), transfer_id.into(), String::new()));
+    }
+
+    fn transfer_done(&self, transfer_id: &str, status: &str, error: Option<&str>) {
+        self.transfers.lock().unwrap().push((
+            "done".into(),
+            transfer_id.into(),
+            format!("{status} {}", error.unwrap_or_default()),
+        ));
     }
 
     fn hostkey_prompt(&self, prompt: HostKeyPrompt) {
@@ -345,6 +363,94 @@ async fn terminal_files_and_tunnel_share_one_connection() {
 
 #[tokio::test]
 #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn monitor_reads_the_server_on_the_terminal_connection() {
+    let (rig, hosts) = Rig::start(&[("target", "e2e-target")], None).await;
+    let host = &hosts[0];
+
+    // No terminal yet: the monitor never connects on its own.
+    let error = rig
+        .link
+        .request("monitor.sample", json!({"host_id": host.id}))
+        .await
+        .expect_err("no connection to read through");
+    assert_eq!(error.code, "not_connected", "{error}");
+    assert_eq!(rig.connections().await["opened"], 0);
+
+    let id = shell_says(
+        &rig,
+        host,
+        "sleep 4242 & echo started-$((1+1))",
+        "started-2",
+    )
+    .await;
+    let sample = within(
+        "monitor.sample",
+        rig.link.request(
+            "monitor.sample",
+            json!({"host_id": host.id, "detail": true}),
+        ),
+    )
+    .await
+    .expect("monitor.sample");
+    let output = sample["output"].as_str().unwrap();
+    for section in [
+        "@os Linux",
+        "@uptime",
+        "@loadavg",
+        "@stat",
+        "@meminfo",
+        "@netdev",
+        "@df",
+        "@pstat",
+        "@ps",
+        "@exe",
+    ] {
+        assert!(output.contains(section), "{section} missing in {output}");
+    }
+    assert!(output.trim_end().ends_with("@end"), "{output}");
+    assert!(sample["latency_ms"].as_f64().is_some(), "{sample}");
+
+    // The process list can end a process the login user owns.
+    let pid: u64 = output
+        .lines()
+        .find(|line| line.trim_end().ends_with("sleep 4242"))
+        .and_then(|line| line.split_whitespace().next())
+        .and_then(|pid| pid.parse().ok())
+        .unwrap_or_else(|| panic!("sleep 4242 not listed in {output}"));
+    rig.link
+        .request(
+            "monitor.signal",
+            json!({"host_id": host.id, "pid": pid, "signal": "TERM"}),
+        )
+        .await
+        .expect("monitor.signal");
+    let mut gone = false;
+    for _ in 0..50 {
+        if let Err(error) = rig
+            .link
+            .request(
+                "monitor.signal",
+                json!({"host_id": host.id, "pid": pid, "signal": "TERM"}),
+            )
+            .await
+        {
+            assert_eq!(error.code, "signal_failed", "{error}");
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(gone, "the process outlived TERM");
+
+    // Still the one connection the terminal opened.
+    let info = rig.connections().await;
+    assert_eq!(info["opened"], 1, "{info}");
+    rig.link.close_session(&id);
+    rig.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
 async fn jump_host_runs_on_the_built_in_engine() {
     let (rig, hosts) = Rig::start(&[("via bastion", "e2e-target-via-bastion")], None).await;
     let id = shell_says(&rig, &hosts[0], "echo jumped-$((40+2))", "jumped-42").await;
@@ -494,6 +600,93 @@ async fn proxy_command_falls_back_to_openssh() {
         .await
         .expect("engine.resolve");
     assert_eq!(resolved["engine"], "openssh");
+    // The monitor has no built-in connection to read through here.
+    let error = rig
+        .link
+        .request("monitor.sample", json!({"host_id": hosts[0].id}))
+        .await
+        .expect_err("OpenSSH hosts have no monitor");
+    assert_eq!(error.code, "wrong_engine", "{error}");
     rig.link.close_session(&opened.session_id);
+    rig.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn many_enqueued_transfers_share_the_connection_and_wait_their_turn() {
+    // More files than sshd's 10 sessions per connection.
+    const FILES: usize = 14;
+    let (rig, hosts) = Rig::start(&[("target", "e2e-target")], None).await;
+    let host = &hosts[0];
+    let scratch = tempfile::tempdir().unwrap();
+    let sftp = within(
+        "sftp.open",
+        rig.link.request("sftp.open", json!({"host_id": host.id})),
+    )
+    .await
+    .expect("sftp.open");
+    let sftp_id = sftp["sftp_id"].as_str().unwrap().to_owned();
+    let home = sftp["home"].as_str().unwrap().to_owned();
+    let dir = format!("{home}/{}", easyssh_e2e::unique_name("e2e-enqueue"));
+    rig.link
+        .request("sftp.mkdir", json!({"sftp_id": sftp_id, "path": dir}))
+        .await
+        .expect("sftp.mkdir");
+
+    let mut ids = Vec::new();
+    let mut queued = 0;
+    for index in 0..FILES {
+        let local = scratch.path().join(format!("f{index}.bin"));
+        std::fs::write(&local, easyssh_e2e::sample_bytes(6 * 1024 * 1024 + index)).unwrap();
+        let answer = rig
+            .link
+            .request(
+                "transfer.enqueue",
+                json!({
+                    "host_id": host.id,
+                    "direction": "upload",
+                    "local_path": local.to_string_lossy(),
+                    "remote_path": format!("{dir}/f{index}.bin"),
+                }),
+            )
+            .await
+            .expect("transfer.enqueue");
+        queued += usize::from(answer["queued"].as_bool().unwrap());
+        ids.push(answer["transfer_id"].as_str().unwrap().to_owned());
+    }
+    assert!(queued > 0, "the later ones wait");
+    eventually("every transfer ends", || {
+        rig.client
+            .transfers
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|t| t.0 == "done")
+            .count()
+            == FILES
+    })
+    .await;
+    let seen = rig.client.transfers.lock().unwrap().clone();
+    for id in &ids {
+        assert!(
+            seen.iter()
+                .any(|t| t.0 == "done" && &t.1 == id && t.2.starts_with("completed")),
+            "{id}: {seen:?}"
+        );
+    }
+    assert_eq!(seen.iter().filter(|t| t.0 == "started").count(), queued);
+    let listed = rig
+        .link
+        .request("sftp.list", json!({"sftp_id": sftp_id, "path": dir}))
+        .await
+        .expect("sftp.list");
+    assert_eq!(listed["entries"].as_array().unwrap().len(), FILES);
+    rig.link
+        .request(
+            "sftp.remove",
+            json!({"sftp_id": sftp_id, "path": dir, "directory": true}),
+        )
+        .await
+        .expect("sftp.remove");
     rig.finish().await;
 }

@@ -7,6 +7,32 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use uuid::Uuid;
 
+/// How many transfers of one host run at the same time when the user has not
+/// said otherwise. WinSCP and FileZilla default to 2 to 3; sshd allows 10
+/// sessions per connection (`MaxSessions`) and shells and the file pane need
+/// some of them.
+pub const DEFAULT_CONCURRENT_TRANSFERS: usize = 3;
+/// The most a host may be asked for; the rest of sshd's 10 sessions stay free.
+pub const MAX_CONCURRENT_TRANSFERS: usize = 6;
+
+/// The number of transfers per host that run at once:
+/// `EASYSSH_TRANSFER_CONCURRENCY` (1 to 6) or [`DEFAULT_CONCURRENT_TRANSFERS`].
+pub fn concurrent_transfers() -> usize {
+    parse_concurrency(
+        std::env::var("EASYSSH_TRANSFER_CONCURRENCY")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn parse_concurrency(value: Option<&str>) -> usize {
+    value
+        .and_then(|text| text.trim().parse::<usize>().ok())
+        .map_or(DEFAULT_CONCURRENT_TRANSFERS, |n| {
+            n.clamp(1, MAX_CONCURRENT_TRANSFERS)
+        })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransferDirection {
@@ -230,6 +256,17 @@ pub fn local_path_is_directory(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn concurrency_is_small_and_bounded() {
+        use super::parse_concurrency as parse;
+        assert_eq!(parse(None), 3);
+        assert_eq!(parse(Some("2")), 2);
+        assert_eq!(parse(Some(" 4 ")), 4);
+        assert_eq!(parse(Some("0")), 1);
+        assert_eq!(parse(Some("64")), 6);
+        assert_eq!(parse(Some("many")), 3);
+    }
+
     use super::*;
     use crate::domain::{Connection, ConnectionTarget};
     #[test]

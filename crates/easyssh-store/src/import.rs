@@ -298,13 +298,28 @@ fn mark_hosts(store: &Store, hosts: Vec<ImportHost>, scope: Option<&str>) -> Res
         );
     }
     let mut hosts: Vec<ImportHost> = hosts;
+    // Stored hosts a service import created are found by their source key.
+    // Matching a service host by address would let one asset's host swallow
+    // another's when several share an address (assets behind a gateway).
+    let bound: BTreeSet<&String> = bindings.0.values().collect();
+    let stored_free: BTreeSet<Key> = store
+        .list_hosts()?
+        .iter()
+        .filter(|record| !bound.contains(&record.item.connection.id))
+        .filter_map(|record| key_of(&record.item.connection.target))
+        .collect();
     for host in &mut hosts {
         let bound = host
             .source
             .as_deref()
             .and_then(|source| bindings.get(source))
             .is_some_and(|id| by_id.contains_key(id));
-        host.exists = Some(bound || stored.contains(&key_of_host(host)));
+        let by_address = if host.source.is_some() {
+            stored_free.contains(&key_of_host(host))
+        } else {
+            stored.contains(&key_of_host(host))
+        };
+        host.exists = Some(bound || by_address);
         host.problem = host.connection().err();
     }
     let removed = match scope {
@@ -498,7 +513,15 @@ pub fn import_apply(store: &Store, request: &ApplyRequest) -> Result<ApplyOutcom
         let from_source = by_source.is_some();
         let existing = match request.duplicates {
             DuplicatePolicy::KeepBoth => None,
-            _ => by_source.or_else(|| by_key.get(&key).cloned()),
+            _ => by_source.or_else(|| {
+                by_key
+                    .get(&key)
+                    // A host another source created is not this one's duplicate.
+                    .filter(|id| {
+                        host.source.is_none() || !bindings.0.values().any(|bound| bound == *id)
+                    })
+                    .cloned()
+            }),
         };
         if let (Some(id), Some(source)) = (&existing, &host.source) {
             if bindings.get(source) != Some(id) {

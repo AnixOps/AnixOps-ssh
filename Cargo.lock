@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "anixops-ssh"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -115,6 +115,7 @@ dependencies = [
  "easyssh-store",
  "easyssh-telemetry",
  "easyssh-unlock",
+ "easyssh-update",
  "easyssh-vault",
  "easysshd",
  "jni 0.22.4",
@@ -1746,7 +1747,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "easyssh-ai"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "base64 0.22.1",
  "easyssh-crypto",
@@ -1762,7 +1763,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-core"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1776,7 +1777,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-crypto"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -1796,7 +1797,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-e2e"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1810,13 +1811,14 @@ dependencies = [
  "easysshd",
  "portable-pty",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
 ]
 
 [[package]]
 name = "easyssh-engine"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1842,13 +1844,14 @@ dependencies = [
 
 [[package]]
 name = "easyssh-import"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "csv",
  "easyssh-core",
  "quick-xml 0.37.5",
  "serde",
  "serde_json",
+ "serde_norway",
  "tempfile",
  "uuid",
  "zip",
@@ -1856,7 +1859,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-mobile-keys"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "base64 0.22.1",
  "easyssh-core",
@@ -1869,7 +1872,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-proto"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "chrono",
  "easyssh-core",
@@ -1885,7 +1888,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-server"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1911,9 +1914,10 @@ dependencies = [
 
 [[package]]
 name = "easyssh-services"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "easyssh-core",
  "easyssh-crypto",
  "easyssh-store",
@@ -1930,7 +1934,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-sessionlog"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "chacha20poly1305",
  "chrono",
@@ -1945,10 +1949,11 @@ dependencies = [
 
 [[package]]
 name = "easyssh-ssh"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "bytes",
  "ctap-hid-fido2",
  "ed25519-dalek 3.0.0",
  "hmac 0.12.1",
@@ -1969,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-store"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1990,7 +1995,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-sync"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "base64 0.22.1",
  "easyssh-crypto",
@@ -2007,7 +2012,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-telemetry"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -2021,7 +2026,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-unlock"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "block2",
  "ctap-hid-fido2",
@@ -2035,8 +2040,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "easyssh-update"
+version = "2.2.1"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek 3.0.0",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "ureq",
+]
+
+[[package]]
 name = "easyssh-vault"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "easyssh-core",
  "easyssh-crypto",
@@ -2049,7 +2068,7 @@ dependencies = [
 
 [[package]]
 name = "easysshd"
-version = "2.1.0"
+version = "2.2.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2077,6 +2096,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serialport",
+ "sha1 0.10.7",
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
@@ -6097,6 +6117,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_norway"
+version = "0.9.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e408f29489b5fd500fab51ff1484fc859bb655f32c671f307dcd733b72e8168c"
+dependencies = [
+ "indexmap 2.14.2",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml-norway",
+]
+
+[[package]]
 name = "serde_path_to_error"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7684,6 +7717,12 @@ dependencies = [
  "crypto-common 0.2.2",
  "ctutils",
 ]
+
+[[package]]
+name = "unsafe-libyaml-norway"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b39abd59bf32521c7f2301b52d05a6a2c975b6003521cbd0c6dc1582f0a22104"
 
 [[package]]
 name = "untrusted"

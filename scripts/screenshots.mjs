@@ -21,6 +21,8 @@ const scenes = [
   { name: "find", query: "", open: ["prod-web-01"], find: "Ubuntu" },
   { name: "local", query: "", local: true, type: ["ls"] },
   { name: "files", query: "", open: ["prod-web-01"], type: ["ls"], files: true },
+  { name: "monitor", query: "", open: ["prod-web-01"], type: ["ls"], wait: 13000 },
+  { name: "processes", query: "", open: ["prod-web-01"], wait: 4000, clicks: [{ name: "全部进程" }], waitText: "node /srv/app/server.js" },
   { name: "search", query: "", search: "prod" },
   { name: "askpass", query: "askpass=1" },
   { name: "askpass-touch", query: "askpass=touch" },
@@ -30,6 +32,8 @@ const scenes = [
   { name: "tunnel-editor", query: "", nav: "端口转发", click: "新建隧道" },
   { name: "palette", query: "", open: ["prod-web-01"], keys: "Control+Shift+K", typeText: "prod" },
   { name: "settings", query: "", nav: "设置" },
+  { name: "settings-update", query: "update=found", nav: "设置", waitText: "有新版本" },
+  { name: "settings-update-off", query: "update=off", nav: "设置", waitText: "此版本没有配置更新验证密钥" },
   { name: "no-ssh", query: "ssh=missing" },
   { name: "sync-setup", query: "", nav: "设置", click: "开始设置" },
   { name: "snippets", query: "", open: ["prod-web-01"], nav: "命令片段", run: "磁盘用量" },
@@ -47,6 +51,31 @@ const scenes = [
     clicks: [{ name: "添加主机" }, { name: "^导入主机", role: "menuitem", regex: true }, { name: "AnixOps Control" }],
     fills: [{ placeholder: "https://panel.example.com", value: "https://panel.example.com" }, { placeholder: "anixadm_…", value: "anixadm_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG" }],
     waitText: "测试连接",
+  },
+  {
+    name: "import-jumpserver",
+    query: "lang=en",
+    clicks: [{ name: "Add host" }, { name: "^Import hosts", role: "menuitem", regex: true }, { name: "JumpServer" }],
+    fills: [
+      { placeholder: "https://panel.example.com", value: "https://jms.example.com" },
+      { label: "^Access Key ID", value: "7a1b2c3d-1111-4222-8333-444455556666" },
+      { label: "^Access Key Secret$", value: "0f0e0d0c-aaaa-4bbb-8ccc-123456789abc" },
+      { label: "^JumpServer user name", value: "alice" },
+    ],
+    waitText: "Test connection",
+  },
+  {
+    name: "import-jumpserver-preview",
+    query: "lang=en",
+    clicks: [{ name: "Add host" }, { name: "^Import hosts", role: "menuitem", regex: true }, { name: "JumpServer" }],
+    fills: [
+      { placeholder: "https://panel.example.com", value: "https://jms.example.com" },
+      { label: "^Access Key ID", value: "7a1b2c3d-1111-4222-8333-444455556666" },
+      { label: "^Access Key Secret$", value: "0f0e0d0c-aaaa-4bbb-8ccc-123456789abc" },
+      { label: "^JumpServer user name", value: "alice" },
+    ],
+    clicksAfter: [{ name: "Preview" }],
+    waitText: "HK-edge-01",
   },
   {
     name: "import-service-preview",
@@ -99,6 +128,7 @@ for (const colorScheme of ["light", "dark"]) {
     locale: "zh-CN",
   });
   for (const scene of scenes) {
+    if (process.env.ONLY && !process.env.ONLY.split(",").includes(scene.name)) continue;
     const page = await context.newPage();
     page.on("pageerror", (error) => errors.push(`${scene.name}/${colorScheme}: ${error.message}`));
     page.on("console", (message) => {
@@ -133,6 +163,8 @@ for (const colorScheme of ["light", "dark"]) {
       await page.getByRole("button", { name: "上传", exact: true }).click();
       await page.waitForTimeout(1200);
     }
+    // The monitor samples every 3 s; its charts need a few points.
+    if (scene.wait) await page.waitForTimeout(scene.wait);
     if (scene.search) await page.getByRole("textbox").first().fill(scene.search);
     if (scene.nav) await page.getByRole("button", { name: scene.nav }).click();
     if (scene.run) await page.getByRole("button", { name: new RegExp(scene.run) }).first().click();
@@ -142,7 +174,8 @@ for (const colorScheme of ["light", "dark"]) {
     }
     for (const step of scene.clicks ?? [])
       await page.getByRole(step.role ?? "button", { name: step.regex ? new RegExp(step.name) : step.name, exact: step.regex ? undefined : (step.exact ?? true) }).first().click();
-    for (const field of scene.fills ?? []) await page.getByPlaceholder(field.placeholder).fill(field.value);
+    for (const field of scene.fills ?? [])
+      await (field.label ? page.getByLabel(new RegExp(field.label)) : page.getByPlaceholder(field.placeholder)).first().fill(field.value);
     for (const step of scene.clicksAfter ?? [])
       await page.getByRole(step.role ?? "button", { name: step.regex ? new RegExp(step.name) : step.name, exact: step.regex ? undefined : (step.exact ?? true) }).first().click();
     if (scene.waitText) await page.getByText(scene.waitText).first().waitFor();
@@ -156,6 +189,7 @@ for (const colorScheme of ["light", "dark"]) {
 }
 for (const colorScheme of ["light", "dark"]) {
   for (const scene of mobileScenes) {
+    if (process.env.ONLY && !process.env.ONLY.split(",").includes(scene.name)) continue;
     const context = await browser.newContext({
       viewport: scene.viewport,
       deviceScaleFactor: Number(process.env.DSF || 2),

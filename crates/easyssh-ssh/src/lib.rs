@@ -14,11 +14,15 @@
 mod agent;
 mod auth;
 mod channels;
+mod env;
 mod error;
 mod forward;
+#[cfg(test)]
+mod forward_tests;
 mod interaction;
 pub mod known_hosts;
 mod params;
+pub mod proxy;
 mod security_key;
 #[cfg(all(
     feature = "hardware-key",
@@ -36,6 +40,8 @@ mod session;
 #[cfg(test)]
 mod session_tests;
 mod sftp;
+#[cfg(test)]
+mod shell_tests;
 pub mod socks5;
 
 pub use agent::{probe_agent, AgentKind, AgentProbe};
@@ -43,13 +49,16 @@ pub use auth::{
     decode_identity, load_identity, plan as plan_auth, security_key_type, Stage, StageConfig,
 };
 pub use channels::{ExecOutput, ExitStatus, ShellHandle, ShellOptions};
+pub use env::{default_terminal_modes, lang_for, local_shell_env, shell_env};
 pub use error::{AuthMethod, Error, Result};
-pub use forward::{Forward, ForwardKind};
+pub use forward::{Forward, ForwardFailures, ForwardKind};
 pub use interaction::{Decision, DenyAll, HostKeyDetails, Interaction, KbdPrompt};
 pub use known_hosts::{KnownHostStatus, KnownHosts, KnownHostsFile, MemoryKnownHosts};
 pub use params::{
     AgentSource, ConnectParams, MemoryIdentity, DEFAULT_KEEPALIVE, DEFAULT_KEEPALIVE_MAX,
 };
+pub use proxy::{Proxy, ProxyError, ProxyFailure, ProxyKind};
+pub use russh::Pty;
 pub use security_key::{
     default_security_key, hardware_backend_available, sign_with_security_key, HidSecurityKey,
     SecurityKey, SkAlgorithm, SkAssertion, SkError, SkKeyInfo, SkSignRequest, WebAuthnSecurityKey,

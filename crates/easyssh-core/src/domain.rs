@@ -235,6 +235,56 @@ pub struct Connection {
     /// Per-host engine override; absent means `auto`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<EnginePreference>,
+    /// An outbound proxy for the first hop (the target, or the first jump
+    /// host). Absent means a direct connection; old data and sync payloads
+    /// without it stay valid. The proxy password is a host secret, kept in
+    /// the vault and never in this record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxySettings>,
+}
+
+/// The protocol of an outbound proxy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyKind {
+    /// SOCKS5 (RFC 1928), with username and password (RFC 1929) when the host
+    /// has a proxy user. The destination is sent as a name, so the proxy
+    /// resolves it.
+    Socks5,
+    /// HTTP `CONNECT`, with basic authentication when the host has a proxy
+    /// user.
+    Http,
+}
+
+/// Where the outbound proxy of a host is. The password is not part of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ProxySettings {
+    pub kind: ProxyKind,
+    pub host: String,
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+}
+
+impl ProxySettings {
+    /// The local proxy of the AnixOps Net client (its mixed listener).
+    pub const ANIXOPS_NET_HOST: &'static str = "127.0.0.1";
+    pub const ANIXOPS_NET_PORT: u16 = 7890;
+
+    /// `socks5://host:port` or `http://host:port`, for messages and logs;
+    /// never contains the user or the password.
+    pub fn display(&self) -> String {
+        let scheme = match self.kind {
+            ProxyKind::Socks5 => "socks5",
+            ProxyKind::Http => "http",
+        };
+        if self.host.contains(':') {
+            format!("{scheme}://[{}]:{}", self.host, self.port)
+        } else {
+            format!("{scheme}://{}:{}", self.host, self.port)
+        }
+    }
 }
 
 impl Connection {
@@ -268,6 +318,7 @@ impl Connection {
             created_at: now,
             updated_at: now,
             engine: None,
+            proxy: None,
         }
     }
 }
@@ -421,6 +472,35 @@ mod tests {
         assert!(!serde_json::to_string(&AppConfig::new())
             .unwrap()
             .contains("ssh_engine"));
+    }
+
+    #[test]
+    fn a_host_without_a_proxy_reads_and_writes_as_before() {
+        let mut connection = Connection::alias("old", "old");
+        let text = serde_json::to_string(&connection).unwrap();
+        assert!(!text.contains("\"proxy\""), "{text}");
+        // A record written before proxies existed has no field at all.
+        let back: Connection = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.proxy, None);
+
+        connection.proxy = Some(ProxySettings {
+            kind: ProxyKind::Socks5,
+            host: "127.0.0.1".into(),
+            port: 7890,
+            username: None,
+        });
+        let text = serde_json::to_string(&connection).unwrap();
+        assert!(
+            text.contains(r#""proxy":{"kind":"socks5","host":"127.0.0.1","port":7890}"#),
+            "{text}"
+        );
+        let back: Connection = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.proxy, connection.proxy);
+        let http: ProxySettings =
+            serde_json::from_str(r#"{"kind":"http","host":"p","port":3128,"username":"u"}"#)
+                .unwrap();
+        assert_eq!(http.kind, ProxyKind::Http);
+        assert_eq!(http.display(), "http://p:3128");
     }
 
     #[test]

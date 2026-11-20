@@ -45,12 +45,16 @@ const FORMATS: { id: ImportFormat; name: string }[] = [
   { id: "xshell", name: "Xshell" },
   { id: "finalshell", name: "FinalShell" },
   { id: "termius", name: "Termius" },
+  { id: "ansible", name: "Ansible inventory" },
   { id: "csv", name: "CSV" },
 ];
 
 const formatName = (id: ImportFormat | null) => FORMATS.find((format) => format.id === id)?.name ?? "";
 
-const SERVICES: { id: ServiceId; name: string }[] = [{ id: "control", name: t.importServiceControl }];
+const SERVICES: { id: ServiceId; name: string }[] = [
+  { id: "control", name: t.importServiceControl },
+  { id: "jumpserver", name: t.importServiceJumpServer },
+];
 
 /** The host part of a service address, for the header of its preview. */
 const serviceHost = (url: string) => url.trim().replace(/^[a-z]+:\/\//i, "").replace(/\/.*$/, "");
