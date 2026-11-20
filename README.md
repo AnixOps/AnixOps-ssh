@@ -83,7 +83,8 @@ app checks this on start and in Settings.
 
 | Action | Windows and Linux | macOS |
 |---|---|---|
-| Command palette | Ctrl+Shift+K | ⌘K |
+| Command palette | Ctrl+Shift+K | ⌘⇧K (⌘K outside a terminal) |
+| Clear screen and scrollback | | ⌘K |
 | New local terminal | Ctrl+Shift+T | ⌘T |
 | Close tab | Ctrl+Shift+W | ⌘W |
 | File pane | Ctrl+Shift+E | ⌘E |

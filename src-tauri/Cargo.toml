@@ -20,6 +20,7 @@ tauri-build = { version = "2", features = [] }
 easyssh-core = { path = "../crates/easyssh-core" }
 easyssh-engine = { path = "../crates/easyssh-engine" }
 easyssh-store = { path = "../crates/easyssh-store" }
+fontdb = "0.23"
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }

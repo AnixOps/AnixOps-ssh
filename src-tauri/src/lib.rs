@@ -100,6 +100,7 @@ fn desktop_run() {
             settings::settings_get,
             settings::settings_save,
             settings::ssh_status,
+            settings::monospace_fonts,
             telemetry::telemetry_status,
             telemetry::telemetry_pending,
             telemetry::telemetry_delete_pending,

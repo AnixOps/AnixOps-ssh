@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { isTauri, type SshEngine } from "./backend";
 import { readMirror, writeMirror, type LocaleSetting, type ThemeSetting } from "./prefsMirror";
 
+export type CursorStyle = "block" | "bar" | "underline";
+
 export interface Settings {
   theme: ThemeSetting;
   locale: LocaleSetting;
@@ -9,6 +11,12 @@ export interface Settings {
   terminalScrollback: number;
   /** macOS: Option sends Meta (Esc prefix) instead of typing layout characters. */
   terminalOptionAsMeta: boolean;
+  /** A font name or CSS font list; empty uses the built-in monospace stack. */
+  terminalFontFamily: string;
+  /** 1.0 to 1.6. */
+  terminalLineHeight: number;
+  terminalCursorStyle: CursorStyle;
+  terminalCursorBlink: boolean;
   /** The SSH engine for hosts that follow the global setting: the built-in
    * engine unless OpenSSH was chosen (an advanced option kept for compatibility). */
   sshEngine: SshEngine;
@@ -23,6 +31,10 @@ let current: Settings = {
   terminalFontSize: 13,
   terminalScrollback: 10000,
   terminalOptionAsMeta: false,
+  terminalFontFamily: "",
+  terminalLineHeight: 1.2,
+  terminalCursorStyle: "block",
+  terminalCursorBlink: true,
   sshEngine: "russh",
   crashReports: null,
   usageStats: false,

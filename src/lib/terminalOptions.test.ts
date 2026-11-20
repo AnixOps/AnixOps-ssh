@@ -1,9 +1,17 @@
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { Terminal } from "@xterm/headless";
 import { describe, expect, it } from "vitest";
-import { liveTerminalOptions, terminalOptions, UNICODE_VERSION, type TerminalSettings } from "./terminalOptions";
+import { liveTerminalOptions, resolveFontFamily, terminalOptions, UNICODE_VERSION, type TerminalSettings } from "./terminalOptions";
 
-const defaults: TerminalSettings = { terminalFontSize: 13, terminalScrollback: 10000, terminalOptionAsMeta: false };
+const defaults: TerminalSettings = {
+  terminalFontSize: 13,
+  terminalScrollback: 10000,
+  terminalOptionAsMeta: false,
+  terminalFontFamily: "",
+  terminalLineHeight: 1.2,
+  terminalCursorStyle: "block",
+  terminalCursorBlink: true,
+};
 const input = { fontFamily: "mono", theme: {} };
 
 describe("terminalOptions", () => {
@@ -18,12 +26,39 @@ describe("terminalOptions", () => {
   });
 
   it("follows the settings", () => {
-    const current = { terminalFontSize: 15, terminalScrollback: 50000, terminalOptionAsMeta: true };
+    const current: TerminalSettings = {
+      ...defaults,
+      terminalFontSize: 15,
+      terminalScrollback: 50000,
+      terminalOptionAsMeta: true,
+      terminalFontFamily: "JetBrains Mono",
+      terminalLineHeight: 1.4,
+      terminalCursorStyle: "bar",
+      terminalCursorBlink: false,
+    };
     const options = terminalOptions(current, input);
     expect(options.macOptionIsMeta).toBe(true);
     expect(options.scrollback).toBe(50000);
     expect(options.fontSize).toBe(15);
-    expect(liveTerminalOptions(current)).toEqual({ scrollback: 50000, macOptionIsMeta: true });
+    expect(options.fontFamily).toBe('"JetBrains Mono", mono');
+    expect(options.lineHeight).toBe(1.4);
+    expect(options.cursorStyle).toBe("bar");
+    expect(options.cursorBlink).toBe(false);
+    expect(liveTerminalOptions(current, "mono")).toEqual({
+      scrollback: 50000,
+      macOptionIsMeta: true,
+      fontFamily: '"JetBrains Mono", mono',
+      lineHeight: 1.4,
+      cursorStyle: "bar",
+      cursorBlink: false,
+    });
+  });
+
+  it("keeps the default stack when no font is chosen", () => {
+    expect(terminalOptions(defaults, input).fontFamily).toBe("mono");
+    expect(resolveFontFamily("  ", "mono")).toBe("mono");
+    expect(resolveFontFamily("Fira Code, Menlo", "mono")).toBe("Fira Code, Menlo, mono");
+    expect(resolveFontFamily('"Iosevka"', "mono")).toBe('"Iosevka", mono');
   });
 
   it("lets a view choose its own font size and screen reader mode", () => {
