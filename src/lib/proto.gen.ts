@@ -1847,6 +1847,24 @@ export interface SftpRenameParams {
   to: string;
 }
 /**
+ * Command `sftp.chmod` payload.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SftpChmodParams".
+ */
+export interface SftpChmodParams {
+  sftp_id: string;
+  path: string;
+  /**
+   * Permission bits, e.g. 493 for 0o755.
+   */
+  mode: number;
+  /**
+   * Apply to everything inside a folder too. Links are not followed.
+   */
+  recursive?: boolean;
+}
+/**
  * Command `sftp.close` payload.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -1885,7 +1903,7 @@ export interface TransferCancelParams {
   transfer_id: string;
 }
 /**
- * Event `transfer.progress` payload: bytes moved so far.
+ * Event `transfer.progress` payload: bytes moved so far, and the totals when known.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "TransferProgressEvent".
@@ -1893,6 +1911,12 @@ export interface TransferCancelParams {
 export interface TransferProgressEvent {
   transfer_id: string;
   bytes: number;
+  /**
+   * Bytes the whole transfer will move, when known.
+   */
+  total_bytes?: number;
+  files_done?: number;
+  files_total?: number;
 }
 /**
  * Event `transfer.done` payload.

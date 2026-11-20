@@ -1664,6 +1664,18 @@ pub struct SessionWriteParams {
     pub data: ::std::string::String,
     pub session_id: ::std::string::String,
 }
+///Command `sftp.chmod` payload.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct SftpChmodParams {
+    ///Permission bits, e.g. 493 for 0o755.
+    pub mode: i64,
+    pub path: ::std::string::String,
+    ///Apply to everything inside a folder too. Links are not followed.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub recursive: ::std::option::Option<bool>,
+    pub sftp_id: ::std::string::String,
+}
 ///Command `sftp.close` payload.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
@@ -2346,11 +2358,18 @@ impl ::std::convert::TryFrom<::std::string::String> for TransferDoneEventStatus 
         value.parse()
     }
 }
-///Event `transfer.progress` payload: bytes moved so far.
+///Event `transfer.progress` payload: bytes moved so far, and the totals when known.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TransferProgressEvent {
     pub bytes: u64,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub files_done: ::std::option::Option<u64>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub files_total: ::std::option::Option<u64>,
+    ///Bytes the whole transfer will move, when known.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub total_bytes: ::std::option::Option<u64>,
     pub transfer_id: ::std::string::String,
 }
 ///Command `transfer.start` payload. Both paths are final (an upload names the remote file, not its directory). Progress and the end arrive as events. Reply: TransferStartResult.

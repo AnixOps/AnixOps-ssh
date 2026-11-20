@@ -106,6 +106,14 @@ pub fn quote(path: &str) -> Result<String, OpenSshError> {
     Ok(quoted)
 }
 
+/// The octal text `sftp chmod` takes; only permission bits are allowed.
+pub fn chmod_mode(mode: u32) -> Result<String, OpenSshError> {
+    if mode > 0o7777 {
+        return Err(OpenSshError::Failed(format!("invalid mode: {mode:o}")));
+    }
+    Ok(format!("{mode:04o}"))
+}
+
 /// Joins a remote directory and a name with `/`.
 pub fn join_remote(dir: &str, name: &str) -> String {
     if dir.ends_with('/') {
@@ -317,6 +325,42 @@ impl SftpSession {
                     self.run(&format!("rm {}", quote(&child)?))?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Sets the permission bits and, with `recursive`, those of everything
+    /// inside a folder. Links are skipped, as `chmod` would follow them.
+    pub fn chmod(&mut self, path: &str, mode: u32, recursive: bool) -> Result<(), OpenSshError> {
+        let mode = chmod_mode(mode)?;
+        if !recursive {
+            return self
+                .run(&format!("chmod {mode} {}", quote(path)?))
+                .map(drop);
+        }
+        let mut pending = vec![path.to_owned()];
+        while let Some(dir) = pending.pop() {
+            // The top path may be a file; listing it fails, so only folders
+            // are walked.
+            if let Ok(files) = self.list(&dir) {
+                for file in files {
+                    if file.name.contains('/') {
+                        return Err(OpenSshError::Failed(format!(
+                            "{dir} lists an entry that cannot be changed: {:?}",
+                            file.name
+                        )));
+                    }
+                    let child = join_remote(&dir, &file.name);
+                    match file.kind {
+                        RemoteFileKind::Directory => pending.push(child),
+                        RemoteFileKind::Symlink => {}
+                        _ => {
+                            self.run(&format!("chmod {mode} {}", quote(&child)?))?;
+                        }
+                    }
+                }
+            }
+            self.run(&format!("chmod {mode} {}", quote(&dir)?))?;
         }
         Ok(())
     }
@@ -581,6 +625,14 @@ lrwxrwxrwx    ? deploy   deploy         11 Sep  2 11:05 /srv/my app/current -> r
             Some("/home/deploy")
         );
         assert_eq!(parse_pwd("nothing"), None);
+    }
+
+    #[test]
+    fn chmod_takes_octal_permission_bits_only() {
+        assert_eq!(chmod_mode(0o755).unwrap(), "0755");
+        assert_eq!(chmod_mode(0o4755).unwrap(), "4755");
+        assert_eq!(chmod_mode(0).unwrap(), "0000");
+        assert!(chmod_mode(0o10000).is_err());
     }
 
     #[test]

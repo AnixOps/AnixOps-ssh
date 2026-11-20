@@ -207,3 +207,41 @@ fn removing_a_folder_removes_everything_in_it_but_not_what_links_point_to() {
 
     session.remove(&outside, true).expect("cleanup");
 }
+
+#[test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+fn rename_moves_between_folders_and_chmod_is_recursive() {
+    let e2e = E2e::new();
+    let mut session = connect(&e2e, "e2e-target");
+    let home = session.home().to_owned();
+    let dir = join_remote(&home, &unique_name("e2e-move"));
+    session.mkdir(&dir).expect("mkdir");
+    let inner = join_remote(&dir, "inner");
+    session.mkdir(&inner).expect("mkdir inner");
+
+    let local = e2e.dir.path().join("move.bin");
+    std::fs::write(&local, b"a").unwrap();
+    let remote = join_remote(&dir, "a.bin");
+    upload(&e2e, "e2e-target", &local, &remote);
+
+    let moved = join_remote(&inner, "b.bin");
+    session.rename(&remote, &moved).expect("move");
+    assert!(session
+        .list(&dir)
+        .unwrap()
+        .iter()
+        .all(|f| f.name != "a.bin"));
+    assert_eq!(session.list(&inner).unwrap()[0].name, "b.bin");
+
+    session.chmod(&moved, 0o640, false).expect("chmod file");
+    assert_eq!(session.list(&inner).unwrap()[0].permissions, "-rw-r-----");
+    session.chmod(&dir, 0o750, true).expect("chmod tree");
+    assert_eq!(session.list(&inner).unwrap()[0].permissions, "-rwxr-x---");
+    let top = session.list(&home).unwrap();
+    let name = dir.rsplit('/').next().unwrap();
+    assert_eq!(
+        top.iter().find(|f| f.name == name).unwrap().permissions,
+        "drwxr-x---"
+    );
+    session.remove(&dir, true).expect("cleanup");
+}

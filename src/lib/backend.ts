@@ -399,12 +399,22 @@ export interface FilesHandle {
   list(path: string): Promise<RemoteFile[]>;
   mkdir(path: string): Promise<void>;
   remove(path: string, directory: boolean): Promise<void>;
+  /** Renames or moves: `to` may be in another folder. */
   rename(from: string, to: string): Promise<void>;
+  /** Sets permission bits (e.g. 0o755); `recursive` also changes everything inside a folder. */
+  chmod(path: string, mode: number, recursive: boolean): Promise<void>;
   close(): void;
 }
 
 export type TransferEvent =
-  | { kind: "progress"; bytes: number }
+  | {
+      kind: "progress";
+      bytes: number;
+      /** Bytes of the whole transfer, when known. */
+      total?: number;
+      filesDone?: number;
+      filesTotal?: number;
+    }
   | { kind: "done" }
   | { kind: "failed"; message: string }
   | { kind: "cancelled" };
@@ -434,6 +444,7 @@ export async function openFiles(hostId: string): Promise<FilesHandle> {
     mkdir: (path) => invoke("sftp_mkdir", { id, path }),
     remove: (path, directory) => invoke("sftp_remove", { id, path, directory }),
     rename: (from, to) => invoke("sftp_rename", { id, from, to }),
+    chmod: (path, mode, recursive) => invoke("sftp_chmod", { id, path, mode, recursive }),
     close: () => void invoke("sftp_close", { id }).catch(console.error),
   };
 }

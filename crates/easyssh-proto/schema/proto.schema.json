@@ -3545,6 +3545,34 @@
       "additionalProperties": false,
       "description": "Command `sftp.rename` payload."
     },
+    "SftpChmodParams": {
+      "type": "object",
+      "properties": {
+        "sftp_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4095,
+          "description": "Permission bits, e.g. 493 for 0o755."
+        },
+        "recursive": {
+          "type": "boolean",
+          "description": "Apply to everything inside a folder too. Links are not followed."
+        }
+      },
+      "required": [
+        "sftp_id",
+        "path",
+        "mode"
+      ],
+      "additionalProperties": false,
+      "description": "Command `sftp.chmod` payload."
+    },
     "SftpCloseParams": {
       "type": "object",
       "properties": {
@@ -3620,6 +3648,19 @@
         "bytes": {
           "type": "integer",
           "minimum": 0
+        },
+        "total_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bytes the whole transfer will move, when known."
+        },
+        "files_done": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files_total": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "required": [
@@ -3627,7 +3668,7 @@
         "bytes"
       ],
       "additionalProperties": false,
-      "description": "Event `transfer.progress` payload: bytes moved so far."
+      "description": "Event `transfer.progress` payload: bytes moved so far, and the totals when known."
     },
     "TransferDoneEvent": {
       "type": "object",

@@ -125,6 +125,7 @@ fn desktop_run() {
             files::sftp_mkdir,
             files::sftp_remove,
             files::sftp_rename,
+            files::sftp_chmod,
             files::sftp_close,
             files::transfer_start,
             files::transfer_cancel,

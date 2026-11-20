@@ -95,6 +95,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("sftp.mkdir", "SftpMkdirParams", ""),
     ("sftp.remove", "SftpRemoveParams", ""),
     ("sftp.rename", "SftpRenameParams", ""),
+    ("sftp.chmod", "SftpChmodParams", ""),
     ("sftp.close", "SftpCloseParams", ""),
     (
         "transfer.start",

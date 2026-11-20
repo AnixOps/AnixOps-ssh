@@ -60,8 +60,22 @@ export function previewFiles(): FilesHandle {
       tree[parentOf(path)] = siblings.filter((entry) => entry.name !== nameOf(path));
     },
     async rename(from, to) {
-      const entry = tree[parentOf(from)]?.find((candidate) => candidate.name === nameOf(from));
-      if (entry) entry.name = nameOf(to);
+      const entries = tree[parentOf(from)] ?? [];
+      const entry = entries.find((candidate) => candidate.name === nameOf(from));
+      if (!entry) throw new Error(`No such file: ${from}`);
+      tree[parentOf(from)] = entries.filter((candidate) => candidate !== entry);
+      entry.name = nameOf(to);
+      (tree[parentOf(to)] ??= []).push(entry);
+      if (tree[from]) {
+        tree[to] = tree[from];
+        delete tree[from];
+      }
+    },
+    async chmod(path, mode) {
+      const entry = tree[parentOf(path)]?.find((candidate) => candidate.name === nameOf(path));
+      if (!entry) throw new Error(`No such file: ${path}`);
+      const bits = "rwxrwxrwx".split("").map((ch, i) => (mode & (1 << (8 - i)) ? ch : "-"));
+      entry.permissions = `${entry.permissions[0]}${bits.join("")}`;
     },
     close() {},
   };
@@ -76,11 +90,11 @@ export async function previewTransfer(
 ): Promise<StartedTransfer> {
   const id = `preview-${nextTransfer++}`;
   const remote = request.upload ? `${request.remote}/${nameOf(request.local ?? "file")}` : request.remote;
-  const total = 734003200;
+  const total = request.upload ? 18233 * 6 : 734003200;
   let bytes = 0;
   const timer = window.setInterval(() => {
     bytes = Math.min(total, bytes + total / 6);
-    if (request.upload || bytes >= total) {
+    if (bytes >= total) {
       window.clearInterval(timer);
       timers.delete(id);
       if (request.upload) {
@@ -89,7 +103,7 @@ export async function previewTransfer(
       }
       onEvent({ kind: "done" });
     } else {
-      onEvent({ kind: "progress", bytes });
+      onEvent({ kind: "progress", bytes, total, filesDone: 0, filesTotal: 1 });
     }
   }, 500);
   timers.set(id, timer);

@@ -180,3 +180,43 @@ async fn removing_a_folder_removes_everything_in_it_but_not_what_links_point_to(
     })
     .await;
 }
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn rename_moves_between_folders_and_chmod_is_recursive() {
+    let e2e = E2e::new();
+    let (_session, sftp) = open(&e2e).await;
+    within("whole flow", async {
+        let home = sftp.home().await.expect("home");
+        let dir = format!("{home}/{}", unique_name("e2e-russh-move"));
+        sftp.mkdir(&dir).await.expect("mkdir");
+        let inner = format!("{dir}/inner");
+        sftp.mkdir(&inner).await.expect("mkdir inner");
+        let file = format!("{dir}/a.txt");
+        sftp.write_file(&file, b"a").await.expect("write");
+
+        // A rename whose target is in another folder moves the file.
+        let moved = format!("{inner}/b.txt");
+        sftp.rename(&file, &moved).await.expect("move");
+        assert!(!sftp.exists(&file).await.unwrap());
+        assert_eq!(sftp.read_file(&moved).await.unwrap(), b"a");
+
+        // chmod of one file, then of a folder and everything in it.
+        sftp.set_permissions_all(&moved, 0o640, false)
+            .await
+            .expect("chmod file");
+        assert_eq!(sftp.stat(&moved).await.unwrap().permissions, Some(0o640));
+        sftp.set_permissions_all(&dir, 0o750, true)
+            .await
+            .expect("chmod tree");
+        for path in [&dir, &inner, &moved] {
+            assert_eq!(
+                sftp.stat(path).await.unwrap().permissions,
+                Some(0o750),
+                "{path}"
+            );
+        }
+        sftp.remove_dir_all(&dir).await.expect("cleanup");
+    })
+    .await;
+}

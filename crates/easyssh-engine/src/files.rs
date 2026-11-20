@@ -221,6 +221,12 @@ impl Files {
                 progress: Progress::new(task_id.clone(), broadcast.clone()),
                 current: task_current.clone(),
             };
+            job.progress.total = if upload {
+                local_totals(&local).await
+            } else {
+                remote_totals(&task_entry.sftp, &remote).await
+            };
+            job.progress.flush();
             let result = if upload {
                 upload_path(&mut job, &local, &remote, recursive).await
             } else {
@@ -335,6 +341,16 @@ struct Progress {
     bytes: u64,
     reported: u64,
     last: Instant,
+    /// What the whole transfer will move, when it could be worked out first.
+    total: Option<Totals>,
+    files_done: u64,
+}
+
+/// Bytes and files a transfer will move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Totals {
+    bytes: u64,
+    files: u64,
 }
 
 impl Progress {
@@ -345,7 +361,15 @@ impl Progress {
             bytes: 0,
             reported: 0,
             last: Instant::now(),
+            total: None,
+            files_done: 0,
         }
+    }
+
+    /// One file has been moved completely.
+    fn file_done(&mut self) {
+        self.files_done += 1;
+        self.reported = u64::MAX;
     }
 
     fn add(&mut self, bytes: u64) {
@@ -358,13 +382,79 @@ impl Progress {
     fn flush(&mut self) {
         if self.bytes != self.reported {
             self.reported = self.bytes;
-            self.broadcast.emit(
-                "transfer.progress",
-                json!({"transfer_id": self.id, "bytes": self.bytes}),
-            );
+            let mut payload = json!({"transfer_id": self.id, "bytes": self.bytes});
+            if let Some(total) = self.total {
+                payload["total_bytes"] = json!(total.bytes);
+                payload["files_total"] = json!(total.files);
+                payload["files_done"] = json!(self.files_done);
+            }
+            self.broadcast.emit("transfer.progress", payload);
         }
         self.last = Instant::now();
     }
+}
+
+/// Puts the operation and path in front of an error that does not name them.
+fn in_path(op: &str, path: &str, error: SshError) -> SshError {
+    let text = error.to_string();
+    if text.contains(path) {
+        error
+    } else {
+        SshError::Sftp(format!("{op} {path}: {text}"))
+    }
+}
+
+/// Bytes and files under a local path (links and special files not
+/// followed, as the upload skips them); `None` when it cannot be read.
+async fn local_totals(path: &Path) -> Option<Totals> {
+    let mut totals = Totals::default();
+    let mut pending = vec![path.to_owned()];
+    while let Some(current) = pending.pop() {
+        let metadata = tokio::fs::metadata(&current).await.ok()?;
+        if metadata.is_file() {
+            totals.bytes += metadata.len();
+            totals.files += 1;
+        } else if metadata.is_dir() {
+            let mut entries = tokio::fs::read_dir(&current).await.ok()?;
+            while let Some(entry) = entries.next_entry().await.ok()? {
+                let kind = entry.file_type().await.ok()?;
+                if kind.is_dir() || kind.is_file() {
+                    pending.push(entry.path());
+                }
+            }
+        }
+    }
+    Some(totals)
+}
+
+/// Bytes and files under a remote path, counted the way the download walks
+/// it; `None` when it cannot be read.
+async fn remote_totals(sftp: &Sftp, path: &str) -> Option<Totals> {
+    let stat = sftp.stat(path).await.ok()?;
+    if stat.kind != EntryKind::Dir {
+        return Some(Totals {
+            bytes: stat.size,
+            files: 1,
+        });
+    }
+    let mut totals = Totals::default();
+    let mut pending = vec![path.to_owned()];
+    while let Some(dir) = pending.pop() {
+        for entry in sftp.list(&dir).await.ok()? {
+            if !safe_name(&entry.name) {
+                continue;
+            }
+            match entry.stat.kind {
+                EntryKind::Dir => pending.push(join_remote(&dir, &entry.name)),
+                EntryKind::File => {
+                    totals.bytes += entry.stat.size;
+                    totals.files += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    Some(totals)
 }
 
 fn local(error: std::io::Error, path: &Path) -> SshError {
@@ -394,7 +484,10 @@ async fn upload_file(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Resu
     }
     let part = remote_part(&target);
     job.writing(Some(Partial::Remote(part.clone())));
-    let mut file = sftp.create(&part).await?;
+    let mut file = sftp
+        .create(&part)
+        .await
+        .map_err(|e| in_path("creating", remote, e))?;
     let mut buffer = vec![0u8; CHUNK];
     loop {
         let read = source
@@ -427,6 +520,7 @@ async fn upload_file(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Resu
         sftp.rename(&part, &target).await?;
     }
     job.writing(None);
+    job.progress.file_done();
     Ok(())
 }
 
@@ -480,7 +574,11 @@ async fn upload_path(
 }
 
 async fn download_file(job: &mut Job<'_>, remote: &str, local_path: &Path) -> Result<(), SshError> {
-    let mut file = job.sftp.open_read(remote).await?;
+    let mut file = job
+        .sftp
+        .open_read(remote)
+        .await
+        .map_err(|e| in_path("opening", remote, e))?;
     let part = local_part(local_path);
     job.writing(Some(Partial::Local(part.clone())));
     let mut sink = tokio::fs::File::create(&part)
@@ -506,6 +604,7 @@ async fn download_file(job: &mut Job<'_>, remote: &str, local_path: &Path) -> Re
         .await
         .map_err(|e| local(e, local_path))?;
     job.writing(None);
+    job.progress.file_done();
     Ok(())
 }
 
@@ -562,24 +661,44 @@ impl SftpEntry {
     }
 
     pub async fn list(&self, path: &str) -> Result<Value, SshError> {
-        let entries = self.sftp.list(path).await?;
+        let entries = self
+            .sftp
+            .list(path)
+            .await
+            .map_err(|e| in_path("listing", path, e))?;
         Ok(json!({"entries": entries.iter().map(entry_json).collect::<Vec<_>>()}))
     }
 
     pub async fn mkdir(&self, path: &str) -> Result<(), SshError> {
-        self.sftp.mkdir(path).await
+        self.sftp
+            .mkdir(path)
+            .await
+            .map_err(|e| in_path("creating folder", path, e))
     }
 
     pub async fn remove(&self, path: &str, directory: bool) -> Result<(), SshError> {
-        if directory {
+        let result = if directory {
             self.sftp.remove_dir_all(path).await
         } else {
             self.sftp.remove_file(path).await
-        }
+        };
+        result.map_err(|e| in_path("deleting", path, e))
     }
 
+    /// Renames or moves: `to` may be in another folder, as with `sftp rename`.
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), SshError> {
-        self.sftp.rename(from, to).await
+        self.sftp
+            .rename(from, to)
+            .await
+            .map_err(|e| in_path("renaming", from, e))
+    }
+
+    /// `chmod`, optionally on everything inside a folder.
+    pub async fn chmod(&self, path: &str, mode: u32, recursive: bool) -> Result<(), SshError> {
+        self.sftp
+            .set_permissions_all(path, mode, recursive)
+            .await
+            .map_err(|e| in_path("changing permissions of", path, e))
     }
 }
 
@@ -674,6 +793,57 @@ mod tests {
         });
         assert_eq!(dir["kind"], "directory");
         assert_eq!(dir["modified"], "");
+    }
+
+    #[tokio::test]
+    async fn local_totals_count_files_and_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("a/b")).unwrap();
+        std::fs::write(dir.path().join("a/x"), "12345").unwrap();
+        std::fs::write(dir.path().join("a/b/y"), "123").unwrap();
+        assert_eq!(
+            local_totals(dir.path()).await,
+            Some(Totals { bytes: 8, files: 2 })
+        );
+        assert_eq!(local_totals(&dir.path().join("missing")).await, None);
+    }
+
+    #[test]
+    fn progress_carries_totals_and_file_counts() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let seen = events.clone();
+        let mut progress = Progress::new(
+            "t".into(),
+            Arc::new(move |_: &str, payload: Value| {
+                lock(&seen).push(payload);
+                1
+            }),
+        );
+        progress.total = Some(Totals {
+            bytes: 30,
+            files: 3,
+        });
+        progress.add(10);
+        progress.file_done();
+        progress.flush();
+        let events = lock(&events);
+        let last = events.last().unwrap();
+        assert_eq!(last["total_bytes"], 30);
+        assert_eq!(last["files_total"], 3);
+        assert_eq!(last["files_done"], 1);
+        easyssh_proto::validate("TransferProgressEvent", last).unwrap();
+    }
+
+    #[test]
+    fn errors_name_the_operation_and_path() {
+        let error = in_path(
+            "deleting",
+            "/srv/a",
+            SshError::Sftp("Permission denied".into()),
+        );
+        assert!(error.to_string().contains("deleting /srv/a"), "{error}");
+        let named = in_path("deleting", "/srv/a", SshError::Sftp("no /srv/a".into()));
+        assert!(!named.to_string().contains("deleting"), "{named}");
     }
 
     #[test]

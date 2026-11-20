@@ -312,6 +312,32 @@ pub async fn sftp_rename(
     on_session(&files, &id, move |session| session.rename(&from, &to)).await
 }
 
+/// Changes the permission bits of `path`, and of everything in it with `recursive`.
+#[tauri::command]
+pub async fn sftp_chmod(
+    files: State<'_, Files>,
+    daemon: State<'_, DaemonState>,
+    id: String,
+    path: String,
+    mode: u32,
+    recursive: bool,
+) -> Result<(), String> {
+    if files.is_remote(&id) {
+        return daemon_link(&daemon)?
+            .request(
+                "sftp.chmod",
+                json!({ "sftp_id": id, "path": path, "mode": mode, "recursive": recursive }),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| error.message);
+    }
+    on_session(&files, &id, move |session| {
+        session.chmod(&path, mode, recursive)
+    })
+    .await
+}
+
 #[tauri::command]
 pub fn sftp_close(
     files: State<'_, Files>,
@@ -334,11 +360,25 @@ pub fn sftp_close(
 }
 
 #[derive(Clone, Serialize)]
-#[serde(rename_all = "snake_case", tag = "kind")]
+#[serde(
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum TransferEvent {
-    Progress { bytes: u64 },
+    Progress {
+        bytes: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        total: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        files_done: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        files_total: Option<u64>,
+    },
     Done,
-    Failed { message: String },
+    Failed {
+        message: String,
+    },
     Cancelled,
 }
 
@@ -495,6 +535,18 @@ fn watch(
     events: &Channel<TransferEvent>,
 ) -> Result<(), String> {
     let mut reported = None;
+    if upload {
+        // OpenSSH's `sftp` reports nothing while uploading, but the size of
+        // what goes up is known, so the pane can show it.
+        if let Some((total, files)) = local_totals(local) {
+            let _ = events.send(TransferEvent::Progress {
+                bytes: 0,
+                total: Some(total),
+                files_done: Some(0),
+                files_total: Some(files),
+            });
+        }
+    }
     loop {
         let status = transfer
             .child
@@ -514,12 +566,35 @@ fn watch(
                 let bytes = metadata.len();
                 if metadata.is_file() && reported != Some(bytes) {
                     reported = Some(bytes);
-                    let _ = events.send(TransferEvent::Progress { bytes });
+                    let _ = events.send(TransferEvent::Progress {
+                        bytes,
+                        total: None,
+                        files_done: None,
+                        files_total: None,
+                    });
                 }
             }
         }
         std::thread::sleep(Duration::from_millis(300));
     }
+}
+
+/// Bytes and files under a local path, links not followed.
+fn local_totals(path: &Path) -> Option<(u64, u64)> {
+    let mut totals = (0, 0);
+    let mut pending = vec![path.to_owned()];
+    while let Some(current) = pending.pop() {
+        let metadata = std::fs::symlink_metadata(&current).ok()?;
+        if metadata.is_file() {
+            totals.0 += metadata.len();
+            totals.1 += 1;
+        } else if metadata.is_dir() {
+            for entry in std::fs::read_dir(&current).ok()?.flatten() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    Some(totals)
 }
 
 #[tauri::command]
@@ -654,6 +729,17 @@ mod tests {
         assert_eq!(file.size, 12);
         assert_eq!(file.permissions, "-rw-r--r--");
         assert!(!file.modified.is_empty());
+    }
+
+    #[test]
+    fn local_totals_count_files_and_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("a/b")).unwrap();
+        std::fs::write(dir.path().join("a/x"), "12345").unwrap();
+        std::fs::write(dir.path().join("a/b/y"), "123").unwrap();
+        assert_eq!(super::local_totals(dir.path()), Some((8, 2)));
+        assert_eq!(super::local_totals(&dir.path().join("a/x")), Some((5, 1)));
+        assert_eq!(super::local_totals(&dir.path().join("none")), None);
     }
 
     #[test]

@@ -1189,6 +1189,17 @@ impl Daemon {
                     Ok(Value::Null)
                 })
             }
+            "sftp.chmod" => {
+                let p: proto::SftpChmodParams = parse(payload)?;
+                let entry = self.sftp(&p.sftp_id)?;
+                self.background(outbox, req_id, async move {
+                    entry
+                        .chmod(&p.path, p.mode as u32, p.recursive.unwrap_or(false))
+                        .await
+                        .map_err(ssh_fail)?;
+                    Ok(Value::Null)
+                })
+            }
             "sftp.close" => {
                 let p: proto::SftpCloseParams = parse(payload)?;
                 let me = self.upgrade()?;

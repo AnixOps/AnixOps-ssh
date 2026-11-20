@@ -180,6 +180,18 @@ pub trait LinkHandler: Send + Sync + 'static {
     /// Host key prompt `id` is over (answered, cancelled or timed out).
     fn hostkey_resolved(&self, _id: u64) {}
     fn transfer_progress(&self, _transfer_id: &str, _bytes: u64) {}
+    /// Progress with the totals the engine knows: bytes and files of the
+    /// whole transfer. Handlers that ignore totals keep `transfer_progress`.
+    fn transfer_progress_totals(
+        &self,
+        transfer_id: &str,
+        bytes: u64,
+        _total_bytes: Option<u64>,
+        _files_done: Option<u64>,
+        _files_total: Option<u64>,
+    ) {
+        self.transfer_progress(transfer_id, bytes);
+    }
     /// `status` is `completed`, `failed` or `cancelled`.
     fn transfer_done(&self, _transfer_id: &str, _status: &str, _error: Option<&str>) {}
     fn tunnel_status(&self, _status: TunnelStatus) {}
@@ -330,9 +342,12 @@ impl Inner {
             Some("hostkey.resolved") => self
                 .handler
                 .hostkey_resolved(payload["id"].as_u64().unwrap_or(0)),
-            Some("transfer.progress") => self.handler.transfer_progress(
+            Some("transfer.progress") => self.handler.transfer_progress_totals(
                 payload["transfer_id"].as_str().unwrap_or_default(),
                 payload["bytes"].as_u64().unwrap_or(0),
+                payload["total_bytes"].as_u64(),
+                payload["files_done"].as_u64(),
+                payload["files_total"].as_u64(),
             ),
             Some("transfer.done") => self.handler.transfer_done(
                 payload["transfer_id"].as_str().unwrap_or_default(),

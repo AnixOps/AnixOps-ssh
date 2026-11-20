@@ -408,6 +408,20 @@ async fn sftp_rename(
 }
 
 #[tauri::command]
+async fn sftp_chmod(
+    state: State<'_, Mobile>,
+    id: String,
+    path: String,
+    mode: u32,
+    recursive: bool,
+) -> Result<(), String> {
+    sftp_entry(&state, &id)?
+        .chmod(&path, mode, recursive)
+        .await
+        .map_err(files_error)
+}
+
+#[tauri::command]
 async fn sftp_close(state: State<'_, Mobile>, id: String) -> Result<(), String> {
     state.engine.files().close(&id).await;
     Ok(())
@@ -415,11 +429,25 @@ async fn sftp_close(state: State<'_, Mobile>, id: String) -> Result<(), String> 
 
 /// What a transfer reports to the web view (the desktop's `TransferEvent`).
 #[derive(Clone, Serialize)]
-#[serde(rename_all = "snake_case", tag = "kind")]
+#[serde(
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 enum TransferEvent {
-    Progress { bytes: u64 },
+    Progress {
+        bytes: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        total: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        files_done: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        files_total: Option<u64>,
+    },
     Done,
-    Failed { message: String },
+    Failed {
+        message: String,
+    },
     Cancelled,
 }
 
@@ -496,7 +524,12 @@ async fn transfer_start(
         match name {
             "transfer.progress" => {
                 let bytes = payload["bytes"].as_u64().unwrap_or(0);
-                let _ = events.send(TransferEvent::Progress { bytes });
+                let _ = events.send(TransferEvent::Progress {
+                    bytes,
+                    total: payload["total_bytes"].as_u64(),
+                    files_done: payload["files_done"].as_u64(),
+                    files_total: payload["files_total"].as_u64(),
+                });
             }
             "transfer.done" => {
                 let event = match payload["status"].as_str() {
@@ -807,6 +840,7 @@ pub fn run() {
             sftp_mkdir,
             sftp_remove,
             sftp_rename,
+            sftp_chmod,
             sftp_close,
             transfer_start,
             transfer_cancel,

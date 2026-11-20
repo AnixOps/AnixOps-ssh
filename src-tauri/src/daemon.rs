@@ -124,11 +124,23 @@ impl LinkHandler for Handler {
             .emit("hostkey-resolved", serde_json::json!({ "id": id }));
     }
 
-    fn transfer_progress(&self, transfer_id: &str, bytes: u64) {
+    fn transfer_progress_totals(
+        &self,
+        transfer_id: &str,
+        bytes: u64,
+        total: Option<u64>,
+        files_done: Option<u64>,
+        files_total: Option<u64>,
+    ) {
         crate::files::remote_event(
             &self.app,
             transfer_id,
-            crate::files::TransferEvent::Progress { bytes },
+            crate::files::TransferEvent::Progress {
+                bytes,
+                total,
+                files_done,
+                files_total,
+            },
         );
     }
 

@@ -1,7 +1,7 @@
 import { t } from "./i18n";
 import { isMac, type AppShortcut } from "./shortcuts";
 
-export type ShortcutId = AppShortcut | "focus-pane" | "rename" | "remove" | "row-menu" | "next-tab";
+export type ShortcutId = AppShortcut | "focus-pane" | "rename" | "remove" | "select-all" | "permissions" | "row-menu" | "next-tab";
 
 export interface ShortcutRow {
   id: ShortcutId;
@@ -40,6 +40,8 @@ export const shortcutTable: ShortcutRow[] = [
   { id: "next-prompt", group: "terminal", title: () => t.promptNext, pc: "Ctrl+Shift+PageDown", mac: "⌘↓" },
   { id: "rename", group: "list", title: () => t.editHost, pc: "F2", mac: "⌘E" },
   { id: "remove", group: "list", title: () => t.delete, pc: "Delete", mac: "⌘⌫" },
+  { id: "select-all", group: "list", title: () => t.selectAll, pc: "Ctrl+A", mac: "⌘A" },
+  { id: "permissions", group: "list", title: () => t.permissions, pc: "Alt+Enter", mac: "⌥↵" },
   { id: "row-menu", group: "list", title: () => t.more, pc: "Shift+F10", mac: "⌃↵" },
 ];
 
