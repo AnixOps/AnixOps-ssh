@@ -21,6 +21,7 @@ import {
   type SshStatus,
 } from "@/lib/backend";
 import { completionPrefs, onCompletionPrefs, updateCompletionPrefs } from "@/lib/completion/prefs";
+import { onTransferPrefs, transferPrefs, updateTransferPrefs } from "@/lib/terminalTransferPrefs";
 import { t } from "@/lib/i18n";
 import type { LocaleSetting, ThemeSetting } from "@/lib/prefsMirror";
 import { onSettings, settings, updateSettings, type Settings } from "@/lib/settings";
@@ -41,11 +42,13 @@ export function SettingsPanel({
 }) {
   const [current, setCurrent] = useState<Settings>(settings());
   const [prefs, setPrefs] = useState(completionPrefs());
+  const [transferState, setTransferState] = useState(transferPrefs());
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState("");
 
   useEffect(() => onSettings(setCurrent), []);
   useEffect(() => onCompletionPrefs(setPrefs), []);
+  useEffect(() => onTransferPrefs(setTransferState), []);
   useEffect(() => {
     if (isTauri) getVersion().then(setVersion).catch(console.error);
     else setVersion("preview");
@@ -135,6 +138,20 @@ export function SettingsPanel({
               />
             </SettingsRow>
           )}
+          <SettingsRow label={t.fileTransfer} hint={t.fileTransferHint}>
+            <Switch
+              on={transferState.enabled}
+              label={t.fileTransfer}
+              onClick={() => updateTransferPrefs({ enabled: !transferState.enabled })}
+            />
+          </SettingsRow>
+          <SettingsRow label={t.askSavePath} hint={t.askSavePathHint}>
+            <Switch
+              on={transferState.askWhere}
+              label={t.askSavePath}
+              onClick={() => updateTransferPrefs({ askWhere: !transferState.askWhere })}
+            />
+          </SettingsRow>
         </SettingsGroup>
 
         <SettingsGroup title={t.completion}>

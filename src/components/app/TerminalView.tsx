@@ -12,6 +12,7 @@ import { AskAiPanel, ASK_AI_WIDTH } from "@/components/app/AskAiPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasteConfirm, BroadcastBadge } from "@/components/app/PaneOverlays";
+import { TransferSheet } from "@/components/app/TransferSheet";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   attachSession,
@@ -46,6 +47,7 @@ import { registerTerminal, terminalFor } from "@/lib/terminals";
 import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { exitTitle, RESIZE_DEBOUNCE_MS, TERMINAL_RESET, trailingDebounce, type SessionEnd } from "@/lib/terminalSession";
 import { terminalFont, terminalTheme } from "@/lib/terminalTheme";
+import { createTerminalTransfer } from "@/lib/terminalTransferFiles";
 
 /** The SSH engine a session runs on, and why. */
 export interface EngineInfo {
@@ -99,6 +101,9 @@ export function TerminalView({
   const findInputRef = useRef<HTMLInputElement>(null);
   const [pendingPaste, setPendingPaste] = useState<{ text: string; count: number } | null>(null);
   const pasteRef = useRef<(text: string, all: boolean) => void>(() => {});
+  /** rz/sz: output goes through it, and it takes the terminal over while a transfer runs. */
+  const transfer = useMemo(createTerminalTransfer, []);
+  useEffect(() => () => transfer.dispose(), [transfer]);
 
   const report = useCallback(
     (next: SessionStatus) => {
@@ -198,6 +203,13 @@ export function TerminalView({
     const stopPrefs = onCompletionPrefs(() => controller.outputParsed());
     const writeParsed = terminal.onWriteParsed(() => controller.outputParsed());
     const bufferChange = terminal.buffer.onBufferChange((buffer) => controller.setAlternateScreen(buffer.type === "alternate"));
+    transfer.bind({
+      write: (text) => terminal.write(text),
+      send: (text) => {
+        const session = sessionRef.current;
+        return session?.writeAsync ? session.writeAsync(text) : session?.write(text);
+      },
+    });
     terminalRef.current = terminal;
     fitRef.current = fit;
     searchRef.current = search;
@@ -251,6 +263,7 @@ export function TerminalView({
         if (data === "\r") startRef.current();
         return;
       }
+      if (transfer.input(data)) return;
       controller.input(data);
       sessionRef.current?.write(data);
       if (typing) for (const id of receivers()) terminalFor(id)?.write(data);
@@ -294,7 +307,7 @@ export function TerminalView({
       const onEvent = (event: SessionEvent) => {
         if (disposed) return;
         if (event.kind === "data") {
-          terminal.write(event.data);
+          transfer.feed(event.data);
           if (!connected) {
             connected = true;
             report({ state: "connected", engine });
@@ -310,6 +323,7 @@ export function TerminalView({
           }
         } else {
           exited = true;
+          transfer.cancel();
           sessionRef.current = null;
           report({ state: "exited", code: event.code, reason: event.reason, signal: event.signal });
         }
@@ -389,6 +403,8 @@ export function TerminalView({
 
     return () => {
       disposed = true;
+      transfer.cancel();
+      transfer.bind(null);
       unregister();
       stopView();
       stopPrefs();
@@ -414,7 +430,7 @@ export function TerminalView({
       terminal.dispose();
       terminalRef.current = null;
     };
-  }, [hostId, onSession, report, sessionId, tabKey]);
+  }, [hostId, onSession, report, sessionId, tabKey, transfer]);
 
   useEffect(() => {
     if (!active) return;
@@ -494,6 +510,8 @@ export function TerminalView({
           }}
         />
       )}
+
+      <TransferSheet transfer={transfer} />
 
       {completion?.view.popup && (
         <CompletionPopup

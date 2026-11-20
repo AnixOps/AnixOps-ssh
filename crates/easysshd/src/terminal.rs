@@ -9,6 +9,7 @@
 use crate::integration::{self, Action, Integration};
 use crate::recorder::Recorder;
 use crate::server::Outbox;
+use easyssh_engine::Utf8Stream;
 use easyssh_ssh::ExitStatus;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde_json::{json, Value};
@@ -123,43 +124,6 @@ impl Scrollback {
             }
         }
         (out, truncated)
-    }
-}
-
-/// Turns a byte stream into UTF-8 text, keeping a multi-byte character that
-/// is split across reads until its remaining bytes arrive.
-#[derive(Default)]
-pub struct Utf8Stream {
-    pending: Vec<u8>,
-}
-
-impl Utf8Stream {
-    pub fn push(&mut self, bytes: &[u8]) -> String {
-        self.pending.extend_from_slice(bytes);
-        let mut text = String::new();
-        loop {
-            match std::str::from_utf8(&self.pending) {
-                Ok(valid) => {
-                    text.push_str(valid);
-                    self.pending.clear();
-                    return text;
-                }
-                Err(error) => {
-                    let valid = error.valid_up_to();
-                    text.push_str(&String::from_utf8_lossy(&self.pending[..valid]));
-                    match error.error_len() {
-                        Some(invalid) => {
-                            text.push(char::REPLACEMENT_CHARACTER);
-                            self.pending.drain(..valid + invalid);
-                        }
-                        None => {
-                            self.pending.drain(..valid);
-                            return text;
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -445,6 +409,14 @@ impl TermSession {
                     }
                     None => break,
                 },
+                // A held-back lead byte with nothing after it: release it so a
+                // binary transfer (rz/sz) never waits on it.
+                () = tokio::time::sleep(Duration::from_millis(25)), if decoder.has_pending() => {
+                    let text = decoder.flush();
+                    if !text.is_empty() {
+                        self.output(&text);
+                    }
+                }
                 command = commands.recv() => match command {
                     Some(RemoteCmd::Write(data)) => {
                         if shell.write(&data).await.is_err() {
@@ -869,6 +841,9 @@ mod tests {
         assert_eq!(stream.push(&bytes[..2]), "");
         assert_eq!(stream.push(&bytes[2..4]), "主");
         assert_eq!(stream.push(&bytes[4..]), "机");
-        assert_eq!(stream.push(b"a\xffb"), "a\u{FFFD}b");
+        assert_eq!(
+            easyssh_engine::text_to_bytes(&stream.push(b"a\xffb")),
+            b"a\xffb"
+        );
     }
 }

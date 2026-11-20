@@ -34,6 +34,8 @@ mod sync;
 #[cfg(desktop)]
 mod telemetry;
 #[cfg(desktop)]
+mod terminal_transfer;
+#[cfg(desktop)]
 mod tunnels;
 #[cfg(desktop)]
 mod vault;
@@ -74,6 +76,7 @@ fn desktop_run() {
         .manage(askpass::Askpass::default())
         .manage(tunnels::Tunnels::default())
         .manage(ai::Ai::default())
+        .manage(easyssh_engine::terminal_files::TerminalFiles::default())
         .invoke_handler(tauri::generate_handler![
             hosts::load_hosts,
             hosts::open_external,
@@ -126,6 +129,11 @@ fn desktop_run() {
             files::sftp_close,
             files::transfer_start,
             files::transfer_cancel,
+            terminal_transfer::terminal_file_open_read,
+            terminal_transfer::terminal_file_read,
+            terminal_transfer::terminal_file_open_write,
+            terminal_transfer::terminal_file_write,
+            terminal_transfer::terminal_file_close,
             askpass::askpass_reply,
             askpass::askpass_unlock,
             sync::sync_call,

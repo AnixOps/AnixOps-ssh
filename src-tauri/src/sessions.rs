@@ -11,6 +11,7 @@
 
 use crate::daemon::DaemonState;
 use crate::hosts;
+use easyssh_engine::Utf8Stream;
 use easysshd::link::{ExitReason, SessionMsg};
 use easysshd::supervisor::{SupervisedMsg, SupervisedSink};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
@@ -375,7 +376,7 @@ pub fn session_write(
     let session = sessions.get_mut(&id).ok_or("session has ended")?;
     session
         .writer
-        .write_all(data.as_bytes())
+        .write_all(&easyssh_engine::text_to_bytes(&data))
         .and_then(|()| session.writer.flush())
         .map_err(|error| error.to_string())
 }
@@ -423,67 +424,4 @@ pub fn session_close(
         let _ = session.killer.kill();
     }
     Ok(())
-}
-
-/// Turns a byte stream into UTF-8 text, keeping a multi-byte character that
-/// is split across reads until its remaining bytes arrive.
-#[derive(Default)]
-struct Utf8Stream {
-    pending: Vec<u8>,
-}
-
-impl Utf8Stream {
-    fn push(&mut self, bytes: &[u8]) -> String {
-        self.pending.extend_from_slice(bytes);
-        let mut text = String::new();
-        loop {
-            match std::str::from_utf8(&self.pending) {
-                Ok(valid) => {
-                    text.push_str(valid);
-                    self.pending.clear();
-                    return text;
-                }
-                Err(error) => {
-                    let valid = error.valid_up_to();
-                    text.push_str(&String::from_utf8_lossy(&self.pending[..valid]));
-                    match error.error_len() {
-                        Some(invalid) => {
-                            text.push(char::REPLACEMENT_CHARACTER);
-                            self.pending.drain(..valid + invalid);
-                        }
-                        None => {
-                            self.pending.drain(..valid);
-                            return text;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Utf8Stream;
-
-    #[test]
-    fn keeps_split_characters_until_complete() {
-        let mut stream = Utf8Stream::default();
-        let bytes = "主机".as_bytes();
-        assert_eq!(stream.push(&bytes[..2]), "");
-        assert_eq!(stream.push(&bytes[2..4]), "主");
-        assert_eq!(stream.push(&bytes[4..]), "机");
-    }
-
-    #[test]
-    fn replaces_invalid_bytes() {
-        let mut stream = Utf8Stream::default();
-        assert_eq!(stream.push(b"a\xffb"), "a\u{FFFD}b");
-    }
-
-    #[test]
-    fn passes_ascii_through() {
-        let mut stream = Utf8Stream::default();
-        assert_eq!(stream.push(b"\x1b[32mok\x1b[0m"), "\x1b[32mok\x1b[0m");
-    }
 }
