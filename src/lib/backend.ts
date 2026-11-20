@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openUrl as openWithSystem, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { previewCancel, previewFiles, previewTransfer } from "./previewFiles";
 import {
   previewApplyImport,
@@ -20,6 +20,7 @@ import {
   previewSnapshot,
 } from "./preview";
 import { previewMonitorSample, previewMonitorSignal } from "./previewMonitor";
+import { previewUpdateCheck, previewUpdateSetAuto, previewUpdateStatus } from "./previewUpdate";
 import { previewSession } from "./previewSession";
 import type { ExitReason } from "./terminalSession";
 import {
@@ -38,6 +39,7 @@ import type {
   ImportFormat,
 } from "./proto.gen";
 import { UNAVAILABLE, type PendingReports, type TelemetryStatus } from "./telemetry";
+import type { UpdateStatus } from "./update";
 
 export type HostSource = "saved" | "ssh_config";
 
@@ -215,13 +217,20 @@ export type {
 export type ImportSource = { kind: "file"; path: string } | { kind: "ssh_config" } | { kind: "service"; request: ServiceRequest };
 
 /** The services hosts can be imported from. */
-export type ServiceId = "control";
+export type ServiceId = "control" | "jumpserver";
 
 /** The plain settings of a service import (what the form remembers). */
 export interface ServiceForm {
   url: string;
   default_user: string;
   identity_file: string | null;
+  /** JumpServer only: */
+  access_key_id: string;
+  org_id: string;
+  gateway: boolean;
+  gateway_host: string;
+  gateway_port: number;
+  gateway_user: string;
 }
 
 /** What the form opens with: the saved settings, and whether a credential is saved in the vault. */
@@ -380,6 +389,12 @@ export async function attachSession(
     events,
   });
   return sessionHandle(id, attached.engine, attached.engineReason);
+}
+
+/** Opens a web link in the default browser. Callers check it first (shouldOpenLink). */
+export async function openUrl(url: string): Promise<void> {
+  if (isTauri) await openWithSystem(url);
+  else window.open(url, "_blank", "noopener,noreferrer");
 }
 
 export async function copyText(text: string): Promise<void> {
@@ -1046,6 +1061,30 @@ export async function telemetryPending(): Promise<PendingReports> {
 export async function telemetryDeletePending(): Promise<number> {
   if (!isTauri) return 0;
   return invoke<number>("telemetry_delete_pending");
+}
+
+/* Update check (check and notify only); see update.ts and crates/easyssh-update. */
+
+export async function updateStatus(): Promise<UpdateStatus> {
+  if (!isTauri) return previewUpdateStatus();
+  return invoke<UpdateStatus>("update_status");
+}
+
+export async function updateSetAuto(on: boolean): Promise<UpdateStatus> {
+  if (!isTauri) return previewUpdateSetAuto(on);
+  return invoke<UpdateStatus>("update_set_auto", { on });
+}
+
+/** Rejects with the reason when the feed could not be fetched or verified. */
+export async function updateCheck(): Promise<UpdateStatus> {
+  if (!isTauri) return previewUpdateCheck();
+  return invoke<UpdateStatus>("update_check");
+}
+
+/** Opens the verified release in the browser; the backend names the URL. */
+export async function updateOpen(): Promise<void> {
+  if (!isTauri) return;
+  await invoke("update_open");
 }
 
 /** The Rust side scrubs `message` and `stack` and decides whether to keep them. */

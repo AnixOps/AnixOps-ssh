@@ -24,15 +24,56 @@ pub struct Settings {
     /// macOS: Option sends Meta instead of layout characters. Off by default.
     #[serde(default)]
     terminal_option_as_meta: bool,
+    /// Ask before a multi-line paste into a shell without bracketed paste.
+    #[serde(default = "yes")]
+    terminal_warn_multiline_paste: bool,
+    /// What a right-click in the terminal does.
+    #[serde(default)]
+    terminal_right_click: RightClick,
+    /// Selecting text in the terminal copies it.
+    #[serde(default)]
+    terminal_copy_on_select: bool,
+    /// Remote programs may write (never read) the clipboard with OSC 52.
+    #[serde(default = "yes")]
+    terminal_osc52: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// What a right-click in the terminal does.
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RightClick {
+    #[default]
+    Menu,
+    Paste,
 }
 
 /// Terminal behaviour only the app's terminal view reads. Kept under its own
 /// key so the shared `terminal` preferences and their schema stay unchanged;
 /// a missing or older value falls back to the defaults field by field.
-#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(default)]
 struct TerminalBehaviour {
     option_as_meta: bool,
+    warn_multiline_paste: bool,
+    right_click: RightClick,
+    copy_on_select: bool,
+    osc52: bool,
+}
+
+impl Default for TerminalBehaviour {
+    fn default() -> Self {
+        Self {
+            option_as_meta: false,
+            warn_multiline_paste: true,
+            right_click: RightClick::Menu,
+            copy_on_select: false,
+            osc52: true,
+        }
+    }
 }
 
 const TERMINAL_BEHAVIOUR: &str = "terminal_behaviour";
@@ -57,6 +98,10 @@ pub fn settings_get() -> Result<Settings, String> {
         crash_reports: config.telemetry.crash_reports,
         usage_stats: config.telemetry.usage_stats,
         terminal_option_as_meta: behaviour.option_as_meta,
+        terminal_warn_multiline_paste: behaviour.warn_multiline_paste,
+        terminal_right_click: behaviour.right_click,
+        terminal_copy_on_select: behaviour.copy_on_select,
+        terminal_osc52: behaviour.osc52,
     })
 }
 
@@ -90,6 +135,10 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
         .map_err(stored)?;
     let behaviour = TerminalBehaviour {
         option_as_meta: settings.terminal_option_as_meta,
+        warn_multiline_paste: settings.terminal_warn_multiline_paste,
+        right_click: settings.terminal_right_click,
+        copy_on_select: settings.terminal_copy_on_select,
+        osc52: settings.terminal_osc52,
     };
     if behaviour != terminal_behaviour() {
         store
@@ -170,12 +219,17 @@ pub async fn ssh_status() -> Result<SshStatus, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_state, AgentState, TerminalBehaviour};
+    use super::{agent_state, AgentState, RightClick, TerminalBehaviour};
 
     #[test]
     fn terminal_behaviour_defaults_when_missing_or_partial() {
         let empty: TerminalBehaviour = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, TerminalBehaviour::default());
+        assert!(empty.warn_multiline_paste && empty.osc52 && !empty.copy_on_select);
+        let partial: TerminalBehaviour =
+            serde_json::from_str(r#"{"right_click":"paste"}"#).unwrap();
+        assert_eq!(partial.right_click, RightClick::Paste);
+        assert!(partial.osc52);
         assert!(!empty.option_as_meta);
         let on: TerminalBehaviour = serde_json::from_str(r#"{"option_as_meta":true}"#).unwrap();
         assert!(on.option_as_meta);

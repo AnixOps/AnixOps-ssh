@@ -1,0 +1,64 @@
+# 2.2.x → 2.3.0 路线
+
+写于 2026-11-20。2.2.0 收齐 #60–#81 里的对齐修复和组织整合；之后按下表一批一个补丁版，
+最后发 2.3.0。每个条目一个分支一个 PR，CI（含 macOS）全绿才合并；版本号 PR 合并后
+`tag.yml` 自动打 tag 发布。
+
+来源：对齐审计清单的第二批（⏸）、服务器监控的后续、组织整合的后续，以及和
+FinalShell、Termius、MobaXterm、WindTerm、Tabby 对比时日常最常碰到的缺口。
+
+## 2.2.x：把已有功能做对
+
+补丁版只修"已有功能和主流客户端行为不一致"，不加新入口。
+
+### 2.2.1 文件传输
+
+| 条目 | 现状 | 做法 |
+|---|---|---|
+| 传输队列 | 一次拖入 10 个以上文件超出 sshd `MaxSessions` 而失败 | 全局队列，每主机并发上限（默认 4，跟随连接的 MaxSessions），排队、取消、失败重试 |
+| 内置引擎流水线 | 一次一个读写请求，高延迟下很慢 | 读写各保持多个在途请求（与 OpenSSH sftp 默认 64 个对齐），保持顺序写盘 |
+| 进度 | 上传、文件夹下载没有进度 | 字节进度、速度、剩余时间，文件夹按总量 |
+| 错误信息 | 不含路径 | 每条错误带远端路径和原因 |
+
+### 2.2.2 连接
+
+| 条目 | 现状 | 做法 |
+|---|---|---|
+| 桌面终端自动重连 | 断线后要手动按 Enter 或点重连 | 网络恢复、唤醒后自动重连，退避 1s→30s，最多 10 次；终端顶部一条可取消的状态条；登录需要交互（密码、FIDO2 触摸）时停下来等用户 |
+| Windows Pageant | 内置引擎连不到 Pageant | 读 Pageant 的命名管道（新版）和 WM_COPYDATA（旧版）作为 agent |
+| 移动端跳板机 | 跳板机用户名、嵌套 ProxyJump 不完整 | 与桌面一致，按链逐跳解析 |
+
+### 2.2.3 终端与文件面板
+
+| 条目 | 现状 | 做法 |
+|---|---|---|
+| 字体设置 | 只能调字号 | 字体族（列出本机等宽字体）、行高、连字开关、光标样式 |
+| 查找栏 | 简陋 | 大小写、全词、正则、匹配计数、上一个/下一个 |
+| ⌘K | 与 iTerm2 清屏冲突 | macOS 终端内 ⌘K 清屏，命令面板在终端内改为 ⌘⇧K（与其他平台一致） |
+| 大输出背压 | `cat` 大文件时界面卡顿 | 前端按帧批量写入，积压超过阈值时暂停读取 |
+| 多选 | 文件面板只能单选 | Shift/⌘ 多选，批量下载、删除 |
+| 权限 | 不能改权限 | 属性对话框，chmod（八进制和勾选两种） |
+| 重命名即移动 | 重命名不能改目录 | 输入含 `/` 的新名字即移动 |
+
+## 2.3.0：新能力
+
+| 条目 | 对标 | 做法 |
+|---|---|---|
+| OpenSSH 引擎主机的监控 | — | 经 OpenSSH 后端的 exec 通道（复用 ControlMaster）跑同一段采样脚本，界面不变 |
+| 移动端简版监控 | Termius 无，FinalShell 桌面 | 主机详情页一张卡片：CPU、内存、磁盘、网速，复用 engine 的 monitor.rs |
+| 远程文件用本地编辑器打开 | FinalShell、MobaXterm、WinSCP | 下载到临时目录，用系统默认或指定编辑器打开，保存后自动安全上传，冲突时提示 |
+| 文件面板跟随终端目录 | FinalShell | 开了 shell integration 时，文件面板可选择跟随当前终端的 cwd |
+| rz/sz（ZMODEM、trzsz） | Xshell、FinalShell、WindTerm | 终端内识别 ZMODEM 与 trzsz 握手，弹出选择文件/保存位置，走同一个传输队列显示进度 |
+| X11 转发 | MobaXterm | 先回退 OpenSSH（`ForwardX11`），桌面有 X server 时可用 |
+| Unix socket 转发 | OpenSSH `-L path` | 内置引擎支持 `direct-streamlocal` / `streamlocal-forward` |
+| 快速连接 | Termius、Tabby | 命令面板输入 `user@host:port` 直接连接，可一键保存为主机 |
+| `anixops-ssh://` 链接 | — | 系统注册 URL scheme，打开即连接（只接受已保存主机或需确认的新地址），供 AnixOps Control 节点页"用 AnixOps SSH 打开" |
+
+## 需要你来做的（不阻塞开发）
+
+- 托管同步服务：是否提供、怎么收费，是商业决定。
+- 真机测试：每个版本号 PR 用 CI 安装包跑 RELEASING.md 冒烟；手机版在真机上试软键盘、输入法、触摸选择、按键栏。
+- 签名与商店：Apple 证书、Android 上传密钥、TestFlight（见 RELEASING.md Mobile）。
+- 更新源：确认 secret `ANIXOPS_UPDATE_SIGNING_KEY` 和变量 `EASYSSH_UPDATE_PUBLIC_KEYS` 已配，下次发版看 Update feeds 任务。
+- AnixOps Control 节点页加"用 AnixOps SSH 打开"按钮要改 anix-control 仓库，需你同意。
+- 合并后的远端分支需你手动删除（环境不允许删除）。

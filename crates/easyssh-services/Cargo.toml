@@ -8,6 +8,7 @@ description = "Import hosts from services the user already runs (AnixOps Control
 
 [dependencies]
 base64.workspace = true
+chrono.workspace = true
 easyssh-store = { path = "../easyssh-store" }
 easyssh-vault = { path = "../easyssh-vault" }
 hmac.workspace = true

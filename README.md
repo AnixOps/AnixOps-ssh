@@ -46,9 +46,10 @@ current 1.x app.
 | **Command palette** | Hosts, snippets, tunnels and actions in one search box. |
 | **Import from other clients** | Bring in hosts from `~/.ssh/config` (with `Include`), PuTTY, SecureCRT, MobaXterm, Xshell, FinalShell, Termius, Ansible inventories (YAML or INI) or CSV. Review them first, choose a group and what to do with duplicates; nothing you have is removed. Passwords and keys are never imported. |
 | **Sync and team vaults** | Keep hosts, groups, snippets, tunnels and known hosts in step across your devices through your own [easyssh-server](crates/easyssh-server/README.md), end-to-end encrypted. Share a vault with a team after comparing safety numbers. See [Sync](#sync-and-team-vaults). |
-| **Import from services** | "Import hosts" → "Import from a service" reads the host list of a service you run: AnixOps Control (the approved nodes of the panel, through an admin API token with scope `read`). The token is sealed in the vault and only ever sent in a request header, https is required (http only for localhost), and the preview shows what is new and what exists before anything is written. Syncing again updates the hosts it imported (matched by the panel and node id, so a changed address does not duplicate) and lists hosts the panel no longer has without deleting them. See [easyssh-services](crates/easyssh-services/README.md). |
+| **Import from services** | "Import hosts" → "Import from a service" reads the host list of a service you run: AnixOps Control (the approved nodes of the panel, through an admin API token with scope `read`) or JumpServer (the assets of an organization, through a signed access key request; the hosts can connect through JumpServer's KoKo SSH gateway, where you pick the asset in KoKo's menu and answer its password and MFA prompts as usual). The token or key secret is sealed in the vault and only ever sent in a request header, https is required (http only for localhost), and the preview shows what is new and what exists before anything is written. Syncing again updates the hosts it imported (matched by the panel and node id, so a changed address does not duplicate) and lists hosts the panel no longer has without deleting them. See [easyssh-services](crates/easyssh-services/README.md). |
 | **Backup** | Export and import hosts, or back them up to a Git repository. Never includes passwords or keys. |
 | **Ask AI** | Off by default. Bring your own key for Anthropic, an OpenAI-compatible endpoint or local Ollama; the key lives in the vault and requests are made by the app's Rust side, so the key never reaches the web view. A side panel per terminal lets you tick what to share (last command and output, selection, last lines), shows secrets it removed and the exact request, and sends nothing until you press Send. Suggested commands can be inserted on the input line, never run. |
+| **Update check** | Desktop builds that carry the project's update key check once a day (Settings → Updates, can be turned off) whether a newer release exists and tell you; "Download" opens it in the browser. The release feed is signed (Ed25519, `anixops-appcast-v1` of [anix-kit](https://github.com/AnixOps/anix-kit)) and checked against a key compiled into the app; nothing is installed for you. Without that key the app never checks. See [Privacy](#privacy). |
 | **Session logs** | Optional per host, with a default in Settings. Terminal output is written encrypted (XChaCha20-Poly1305, a key derived per log from the vault device key) to `logs/<host>/<time>.esl` in the data directory. View a log read-only with search, export it as plain text after confirming, delete it, or let retention (30 days by default) clean up. Needs an unlocked vault. |
 | **Design** | [AnixOps Design](https://github.com/AnixOps/AnixOps-design): light, dark or system theme; Chinese and English. |
 
@@ -236,7 +237,8 @@ be `https`; plain `http` is accepted only for this machine, for testing.
 
 ## Privacy
 
-Nothing leaves your machine unless you say so. On first start the app asks
+Nothing about you leaves your machine unless you say so; the one exception
+is the identifier-free update check below. On first start the app asks
 once whether it may send **crash reports**; **anonymous usage statistics** are
 off until you turn them on in Settings › Privacy. Both can be changed or
 turned off at any time, and a build without a configured server (the default
@@ -254,6 +256,20 @@ when you build it yourself) collects and sends nothing.
   paths, command lines, keys or passwords.
 
 Details and how to self-host the server: [docs/telemetry.md](docs/telemetry.md).
+
+**Update check** (desktop builds with the project's update key only; on by
+default, Settings → Updates). Once a day at start-up, and when you press
+"Check now", the app sends one plain HTTPS `GET` to
+`https://github.com/AnixOps/EasySSH/releases/latest/download/anixops-ssh-<os>.appcast.json`
+(redirects are followed only to `github.com`, `objects.githubusercontent.com`
+and `release-assets.githubusercontent.com`). The request carries no cookie,
+account, device or install identifier and no statistics; only the standard
+HTTP and TLS metadata that any request has (your IP address, which GitHub sees)
+and a `User-Agent` of `easyssh-update/<version>`. The answer is verified against
+the key built into the app, and the last accepted feed number and the time of
+the last check are kept in a local file (`<local data dir>/EasySSH/update.json`).
+Nothing is downloaded or installed: "Download" opens the release in your
+browser. The phone apps never check; the stores update them.
 
 ## Development
 

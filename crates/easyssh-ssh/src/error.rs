@@ -163,6 +163,21 @@ impl From<russh::Error> for Error {
             R::ChannelOpenFailure(_) | R::WrongChannel | R::SendError => {
                 Error::Channel(error.to_string())
             }
+            // A server that only speaks algorithms russh lacks (an old
+            // device with `diffie-hellman-group1-sha1`, `aes128-cbc`,
+            // `ssh-dss`...). OpenSSH may still reach it, so the caller falls
+            // back instead of failing.
+            R::NoCommonAlgo { kind, theirs, .. } => Error::Unsupported(format!(
+                "the server offers only {} algorithms the built-in engine does not speak ({})",
+                match kind {
+                    russh::AlgorithmKind::Kex => "key exchange",
+                    russh::AlgorithmKind::Key => "host key",
+                    russh::AlgorithmKind::Cipher => "cipher",
+                    russh::AlgorithmKind::Mac => "MAC",
+                    russh::AlgorithmKind::Compression => "compression",
+                },
+                theirs.join(", ")
+            )),
             other => Error::Protocol(other.to_string()),
         }
     }
@@ -194,3 +209,27 @@ impl From<russh_sftp::client::error::Error> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_common_algorithm_is_unsupported_so_openssh_takes_over() {
+        let error: Error = russh::Error::NoCommonAlgo {
+            kind: russh::AlgorithmKind::Kex,
+            ours: vec!["curve25519-sha256".into()],
+            theirs: vec!["diffie-hellman-group1-sha1".into()],
+        }
+        .into();
+        match error {
+            Error::Unsupported(text) => {
+                assert!(text.contains("key exchange"), "{text}");
+                assert!(text.contains("diffie-hellman-group1-sha1"), "{text}");
+            }
+            other => panic!("{other:?}"),
+        }
+        let error: Error = russh::Error::Kex.into();
+        assert!(matches!(error, Error::Protocol(_)));
+    }
+}
