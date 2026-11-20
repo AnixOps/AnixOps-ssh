@@ -46,6 +46,9 @@ its socket protocol; the phone calls it in-process. What that gives the phone:
   a list; the hop is opened on the shared connection and uses its own saved key
   or password from the vault when it has one, else asks its own host key and
   password questions.
+  A saved jump host that has jump hosts of its own is reached through them
+  first (comma lists and `user@host:port` hops included); each hop keeps its own
+  user and port, loops are refused and a chain is at most 8 hops.
 - **Host list.** Group (found by name ignoring case, or created), tags,
   favorites, a jump host, search by name, address, group or `#tag`, and a `⋯`
   menu on each row (terminal, files, edit, favorite, delete).
