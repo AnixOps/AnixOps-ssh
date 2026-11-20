@@ -24,6 +24,11 @@ const scenes = [
   { name: "monitor", query: "", open: ["prod-web-01"], type: ["ls"], wait: 13000 },
   { name: "processes", query: "", open: ["prod-web-01"], wait: 4000, clicks: [{ name: "全部进程" }], waitText: "node /srv/app/server.js" },
   { name: "search", query: "", search: "prod" },
+  // The app's own right-click menus (never the web view's), at the narrowest window.
+  { name: "menu-terminal", query: "", size: { width: 860, height: 520 }, open: ["prod-web-01"], type: ["ls"], rightClick: { css: ".xterm-screen", at: { x: 0.95, y: 0.7 } } },
+  { name: "menu-tab", query: "", size: { width: 860, height: 520 }, open: ["prod-db", "staging-api"], rightClick: { role: "tab", name: "prod-db" } },
+  { name: "menu-host", query: "", size: { width: 860, height: 520 }, rightClick: { role: "button", name: "prod-web-01" } },
+  { name: "menu-field", query: "lang=en", size: { width: 860, height: 520 }, search: "prod", rightClick: { role: "textbox" } },
   { name: "askpass", query: "askpass=1" },
   { name: "askpass-touch", query: "askpass=touch" },
   { name: "askpass-pin", query: "askpass=pin" },
@@ -137,6 +142,7 @@ for (const colorScheme of ["light", "dark"]) {
     page.on("console", (message) => {
       if (message.type() === "error") errors.push(`${scene.name}/${colorScheme}: ${message.text()}`);
     });
+    if (scene.size) await page.setViewportSize(scene.size);
     await page.goto(`${baseUrl}/?${scene.query}`);
     await page.waitForLoadState("networkidle");
     for (const host of scene.open ?? []) {
@@ -183,7 +189,15 @@ for (const colorScheme of ["light", "dark"]) {
       await page.getByRole(step.role ?? "button", { name: step.regex ? new RegExp(step.name) : step.name, exact: step.regex ? undefined : (step.exact ?? true) }).first().click();
     if (scene.waitText) await page.getByText(scene.waitText).first().waitFor();
     if (scene.click) await page.getByRole("button", { name: scene.click, exact: true }).first().click();
-    await page.mouse.move(0, 0);
+    if (scene.rightClick) {
+      const { css, role, name, at } = scene.rightClick;
+      const target = css ? page.locator(css).last() : page.getByRole(role, name ? { name: new RegExp(name) } : undefined).first();
+      // `at`: where in the target, as fractions of its box (near an edge, to see the menu stay on screen).
+      const box = await target.boundingBox();
+      const { x, y } = at ?? { x: 0.5, y: 0.5 };
+      await page.mouse.click(box.x + box.width * x, box.y + box.height * y, { button: "right" });
+      await page.getByRole("menu").waitFor();
+    } else await page.mouse.move(0, 0);
     await page.waitForTimeout(500);
     await page.screenshot({ path: join(outDir, `${scene.name}-${colorScheme}.png`) });
     await page.close();

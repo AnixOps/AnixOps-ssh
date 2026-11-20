@@ -62,6 +62,10 @@ The audit and the button-level mapping are in `docs/design-audit.md`.
   16 px in buttons. Icon-only buttons need an `aria-label` and a tooltip.
 - Motion uses `src/lib/motion.ts` (120–280 ms, opacity and transform, no
   springs) and respects `prefers-reduced-motion`.
+- The window never shows the web view's own menu or browser keys
+  (`src/lib/webviewChrome.ts`). A right-click gets the app's menu: `ContextMenu`,
+  or `Menu contextRow` inside a `[data-context-row]` row; text fields and
+  selected text get `ui/editMenu.tsx` without extra work.
 - Shortcuts live once in `src/lib/shortcutTable.ts` and `src/lib/shortcuts.ts`;
   the list (Ctrl/⌘+/), tooltips and docs read it. Plain Ctrl keys belong to
   the shell inside terminals; never use Ctrl+Alt.

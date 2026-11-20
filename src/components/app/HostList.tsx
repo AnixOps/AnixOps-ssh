@@ -271,6 +271,7 @@ function HostRow({
   return (
     <li
       className="group relative"
+      data-context-row
       onKeyDown={(event) => {
         // Keys on a focused row (keyboard.md, lists): F2 edits, Delete removes after a
         // confirmation, the menu key opens the row menu.
@@ -325,7 +326,7 @@ function HostRow({
             </Button>
           </Tooltip>
         )}
-        <Menu label={t.more} items={menu} buttonProps={{ tabIndex: -1, "data-row-menu": "" }} />
+        <Menu label={t.more} items={menu} buttonProps={{ tabIndex: -1, "data-row-menu": "" }} contextRow />
       </span>
     </li>
   );
