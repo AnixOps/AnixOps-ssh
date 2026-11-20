@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { OSC52_MAX_BYTES, parseOsc52, sanitizeTitle, shouldOpenLink, TITLE_MAX } from "./terminalInput";
+import { capabilityReply, OSC52_MAX_BYTES, parseOsc52, sanitizeTitle, shouldOpenLink, TITLE_MAX } from "./terminalInput";
 
 const ctrl = { ctrlKey: true, metaKey: false };
 const cmd = { ctrlKey: false, metaKey: true };
@@ -67,5 +67,23 @@ describe("sanitizeTitle", () => {
     const long = sanitizeTitle("x".repeat(500));
     expect([...long]).toHaveLength(TITLE_MAX);
     expect(long.endsWith("…")).toBe(true);
+  });
+});
+
+describe("XTGETTCAP replies", () => {
+  const hex = (text: string) => Array.from(text, (c) => c.charCodeAt(0).toString(16).padStart(2, "0")).join("");
+  it("says 24-bit colour works", () => {
+    expect(capabilityReply(hex("Tc"))).toBe("\x1bP1+r5463\x1b\\");
+    expect(capabilityReply(`${hex("RGB")};${hex("colors")}`)).toBe("\x1bP1+r524742\x1b\\\x1bP1+r636F6C6F7273=323536\x1b\\");
+  });
+  it("sends string values with a real escape", () => {
+    const reply = capabilityReply(hex("setrgbf"));
+    expect(reply.startsWith("\x1bP1+r")).toBe(true);
+    expect(reply).toContain("=1B5B33383B323B");
+  });
+  it("refuses unknown or malformed names", () => {
+    expect(capabilityReply(hex("kbs"))).toBe(`\x1bP0+r${hex("kbs")}\x1b\\`);
+    expect(capabilityReply("zz")).toBe("\x1bP0+rzz\x1b\\");
+    expect(capabilityReply("")).toBe("");
   });
 });
