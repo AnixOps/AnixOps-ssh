@@ -871,6 +871,8 @@ export interface SshStatus {
   sftpFound: boolean;
   agent: "ready" | "empty" | "unavailable";
   agentKeys: string[];
+  /** Which agent the built-in engine found; null when none or only ssh-add answered. */
+  agentKind: "openssh" | "pageant" | "environment" | null;
   agentError: string | null;
   sshConfigHosts: number;
 }
@@ -879,13 +881,14 @@ export interface SshStatus {
 export async function sshStatus(): Promise<SshStatus> {
   if (!isTauri) {
     if (new URLSearchParams(window.location.search).get("ssh") === "missing") {
-      return { sshVersion: null, sftpFound: false, agent: "unavailable", agentKeys: [], agentError: null, sshConfigHosts: 0 };
+      return { sshVersion: null, sftpFound: false, agent: "unavailable", agentKeys: [], agentKind: null, agentError: null, sshConfigHosts: 0 };
     }
     return {
       sshVersion: "OpenSSH_9.5p1, LibreSSL 3.3.6",
       sftpFound: true,
       agent: "ready",
       agentKeys: ["256 SHA256:3fA9k2Lq0yQkZf1mJb7Vx2c8Tn5Rw4Hs6Pd0Ue1Gi9o you@laptop (ED25519)"],
+      agentKind: "environment",
       agentError: null,
       sshConfigHosts: 1,
     };

@@ -11,6 +11,7 @@
 //! # Ok(()) }
 //! ```
 
+mod agent;
 mod auth;
 mod channels;
 mod error;
@@ -37,6 +38,7 @@ mod session_tests;
 mod sftp;
 pub mod socks5;
 
+pub use agent::{probe_agent, AgentKind, AgentProbe};
 pub use auth::{
     decode_identity, load_identity, plan as plan_auth, security_key_type, Stage, StageConfig,
 };

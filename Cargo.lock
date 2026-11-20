@@ -111,6 +111,7 @@ dependencies = [
  "easyssh-mobile-keys",
  "easyssh-services",
  "easyssh-sessionlog",
+ "easyssh-ssh",
  "easyssh-store",
  "easyssh-telemetry",
  "easyssh-unlock",
