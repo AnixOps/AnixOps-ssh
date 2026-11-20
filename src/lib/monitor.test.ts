@@ -79,8 +79,8 @@ describe("parseSample", () => {
     });
   });
 
-  it("lists real disks only, mount points with spaces included", () => {
-    expect(first.disks.map((disk) => disk.mount)).toEqual(["/", "/run/user/1000", "/mnt/My Disk"]);
+  it("lists real disks only (no tmpfs), mount points with spaces included", () => {
+    expect(first.disks.map((disk) => disk.mount)).toEqual(["/", "/mnt/My Disk"]);
     expect(first.disks[0]).toEqual({ mount: "/", size: 41152736 * 1024, used: 20576368 * 1024, available: 20576368 * 1024 });
   });
 
@@ -154,10 +154,10 @@ describe("helpers", () => {
   });
 
   it("formats sizes and uptime", () => {
-    expect(formatBytes(0)).toBe("0B");
-    expect(formatBytes(1536)).toBe("1.5K");
-    expect(formatBytes(121.2 * 1024 ** 3)).toBe("121G");
-    expect(formatBytes(4.8 * 1024 ** 3)).toBe("4.8G");
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(121.2 * 1024 ** 3)).toBe("121 GB");
+    expect(formatBytes(4.8 * 1024 ** 3)).toBe("4.8 GB");
     expect(formatUptime(4 * 3600 + 44 * 60, "天", "小时", "分")).toBe("4小时 44分");
     expect(formatUptime(3 * 86400 + 7200, "d", "h", "m")).toBe("3d 2h");
   });

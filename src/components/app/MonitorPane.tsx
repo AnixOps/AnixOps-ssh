@@ -1,10 +1,9 @@
-import { ArrowDown, ArrowUp, Check, Copy, ListTree, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, Copy, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { ProcessDialog } from "@/components/app/ProcessDialog";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/form";
-import { Segmented } from "@/components/ui/segmented";
 import { Select } from "@/components/ui/select";
 import { Tooltip } from "@/components/ui/tooltip";
 import { copyText, monitorFailure, monitorSample, type Host, type MonitorFailure } from "@/lib/backend";
@@ -16,10 +15,13 @@ import {
   parseSample,
   pushPoint,
   sortProcesses,
+  summarize,
   view as viewOf,
+  type MonitorSummary,
   type MonitorView,
   type RawSample,
 } from "@/lib/monitor";
+import { MONITOR_WIDTH, monitorTopSort, rememberMonitorTopSort, setMonitorLayout, useMonitorLayout } from "@/lib/monitorPrefs";
 import { duration, ease } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
@@ -63,7 +65,7 @@ export function MonitorPane({
   const [latency, setLatency] = useState<number | null>(null);
   const [failure, setFailure] = useState<MonitorFailure | null>(null);
   const [iface, setIface] = useState<string | null>(null);
-  const [topBy, setTopBy] = useState<"cpu" | "rss">("cpu");
+  const [topBy, setTopBy] = useState<"cpu" | "rss">(monitorTopSort);
   const [processesOpen, setProcessesOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const prev = useRef<RawSample | null>(null);
@@ -141,12 +143,25 @@ export function MonitorPane({
 
   const rate = current?.nets.find((net) => net.name === iface);
   const top = current ? sortProcesses(current.processes, topBy, true).slice(0, TOP) : [];
+  const sortTop = (by: "cpu" | "rss") => {
+    setTopBy(by);
+    rememberMonitorTopSort(by);
+  };
+
+  const { width, collapsed } = useMonitorLayout();
+  const [dragging, setDragging] = useState(false);
+  const linux = current && current.os === "Linux" ? current : null;
+  const summary = linux ? summarize(linux) : null;
 
   return (
     <motion.aside
       aria-label={t.toggleMonitor}
       aria-hidden={!visible}
-      className="material-sidebar flex w-72 shrink-0 flex-col border-r"
+      className={cn(
+        "material-sidebar relative flex shrink-0 flex-col border-r",
+        !dragging && "transition-[width] duration-toggle ease-standard",
+      )}
+      style={{ width: collapsed ? RAIL_WIDTH : width }}
       initial={{ opacity: 0 }}
       animate={
         visible
@@ -154,175 +169,179 @@ export function MonitorPane({
           : { opacity: 0, transitionEnd: { display: "none" }, transition: { duration: duration.micro, ease: ease.exit } }
       }
     >
-      <div className="flex h-11 shrink-0 items-center gap-0.5 border-b pr-2 pl-4">
-        <h2 className="mr-auto text-title-3">{t.monitor}</h2>
-        <IconButton label={t.monitorAllProcesses} onClick={openProcesses} disabled={!current || current.os !== "Linux"}>
-          <ListTree />
-        </IconButton>
-        <IconButton label={t.closeMonitor} onClick={onClose}>
-          <X />
-        </IconButton>
-      </div>
+      {collapsed ? (
+        <Rail summary={summary} swap={linux?.swap && linux.swap.total > 0 ? (100 * linux.swap.used) / linux.swap.total : null} latency={latency} onExpand={() => setMonitorLayout({ collapsed: false })} onClose={onClose} />
+      ) : (
+        <>
+          <div className="flex h-11 shrink-0 items-center gap-0.5 border-b pr-2 pl-4">
+            <h2 className="mr-auto text-title-3">{t.monitor}</h2>
+            <IconButton label={t.collapseMonitor} onClick={() => setMonitorLayout({ collapsed: true })}>
+              <PanelLeftClose />
+            </IconButton>
+            <IconButton label={t.closeMonitor} onClick={onClose}>
+              <X />
+            </IconButton>
+          </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-4 text-callout">
-        <div className="flex items-center gap-2">
-          <span className="text-label-2">{t.monitorAddress}</span>
-          <span className="selectable min-w-0 flex-1 truncate font-mono tabular-nums text-label-1" title={hostAddress(host)}>
-            {hostAddress(host)}
-          </span>
-          <IconButton label={copied ? t.monitorCopied : t.monitorCopyAddress} onClick={copyAddress}>
-            {copied ? <Check /> : <Copy />}
-          </IconButton>
-        </div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain text-callout">
+            <div className="px-4 py-3">
+              <dl className="grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5">
+                <dt className="text-label-2">{t.monitorAddress}</dt>
+                <dd className="flex min-w-0 items-center gap-1">
+                  <MiddleTruncate text={hostAddress(host)} className="selectable font-mono tabular-nums text-label-1" />
+                  <IconButton label={copied ? t.monitorCopied : t.monitorCopyAddress} onClick={copyAddress} className="-my-1.5 ml-auto">
+                    {copied ? <Check /> : <Copy />}
+                  </IconButton>
+                </dd>
+                {linux && (
+                  <>
+                    <dt className="text-label-2">{t.monitorHostname}</dt>
+                    <dd className="min-w-0">
+                      {linux.hostname ? (
+                        <MiddleTruncate text={linux.hostname} className="selectable font-mono text-label-1" />
+                      ) : (
+                        <Absent />
+                      )}
+                    </dd>
+                    <dt className="text-label-2">{t.monitorUptime}</dt>
+                    <dd className="truncate text-label-1">
+                      {formatUptime(linux.uptime, t.monitorDays, t.monitorHours, t.monitorMinutes)}
+                    </dd>
+                    <dt className="text-label-2">{t.monitorLoad}</dt>
+                    <dd className="selectable truncate font-mono tabular-nums text-label-1" title={t.monitorLoadHint}>
+                      {linux.load.map((value) => value.toFixed(2)).join(" · ")}
+                    </dd>
+                  </>
+                )}
+              </dl>
 
-        <Status failure={failure} current={current} onRetry={() => setTick((n) => n + 1)} />
-
-        {current && current.os === "Linux" && (
-          <>
-            {current.hostname && <Row label={t.monitorHostname}>{current.hostname}</Row>}
-            <Row label={t.monitorUptime}>{formatUptime(current.uptime, t.monitorDays, t.monitorHours, t.monitorMinutes)}</Row>
-            <Row label={t.monitorLoad}>
-              <span className="font-mono tabular-nums">{current.load.map((value) => value.toFixed(2)).join(", ")}</span>
-            </Row>
-
-            <div className="mt-3 space-y-2">
-              <Meter label={t.monitorCpu} percent={current.cpu} detail={`${current.cpus} ${t.monitorCores}`} />
-              <Meter
-                label={t.monitorMemory}
-                percent={current.mem ? (100 * current.mem.used) / current.mem.total : null}
-                detail={current.mem ? `${formatBytes(current.mem.used)}/${formatBytes(current.mem.total)}` : ""}
-              />
-              {current.swap && current.swap.total > 0 ? (
-                <Meter
-                  label={t.monitorSwap}
-                  percent={(100 * current.swap.used) / current.swap.total}
-                  detail={`${formatBytes(current.swap.used)}/${formatBytes(current.swap.total)}`}
-                />
-              ) : (
-                <Row label={t.monitorSwap}>
-                  <span className="text-label-3">{t.monitorNoSwap}</span>
-                </Row>
-              )}
+              <Status failure={failure} current={current} onRetry={() => setTick((n) => n + 1)} />
             </div>
 
-            <Section
-              title={t.monitorTopProcesses}
-              action={
-                <Segmented
-                  size="sm"
-                  label={t.monitorTopProcesses}
-                  value={topBy}
-                  onChange={setTopBy}
-                  options={[
-                    { value: "cpu", label: t.monitorByCpu },
-                    { value: "rss", label: t.monitorByMemory },
-                  ]}
-                />
-              }
-            >
-              <table className="w-full table-fixed">
-                <thead className="sr-only">
-                  <tr>
-                    <th>{t.processCpu}</th>
-                    <th>{t.processMemory}</th>
-                    <th>{t.processCommand}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {top.map((proc) => (
-                    <tr key={proc.pid} className="h-6">
-                      <td className="w-12 pr-2 text-right font-mono tabular-nums text-label-2">{proc.cpu.toFixed(1)}%</td>
-                      <td className="w-14 pr-2 text-right font-mono tabular-nums text-label-2">{formatBytes(proc.rss)}</td>
-                      <td className="truncate text-label-1" title={`${proc.name} (PID ${proc.pid})`}>
-                        {proc.name}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <Button variant="quiet" size="sm" className="mt-1 -ml-3" onClick={openProcesses}>
-                <ListTree />
-                {t.monitorAllProcesses}
-              </Button>
-            </Section>
+            {linux && (
+              <>
+                <Section>
+                  <div className="grid grid-cols-[max-content_max-content_minmax(0,1fr)] items-baseline gap-x-3">
+                    <Meter label={t.monitorCpu} percent={linux.cpu} detail={`${linux.cpus} ${t.monitorCores}`} />
+                    <Meter
+                      label={t.monitorMemory}
+                      percent={linux.mem ? (100 * linux.mem.used) / linux.mem.total : null}
+                      detail={linux.mem ? `${formatBytes(linux.mem.used)} / ${formatBytes(linux.mem.total)}` : ""}
+                    />
+                    {linux.swap && linux.swap.total > 0 ? (
+                      <Meter
+                        label={t.monitorSwap}
+                        percent={(100 * linux.swap.used) / linux.swap.total}
+                        detail={`${formatBytes(linux.swap.used)} / ${formatBytes(linux.swap.total)}`}
+                      />
+                    ) : (
+                      <>
+                        <span className="text-label-2">{t.monitorSwap}</span>
+                        <span className="col-span-2 text-label-3">{t.monitorNoSwap}</span>
+                      </>
+                    )}
+                  </div>
+                </Section>
 
-            <Section
-              title={t.monitorNetwork}
-              action={
-                current.nets.length > 0 || iface ? (
-                  <Select
-                    aria-label={t.monitorInterface}
-                    className="h-7 w-28 px-2"
-                    value={iface ?? ""}
-                    onChange={(event) => chooseInterface(event.target.value)}
-                  >
-                    {(prev.current?.nets ?? []).map((net) => (
-                      <option key={net.name} value={net.name}>
-                        {net.name}
-                      </option>
-                    ))}
-                  </Select>
-                ) : null
-              }
-            >
-              <div className="mb-1 flex gap-4">
-                <Legend swatch="bg-(--chart-2)" icon={<ArrowUp />} label={t.monitorUpload} value={rate ? `${formatBytes(rate.tx)}/s` : "–"} />
-                <Legend swatch="bg-(--chart-1)" icon={<ArrowDown />} label={t.monitorDownload} value={rate ? `${formatBytes(rate.rx)}/s` : "–"} />
-              </div>
-              <Chart
-                label={t.monitorNetwork}
-                series={[
-                  { name: t.monitorDownload, stroke: "stroke-(--chart-1)", points: history.rx },
-                  { name: t.monitorUpload, stroke: "stroke-(--chart-2)", points: history.tx },
-                ]}
-                format={(value) => `${formatBytes(value)}/s`}
-              />
-            </Section>
-
-            <Section
-              title={t.monitorLatency}
-              action={
-                <span className="font-mono tabular-nums text-label-1" title={t.monitorLatencyHint}>
-                  {latency === null ? "–" : `${Math.round(latency)} ms`}
-                </span>
-              }
-            >
-              <Chart
-                label={t.monitorLatency}
-                series={[{ name: t.monitorLatency, stroke: "stroke-(--chart-3)", points: history.latency }]}
-                format={(value) => `${Math.round(value)} ms`}
-              />
-            </Section>
-
-            <Section title={t.monitorDisks}>
-              <table className="w-full table-fixed">
-                <thead>
-                  <tr className="text-left text-label-3">
-                    <th className="pb-1 font-normal">{t.monitorMount}</th>
-                    <th className="w-24 pb-1 text-right font-normal">{t.monitorFreeOfSize}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {current.disks.map((disk) => {
-                    const used = disk.size > 0 ? (100 * disk.used) / disk.size : 0;
-                    return (
-                      <tr key={disk.mount} title={`${disk.mount}: ${Math.round(used)}%`}>
-                        <td className="py-0.5 pr-2">
-                          <div className="truncate text-label-1">{disk.mount}</div>
-                          <Bar percent={used} />
-                        </td>
-                        <td className="py-0.5 text-right align-top font-mono tabular-nums text-label-2">
-                          {formatBytes(disk.available)}/{formatBytes(disk.size)}
-                        </td>
+                <Section title={t.monitorTopProcesses}>
+                  <table className="w-full table-fixed">
+                    <thead>
+                      <tr className="text-label-2">
+                        <th className="h-7 text-left font-normal">{t.monitorProcessName}</th>
+                        <SortHeader className="w-16" label={t.processCpu} active={topBy === "cpu"} onClick={() => sortTop("cpu")} />
+                        <SortHeader className="w-18" label={t.processMemory} active={topBy === "rss"} onClick={() => sortTop("rss")} />
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </Section>
-          </>
-        )}
-      </div>
+                    </thead>
+                    <tbody>
+                      {top.map((proc) => (
+                        <tr key={proc.pid} className="h-7 border-t">
+                          <td className="truncate pr-2 text-label-1" title={`${proc.name} (PID ${proc.pid})`}>
+                            {proc.name}
+                          </td>
+                          <td className="text-right font-mono tabular-nums text-label-1">{proc.cpu.toFixed(1)}%</td>
+                          <td className="text-right font-mono tabular-nums text-label-2">{formatBytes(proc.rss)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <Button variant="quiet" size="sm" className="mt-1 -ml-2.5 text-(--accent)" onClick={openProcesses}>
+                    {t.monitorAllProcesses}
+                    <ChevronRight />
+                  </Button>
+                </Section>
+
+                <Section
+                  title={t.monitorNetwork}
+                  action={
+                    linux.nets.length > 0 || iface ? (
+                      <Select
+                        aria-label={t.monitorInterface}
+                        className="h-7 w-auto max-w-32 min-w-0 py-0 pr-7 pl-2 font-mono text-callout"
+                        value={iface ?? ""}
+                        onChange={(event) => chooseInterface(event.target.value)}
+                      >
+                        {(prev.current?.nets ?? []).map((net) => (
+                          <option key={net.name} value={net.name}>
+                            {net.name}
+                          </option>
+                        ))}
+                      </Select>
+                    ) : null
+                  }
+                >
+                  <div className="mb-2 grid grid-cols-2 gap-3">
+                    <Legend swatch="bg-(--chart-2)" icon={<ArrowUp />} label={t.monitorUpload} value={rate ? `${formatBytes(rate.tx)}/s` : null} />
+                    <Legend swatch="bg-(--chart-1)" icon={<ArrowDown />} label={t.monitorDownload} value={rate ? `${formatBytes(rate.rx)}/s` : null} />
+                  </div>
+                  <Chart
+                    label={t.monitorNetwork}
+                    series={[
+                      { name: t.monitorDownload, stroke: "stroke-(--chart-1)", points: history.rx },
+                      { name: t.monitorUpload, stroke: "stroke-(--chart-2)", points: history.tx },
+                    ]}
+                    format={(value) => `${formatBytes(value)}/s`}
+                  />
+                </Section>
+
+                <Section
+                  title={t.monitorLatency}
+                  action={
+                    <span className="font-mono tabular-nums text-label-1" title={t.monitorLatencyHint}>
+                      {latency === null ? <Absent /> : `${Math.round(latency)} ms`}
+                    </span>
+                  }
+                >
+                  <Chart
+                    label={t.monitorLatency}
+                    series={[{ name: t.monitorLatency, stroke: "stroke-(--chart-3)", points: history.latency }]}
+                    format={(value) => `${Math.round(value)} ms`}
+                  />
+                </Section>
+
+                <Section title={t.monitorDisks} action={<span className="text-label-2">{t.monitorFreeOfSize}</span>}>
+                  <ul className="space-y-2.5">
+                    {linux.disks.map((disk) => {
+                      const used = disk.size > 0 ? (100 * disk.used) / disk.size : 0;
+                      return (
+                        <li key={disk.mount} title={`${disk.mount} · ${Math.round(used)}%`}>
+                          <div className="flex items-baseline gap-3">
+                            <MiddleTruncate text={disk.mount} className="selectable min-w-0 flex-1 font-mono text-label-1" />
+                            <span className="shrink-0 font-mono tabular-nums text-label-2">
+                              {formatBytes(disk.available)} / {formatBytes(disk.size)}
+                            </span>
+                          </div>
+                          <Bar percent={used} />
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </Section>
+              </>
+            )}
+          </div>
+          <ResizeHandle width={width} onDragging={setDragging} />
+        </>
+      )}
 
       <AnimatePresence>
         {processesOpen && current && (
@@ -338,6 +357,131 @@ export function MonitorPane({
     </motion.aside>
   );
 }
+
+/** Width of the folded monitor: one icon column, like the app's own rail. */
+const RAIL_WIDTH = 52;
+
+/** The folded monitor: the few numbers worth a glance, top to bottom. The
+ *  whole column unfolds it. */
+function Rail({
+  summary,
+  swap,
+  latency,
+  onExpand,
+  onClose,
+}: {
+  summary: MonitorSummary | null;
+  /** Swap in use, 0 to 100; null without swap. */
+  swap: number | null;
+  latency: number | null;
+  onExpand: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <>
+      <div className="flex h-11 shrink-0 items-center justify-center border-b">
+        <IconButton label={t.expandMonitor} onClick={onExpand} side="right">
+          <PanelLeftOpen />
+        </IconButton>
+      </div>
+      <button
+        type="button"
+        aria-label={t.expandMonitor}
+        onClick={onExpand}
+        className="flex min-h-0 flex-1 flex-col items-stretch gap-3 overflow-hidden px-1.5 py-3 outline-none hover:bg-fill-1 focus-visible:bg-fill-1"
+      >
+        <RailStat label={t.monitorCpu} percent={summary?.cpu ?? null} />
+        <RailStat label={t.monitorMemory} percent={summary?.mem ?? null} />
+        {swap !== null && <RailStat label={t.monitorSwap} percent={swap} />}
+        <RailStat label={t.monitorRoot} short={t.monitorDisks} percent={summary?.diskPercent ?? null} />
+        <div className="text-center">
+          <div className="truncate text-caption text-label-2">{t.monitorLatency}</div>
+          <div className="font-mono text-callout tabular-nums text-label-1">
+            {latency === null ? <Absent /> : Math.round(latency)}
+          </div>
+          {latency !== null && <div className="text-caption text-label-3">ms</div>}
+        </div>
+      </button>
+      <div className="flex shrink-0 justify-center border-t py-1.5">
+        <IconButton label={t.closeMonitor} onClick={onClose} side="right">
+          <X />
+        </IconButton>
+      </div>
+    </>
+  );
+}
+
+function RailStat({ label, short, percent }: { label: string; short?: string; percent: number | null }) {
+  const value = percent === null ? null : Math.min(100, Math.max(0, percent));
+  return (
+    <div className="text-center" title={value === null ? label : `${label} ${Math.round(value)}%`}>
+      <div className="truncate text-caption text-label-2">{short ?? label}</div>
+      <div className="font-mono text-callout tabular-nums text-label-1">{value === null ? <Absent /> : `${Math.round(value)}%`}</div>
+      <Bar percent={value ?? 0} />
+    </div>
+  );
+}
+
+/** The monitor's trailing edge: drag to resize, double-click for the
+ *  default width, arrows from the keyboard. Dragging far past the
+ *  narrowest width folds it into the rail. */
+function ResizeHandle({ width, onDragging }: { width: number; onDragging: (dragging: boolean) => void }) {
+  const start = useRef<{ x: number; width: number } | null>(null);
+  const key = (event: KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 64 : 16;
+    if (event.key === "ArrowLeft") setMonitorLayout({ width: width - step });
+    else if (event.key === "ArrowRight") setMonitorLayout({ width: width + step });
+    else if (event.key === "Home") setMonitorLayout({ width: MONITOR_WIDTH.min });
+    else if (event.key === "End") setMonitorLayout({ width: MONITOR_WIDTH.max });
+    else return;
+    event.preventDefault();
+  };
+  return (
+    <div
+      role="separator"
+      tabIndex={0}
+      aria-label={t.resizeMonitor}
+      aria-orientation="vertical"
+      aria-valuenow={width}
+      aria-valuemin={MONITOR_WIDTH.min}
+      aria-valuemax={MONITOR_WIDTH.max}
+      onPointerDown={(event) => {
+        start.current = { x: event.clientX, width };
+        event.currentTarget.setPointerCapture(event.pointerId);
+        event.preventDefault();
+        onDragging(true);
+      }}
+      onPointerMove={(event) => {
+        if (!start.current) return;
+        const next = start.current.width + event.clientX - start.current.x;
+        if (next < MONITOR_WIDTH.min - COLLAPSE_PAST) {
+          start.current = null;
+          onDragging(false);
+          setMonitorLayout({ collapsed: true });
+          return;
+        }
+        setMonitorLayout({ width: next });
+      }}
+      onPointerUp={(event) => {
+        start.current = null;
+        onDragging(false);
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
+      onPointerCancel={() => {
+        start.current = null;
+        onDragging(false);
+      }}
+      onDoubleClick={() => setMonitorLayout({ width: MONITOR_WIDTH.default })}
+      onKeyDown={key}
+      className="group/resize absolute inset-y-0 -right-1.5 z-sticky flex w-3 cursor-col-resize justify-center outline-none"
+    >
+      <span className="h-full w-px bg-transparent transition-colors duration-micro group-hover/resize:w-0.5 group-hover/resize:bg-(--accent) group-focus-visible/resize:w-0.5 group-focus-visible/resize:bg-(--accent)" />
+    </div>
+  );
+}
+
+/** How far past the narrowest width a drag goes before it folds the monitor. */
+const COLLAPSE_PAST = 96;
 
 function Status({
   failure,
@@ -385,24 +529,61 @@ function Status({
   return null;
 }
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+
+/** A placeholder for a value that is not there (density.md N13). */
+function Absent() {
+  return <span className="text-label-3">—</span>;
+}
+
+/** Hosts and paths cut in the middle so their end stays readable
+ *  (density.md N12); the whole value is in the tooltip and copies whole. */
+function MiddleTruncate({ text, className }: { text: string; className?: string }) {
+  const tail = 10;
+  if (text.length <= tail + 6) {
+    return (
+      <span className={cn("min-w-0 truncate", className)} title={text}>
+        {text}
+      </span>
+    );
+  }
   return (
-    <div className="mt-1 flex items-baseline gap-2">
-      <span className="w-12 shrink-0 text-label-2">{label}</span>
-      <span className="selectable min-w-0 flex-1 truncate text-label-1">{children}</span>
-    </div>
+    <span className={cn("flex min-w-0", className)} title={text}>
+      <span className="min-w-0 truncate">{text.slice(0, -tail)}</span>
+      <span className="shrink-0 whitespace-pre">{text.slice(-tail)}</span>
+    </span>
   );
 }
 
-function Section({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+function Section({ title, action, children }: { title?: string; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className="mt-4 border-t pt-3">
-      <div className="mb-2 flex min-h-7 items-center gap-2">
-        <h3 className="mr-auto font-medium text-label-1">{title}</h3>
-        {action}
-      </div>
+    <section className="border-t px-4 py-3">
+      {title && (
+        <div className="mb-2 flex min-h-7 items-center gap-2">
+          <h3 className="mr-auto font-semibold text-label-1">{title}</h3>
+          {action}
+        </div>
+      )}
       {children}
     </section>
+  );
+}
+
+function SortHeader({ label, active, onClick, className }: { label: string; active: boolean; onClick: () => void; className?: string }) {
+  return (
+    <th className={cn("h-7 text-right font-normal", className)} aria-sort={active ? "descending" : "none"}>
+      <button
+        type="button"
+        onClick={onClick}
+        title={t.processSort}
+        className={cn(
+          "inline-flex items-center gap-0.5 rounded-xs outline-none hover:text-label-1 focus-visible:text-label-1",
+          active ? "font-medium text-label-1" : "text-label-2",
+        )}
+      >
+        {active && <ArrowDown className="size-3.5" />}
+        {label}
+      </button>
+    </th>
   );
 }
 
@@ -414,12 +595,14 @@ export function fillTone(percent: number): string {
 function Bar({ percent }: { percent: number }) {
   const value = Math.min(100, Math.max(0, percent));
   return (
-    <div className="mt-0.5 h-1 overflow-hidden rounded-pill bg-fill-2">
+    <div className="mt-1 h-1 overflow-hidden rounded-pill bg-fill-2">
       <div className={cn("h-full rounded-pill transition-[width] duration-toggle", fillTone(value))} style={{ width: `${value}%` }} />
     </div>
   );
 }
 
+/** One row of the resource grid: label, percent, detail, and the bar under
+ *  all three. The grid lines the labels and numbers up across rows. */
 function Meter({ label, percent, detail }: { label: string; percent: number | null; detail: string }) {
   const value = percent === null ? null : Math.min(100, Math.max(0, percent));
   return (
@@ -430,24 +613,25 @@ function Meter({ label, percent, detail }: { label: string; percent: number | nu
       aria-valuemax={100}
       aria-valuenow={value === null ? undefined : Math.round(value)}
       aria-valuetext={value === null ? undefined : `${Math.round(value)}% ${detail}`}
+      className="col-span-3 grid grid-cols-subgrid items-baseline [&+&]:mt-2.5 [&+span]:mt-2.5 [&+span+span]:mt-2.5"
     >
-      <div className="flex items-baseline gap-2">
-        <span className="w-12 shrink-0 text-label-2">{label}</span>
-        <span className="font-mono tabular-nums text-label-1">{value === null ? "–" : `${Math.round(value)}%`}</span>
-        <span className="ml-auto font-mono tabular-nums text-label-2">{detail}</span>
+      <span className="text-label-2">{label}</span>
+      <span className="text-right font-mono tabular-nums text-label-1">{value === null ? <Absent /> : `${Math.round(value)}%`}</span>
+      <span className="truncate text-right font-mono tabular-nums text-label-2">{detail}</span>
+      <div className="col-span-3">
+        <Bar percent={value ?? 0} />
       </div>
-      <Bar percent={value ?? 0} />
     </div>
   );
 }
 
-function Legend({ swatch, icon, label, value }: { swatch: string; icon: ReactNode; label: string; value: string }) {
+function Legend({ swatch, icon, label, value }: { swatch: string; icon: ReactNode; label: string; value: string | null }) {
   return (
-    <span className="flex items-center gap-1 text-label-2 [&_svg]:size-4">
-      <span aria-hidden className={cn("h-0.5 w-3 rounded-pill", swatch)} />
+    <span className="flex min-w-0 items-center gap-1.5 text-label-2 [&_svg]:size-3.5">
+      <span aria-hidden className={cn("h-0.5 w-3 shrink-0 rounded-pill", swatch)} />
       {icon}
       <span className="sr-only">{label}</span>
-      <span className="font-mono tabular-nums text-label-1">{value}</span>
+      <span className="truncate font-mono tabular-nums text-label-1">{value ?? <Absent />}</span>
     </span>
   );
 }
@@ -559,16 +743,20 @@ function IconButton({
   label,
   onClick,
   disabled,
+  side,
+  className,
   children,
 }: {
   label: string;
   onClick: () => void;
   disabled?: boolean;
+  side?: "top" | "right" | "bottom" | "left";
+  className?: string;
   children: ReactNode;
 }) {
   return (
-    <Tooltip label={label}>
-      <Button variant="quiet" size="icon-sm" aria-label={label} onClick={onClick} disabled={disabled}>
+    <Tooltip label={label} side={side}>
+      <Button variant="quiet" size="icon-sm" aria-label={label} onClick={onClick} disabled={disabled} className={className}>
         {children}
       </Button>
     </Tooltip>
