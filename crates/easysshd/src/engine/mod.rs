@@ -67,6 +67,15 @@ fn vault_error(error: easyssh_vault::VaultError) -> SshError {
     }
 }
 
+fn proxy_vault_error(error: easyssh_vault::VaultError) -> SshError {
+    match error {
+        easyssh_vault::VaultError::Locked => SshError::Locked(
+            "the vault is locked; unlock it to use the saved proxy password".into(),
+        ),
+        other => SshError::Protocol(format!("cannot read the saved proxy password: {other}")),
+    }
+}
+
 /// The private key (and passphrase) saved for `host_id`, ready to be handed
 /// to the engine from memory. Nothing saved: `None`. Saved but the vault is
 /// locked: [`SshError::Locked`], which the daemon reports as `vault_locked`.
@@ -212,8 +221,21 @@ impl Engine {
         plan: &RusshPlan,
         agent: Option<&PathBuf>,
     ) -> Result<Session, SharedError> {
-        let hops: Vec<ConnectParams> = plan.hops.iter().map(|h| self.params(h, agent)).collect();
+        let mut hops: Vec<ConnectParams> =
+            plan.hops.iter().map(|h| self.params(h, agent)).collect();
         let mut target = self.params(&plan.target, agent);
+        // The host's outbound proxy reaches the first hop: the first jump
+        // host, or the target when there is none.
+        if let Some(settings) = &plan.proxy {
+            let secrets = lock(&self.secrets).clone();
+            let proxy =
+                easyssh_engine::saved_proxy(settings, secrets.as_deref(), &plan.key.host_id)
+                    .map_err(|error| Arc::new(proxy_vault_error(error)))?;
+            match hops.first_mut() {
+                Some(first) => first.proxy = Some(proxy),
+                None => target.proxy = Some(proxy),
+            }
+        }
         // A private key (and its passphrase) saved for the host goes to the
         // engine from memory; it is never written to a file.
         if let Some(identity) = self.saved_identity(plan).map_err(Arc::new)? {
@@ -350,6 +372,7 @@ mod tests {
                 private_key: self.key.is_some(),
                 passphrase: self.passphrase.is_some(),
                 password: false,
+                ..Default::default()
             })
         }
     }

@@ -251,6 +251,10 @@
         "engine": {
           "$ref": "#/$defs/EnginePreference",
           "description": "Absent means auto."
+        },
+        "proxy": {
+          "$ref": "#/$defs/ProxySettings",
+          "description": "An outbound proxy for the first hop. Absent means a direct connection. The proxy password is a saved secret, not part of the record."
         }
       },
       "required": [
@@ -2326,6 +2330,10 @@
         },
         "passphrase": {
           "type": "boolean"
+        },
+        "proxy_password": {
+          "type": "boolean",
+          "description": "The password of the host's outbound proxy. Absent from older daemons."
         }
       },
       "required": [
@@ -2353,6 +2361,10 @@
         "passphrase": {
           "type": "string",
           "description": "Key passphrase. Absent keeps; empty clears."
+        },
+        "proxy_password": {
+          "type": "string",
+          "description": "Password of the host's outbound proxy. Absent keeps; empty clears."
         }
       },
       "required": [
@@ -3121,6 +3133,41 @@
         "openssh"
       ],
       "description": "Rust: domain::EnginePreference. Per-host override of the global engine; `auto` follows the global setting."
+    },
+    "ProxyKind": {
+      "type": "string",
+      "enum": [
+        "socks5",
+        "http"
+      ],
+      "description": "Rust: domain::ProxyKind. SOCKS5 (RFC 1928, with RFC 1929 username/password) or HTTP CONNECT (with basic authentication)."
+    },
+    "ProxySettings": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ProxyKind"
+        },
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "username": {
+          "type": "string",
+          "description": "The proxy login; absent means no authentication. Its password is the saved secret `proxy_password`."
+        }
+      },
+      "required": [
+        "kind",
+        "host",
+        "port"
+      ],
+      "additionalProperties": false,
+      "description": "Rust: domain::ProxySettings. Where the outbound proxy of a host is."
     },
     "HostKeyStatus": {
       "type": "string",

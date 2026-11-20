@@ -19,7 +19,7 @@ AnixOps SSH never implements the SSH protocol. Every session runs your own
 `ssh` (passwords and keys are optional and stay encrypted, see
 [Security boundary](#security-boundary)), so `~/.ssh/config`,
 `ProxyJump`, `known_hosts`, the system SSH agent and the 1Password SSH agent
-work exactly as they do in your terminal. The app adds the parts a terminal
+work exactly as they do in your terminal. Hosts can also connect through an outbound SOCKS5 or HTTP CONNECT proxy (built-in engine only; the OpenSSH engine refuses rather than connect directly). The app adds the parts a terminal
 lacks: an organised host list, tabs, a file pane, snippets and tunnels.
 
 ## Where it is going

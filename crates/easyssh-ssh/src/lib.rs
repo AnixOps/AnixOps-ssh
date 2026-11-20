@@ -21,6 +21,7 @@ mod forward_tests;
 mod interaction;
 pub mod known_hosts;
 mod params;
+pub mod proxy;
 mod security_key;
 #[cfg(all(
     feature = "hardware-key",
@@ -54,6 +55,7 @@ pub use known_hosts::{KnownHostStatus, KnownHosts, KnownHostsFile, MemoryKnownHo
 pub use params::{
     AgentSource, ConnectParams, MemoryIdentity, DEFAULT_KEEPALIVE, DEFAULT_KEEPALIVE_MAX,
 };
+pub use proxy::{Proxy, ProxyError, ProxyFailure, ProxyKind};
 pub use russh::Pty;
 pub use security_key::{
     default_security_key, hardware_backend_available, sign_with_security_key, HidSecurityKey,
