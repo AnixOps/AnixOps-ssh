@@ -10,6 +10,7 @@ import {
   Maximize2,
   Minimize2,
   Plus,
+  Zap,
   Radio,
   RadioTower,
   Rows2,
@@ -36,6 +37,7 @@ import {
   type Tunnel,
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
+import { findSavedHost, formatTarget, parseTarget, type Target } from "@/lib/quickConnect";
 import { shortcutHint } from "@/lib/shortcutTable";
 import { terminalFor } from "@/lib/terminals";
 import { describeTunnel } from "@/lib/tunnels";
@@ -91,6 +93,7 @@ export function CommandPalette({
   activeHostTab,
   onClose,
   onOpenHost,
+  onQuickConnect,
   onOpenLocal,
   onNewHost,
   onImport,
@@ -109,6 +112,8 @@ export function CommandPalette({
   activeHostTab: boolean;
   onClose: () => void;
   onOpenHost: (host: Host) => void;
+  /** Opens a terminal to an address that is not saved. */
+  onQuickConnect: (target: Target) => void;
   onOpenLocal: () => void;
   onNewHost: () => void;
   onImport: () => void;
@@ -255,8 +260,33 @@ export function CommandPalette({
       .map((item) => ({ item, score: score(`${item.title} ${item.subtitle ?? ""}`, normalized) }))
       .filter((entry): entry is { item: Item; score: number } => entry.score !== null);
     if (normalized) scored.sort((a, b) => a.score - b.score);
-    return scored.map((entry) => entry.item).slice(0, 50);
-  }, [items, normalized]);
+    const ranked = scored.map((entry) => entry.item);
+    // Something that reads as an SSH destination: a saved host that is the
+    // same one goes first (no duplicate); otherwise "connect to" does, except
+    // for a bare word, which is more likely a search and goes last.
+    const target = parseTarget(query);
+    if (target) {
+      const saved = findSavedHost(hosts, target);
+      if (saved) {
+        const id = `host-${saved.id}`;
+        const entry = items.find((item) => item.id === id);
+        const rest = ranked.filter((item) => item.id !== id);
+        ranked.splice(0, ranked.length, ...(entry ? [entry] : []), ...rest);
+      } else {
+        const quick: Item = {
+          id: "quick-connect",
+          section: t.paletteActions,
+          title: t.quickConnectTo.replace("{target}", formatTarget(target)),
+          subtitle: t.quickConnectNote,
+          icon: Zap,
+          run: () => onQuickConnect(target),
+        };
+        if (target.explicit) ranked.unshift(quick);
+        else ranked.push(quick);
+      }
+    }
+    return ranked.slice(0, 50);
+  }, [items, normalized, query, hosts, onQuickConnect]);
 
   useEffect(() => setIndex(0), [normalized]);
   useEffect(() => {

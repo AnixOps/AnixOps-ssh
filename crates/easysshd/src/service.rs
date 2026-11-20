@@ -1899,6 +1899,11 @@ impl Daemon {
     /// A saved host, or the connection derived from a `~/.ssh/config` alias,
     /// exactly as the v1 app resolves ids.
     fn resolve_host(&self, host_id: &str) -> Result<Connection, Failure> {
+        if let Some(connection) = easyssh_core::adhoc::adhoc_connection(host_id)
+            .map_err(|why| fail("invalid_host", why))?
+        {
+            return Ok(connection);
+        }
         if let Some(alias) = host_id.strip_prefix(SSH_CONFIG_ID_PREFIX) {
             return Ok(Connection::alias(alias, alias));
         }
@@ -1980,8 +1985,10 @@ impl Daemon {
     }
 }
 
+/// Hosts without a saved record (no vault secrets, no serial settings): a
+/// `~/.ssh/config` alias or an unsaved `adhoc:` target.
 fn is_ssh_config_id(id: &str) -> bool {
-    id.starts_with(SSH_CONFIG_ID_PREFIX)
+    id.starts_with(SSH_CONFIG_ID_PREFIX) || easyssh_core::adhoc::is_adhoc_id(id)
 }
 
 /// What a session needs from the vault before `ssh` starts.

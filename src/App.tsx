@@ -4,6 +4,7 @@ import { AskpassDialog } from "@/components/app/AskpassDialog";
 import { HostKeyDialog } from "@/components/app/HostKeyDialog";
 import { VaultUnlockDialog } from "@/components/app/VaultUnlockDialog";
 import { CommandPalette, type PaneAction } from "@/components/app/CommandPalette";
+import { DeepLinkHandler } from "@/components/app/DeepLinkHandler";
 import { FilesPane } from "@/components/app/FilesPane";
 import { MonitorPane } from "@/components/app/MonitorPane";
 import { monitorOpenByDefault, rememberMonitorOpen } from "@/lib/monitorPrefs";
@@ -21,6 +22,7 @@ import { PaneArea } from "@/components/app/PaneArea";
 import type { SessionStatus } from "@/components/app/TerminalView";
 import { ShortcutList } from "@/components/app/ShortcutList";
 import { ConfirmProvider } from "@/components/ui/confirm";
+import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/form";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -33,9 +35,11 @@ import {
   sshStatus,
   deleteHost,
   type Host,
+  type HostFields,
   type HostsSnapshot,
   type SshStatus,
 } from "@/lib/backend";
+import { adhocId, formatTarget, parseAdhocId, type Target } from "@/lib/quickConnect";
 import { setPanes, toggleGlobalBroadcast, toggleTabBroadcast, useBroadcast } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
 import { serialHosts } from "@/lib/serialUi";
@@ -106,6 +110,10 @@ export function App() {
   const [editing, setEditing] = useState<Host | null | undefined>(undefined);
   /** A new host being created starts as a serial port. */
   const [newSerial, setNewSerial] = useState(false);
+  /** Values for the host being created from an unsaved connection. */
+  const [prefill, setPrefill] = useState<{ name: string; fields: HostFields } | undefined>(undefined);
+  /** Tabs of unsaved connections that no longer offer "save as host". */
+  const [savedAdhoc, setSavedAdhoc] = useState<Set<string>>(new Set());
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -169,6 +177,38 @@ export function App() {
     [tabs, addTab],
   );
 
+  // An address typed in the palette or confirmed from a link: no saved host.
+  const quickConnect = useCallback(
+    (target: Target) => {
+      const hostId = adhocId(target);
+      const existing = tabs.find((tab) => tab.hostId === hostId);
+      if (existing) setActiveKey(existing.key);
+      else addTab(hostId, formatTarget(target), null);
+    },
+    [tabs, addTab],
+  );
+
+  const saveAdhoc = useCallback((tab: Tab) => {
+    const target = tab.hostId ? parseAdhocId(tab.hostId) : null;
+    if (!target) return;
+    setPrefill({
+      name: target.host,
+      fields: {
+        alias: null,
+        hostname: target.host,
+        username: target.user,
+        port: target.port,
+        proxyJump: null,
+        notes: "",
+        shellIntegration: false,
+      },
+    });
+    setNewSerial(false);
+    setEditing(null);
+    setAdhocTab(tab.key);
+  }, []);
+  const [adhocTab, setAdhocTab] = useState<string | null>(null);
+
   const openLocal = useCallback(() => addTab(null, t.localTerminal, null), [addTab]);
 
   const startSerialHost = useCallback(() => {
@@ -200,7 +240,10 @@ export function App() {
             maximised: planned.maximised === null ? null : (order[planned.maximised] ?? null),
           };
           const title =
-            host?.name ?? (planned.hostId ? planned.hostId.replace(/^ssh-config:/, "") : t.localTerminal);
+            host?.name ??
+            (planned.hostId
+              ? planned.hostId.replace(/^ssh-config:/, "").replace(/^adhoc:/, "").replace(/:22$/, "")
+              : t.localTerminal);
           const tab = newTab(planned.hostId, title, host?.color ?? null, state);
           tab.restored = Object.fromEntries(
             Object.entries(sessions).filter((entry): entry is [string, string] => entry[1] !== null),
@@ -446,6 +489,16 @@ export function App() {
               {t.loadFailed}: {loadError}
             </Notice>
           )}
+          {activeTab?.hostId?.startsWith("adhoc:") &&
+            activeTab.status.state === "connected" &&
+            !savedAdhoc.has(activeTab.key) && (
+              <div className="flex items-center gap-3 border-b px-4 py-2">
+                <p className="min-w-0 flex-1 truncate text-callout text-label-2">{t.adhocNotSaved}</p>
+                <Button variant="quiet" size="sm" onClick={() => saveAdhoc(activeTab)}>
+                  {t.saveAsHost}
+                </Button>
+              </div>
+            )}
           <div className="min-h-0 flex-1">
             {tabs.map((tab) => (
               <div key={tab.key} className="flex h-full" hidden={tab.key !== activeKey}>
@@ -496,9 +549,15 @@ export function App() {
           host={editing}
           groups={snapshot.groups}
           serial={newSerial}
-          onCancel={() => setEditing(undefined)}
+          prefill={prefill}
+          onCancel={() => {
+            setEditing(undefined);
+            setPrefill(undefined);
+          }}
           onDone={() => {
             setEditing(undefined);
+            if (prefill && adhocTab) setSavedAdhoc((current) => new Set(current).add(adhocTab));
+            setPrefill(undefined);
             reload();
           }}
         />
@@ -517,8 +576,10 @@ export function App() {
           activeHostTab={Boolean(activeTab?.hostId)}
           onClose={() => setPaletteOpen(false)}
           onOpenHost={openHost}
+          onQuickConnect={quickConnect}
           onOpenLocal={openLocal}
           onNewHost={() => {
+            setPrefill(undefined);
             setNewSerial(false);
             setEditing(null);
           }}
@@ -535,6 +596,7 @@ export function App() {
         />
       )}
       </AnimatePresence>
+      <DeepLinkHandler onOpenHost={openHost} onQuickConnect={quickConnect} onError={setLoadError} />
       <AskpassDialog />
       <HostKeyDialog />
       <VaultUnlockDialog />

@@ -193,6 +193,28 @@ export function onHostsChanged(handler: () => void): () => void {
   return () => void stop.then((unlisten) => unlisten());
 }
 
+/** Calls `handler` with each `anixops-ssh://` link the app is opened with, at
+ *  start and while it runs; returns the unsubscribe function. A plain browser
+ *  has none. */
+export function onDeepLink(handler: (urls: string[]) => void): () => void {
+  if (!isTauri) return () => {};
+  let stopped = false;
+  let stop: (() => void) | undefined;
+  void import("@tauri-apps/plugin-deep-link")
+    .then(async ({ getCurrent, onOpenUrl }) => {
+      const current = await getCurrent();
+      if (current?.length && !stopped) handler(current);
+      const unlisten = await onOpenUrl(handler);
+      if (stopped) unlisten();
+      else stop = unlisten;
+    })
+    .catch(console.error);
+  return () => {
+    stopped = true;
+    stop?.();
+  };
+}
+
 export async function saveHost(input: HostInput): Promise<string> {
   if (!isTauri) return previewSaveHost(input);
   return invoke<string>("host_save", { input });

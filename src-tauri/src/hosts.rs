@@ -534,6 +534,9 @@ pub async fn load_hosts(daemon: State<'_, DaemonState>) -> Result<HostsSnapshot,
 }
 
 fn resolve(config: &AppConfig, host_id: &str) -> Result<Connection, String> {
+    if let Some(connection) = easyssh_core::adhoc::adhoc_connection(host_id)? {
+        return Ok(connection);
+    }
     if let Some(alias) = host_id.strip_prefix(SSH_CONFIG_ID_PREFIX) {
         return Ok(Connection::alias(alias, alias));
     }

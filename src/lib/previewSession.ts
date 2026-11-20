@@ -1,5 +1,6 @@
 import type { SessionEvent, SessionHandle } from "./backend";
 import { previewSnapshot } from "./preview";
+import { formatTarget, parseAdhocId } from "./quickConnect";
 
 const ESC = "\x1b";
 const CRLF = "\r\n";
@@ -15,9 +16,10 @@ export function previewSession(
   attach?: "tmux" | "screen",
 ): SessionHandle {
   const entry = previewSnapshot().hosts.find((candidate) => candidate.id === hostId);
-  const host = entry?.name ?? "local";
+  const adhoc = hostId ? parseAdhocId(hostId) : null;
+  const host = entry?.name ?? (adhoc ? formatTarget({ ...adhoc, user: null, port: 22 }) : "local");
   const serial = entry?.fields.serial;
-  const user = hostId ? "deploy" : "you";
+  const user = adhoc?.user ?? (hostId ? "deploy" : "you");
   const prompt = serial
     ? `${host}> `
     : `${color("1;32", `${user}@${host}`)}:${color("1;34", "~")}$ `;
