@@ -137,6 +137,21 @@ test("the key bar sends Esc, Tab, arrows, Home and F-keys", async ({ page }) => 
   assert.deepEqual(await writes(page), ["\x1b", "\t", "\x1b[D", "\x1b[H", "\x1b[15~", "\x1b[5~"]);
 });
 
+test("the monitor card opens from the terminal, fills in and closes", async ({ page }) => {
+  await page.getByRole("button", { name: "Monitor", exact: true }).tap();
+  const card = page.getByRole("region", { name: "Monitor" });
+  await card.waitFor();
+  // CPU needs a second sample, three seconds after the first.
+  await card.getByRole("meter", { name: "CPU" }).waitFor();
+  await page.waitForFunction(() => /\d+%/.test(document.querySelector("[data-monitor-card] [role=meter]")?.textContent ?? ""), null, { timeout: 8000 });
+  for (const name of ["Memory", "Disks"]) await card.getByRole("meter", { name }).waitFor();
+  assert.match(await card.innerText(), /Up\n\d+d/);
+  const box = await card.getByRole("button", { name: "Close monitor" }).boundingBox();
+  assert.ok(box && box.width >= 44 && box.height >= 44, "close button is a touch target");
+  await card.getByRole("button", { name: "Close monitor" }).tap();
+  await card.waitFor({ state: "detached" });
+});
+
 test("Ctrl arms for one key, locks on a double tap and Alt prefixes ESC", async ({ page }) => {
   const ctrl = page.getByRole("button", { name: /^Ctrl/ });
   await clearWrites(page);

@@ -4,7 +4,7 @@ use easyssh_e2e::russh_support::{
     echo_roundtrip, wait_for_port_open, wait_for_port_shut, within, within_for, Scripted,
 };
 use easyssh_e2e::{E2e, ECHO_PORT};
-use easyssh_ssh::{Error, ForwardKind, Session};
+use easyssh_ssh::{Endpoint, Error, ForwardKind, Session};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -248,4 +248,115 @@ async fn all_three_forwards_run_on_one_connection() {
     dynamic.stop().await.expect("stop -D");
     remote.stop().await.expect("stop -R");
     local.stop().await.expect("stop -L");
+}
+
+const ECHO_SOCKET: &str = "/tmp/e2e-echo.sock";
+const REMOTE_SOCKET: &str = "/tmp/e2e-remote.sock";
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn local_forward_reaches_a_unix_socket_on_the_server() {
+    let e2e = E2e::new();
+    let session = connect(&e2e).await;
+    // direct-streamlocal@openssh.com: `-L port:/tmp/e2e-echo.sock`.
+    let forward = within(
+        "forward",
+        session.forward_local_to(
+            Endpoint::tcp("127.0.0.1", 0),
+            Endpoint::Unix(ECHO_SOCKET.into()),
+        ),
+    )
+    .await
+    .expect("forward");
+    let port = forward.local_addr().expect("address").port();
+    wait_for_port_open(port, UP).await;
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    echo_roundtrip(&mut stream, "to-the-socket").await;
+    drop(stream);
+    within("stop", forward.stop()).await.expect("stop");
+    wait_for_port_shut(port, Duration::from_secs(10)).await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn local_unix_socket_forwards_to_a_unix_socket_on_the_server() {
+    let e2e = E2e::new();
+    let session = connect(&e2e).await;
+    let dir = std::env::temp_dir().join(format!("easyssh-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let local = dir.join("l.sock");
+    let forward = within(
+        "forward",
+        session.forward_local_to(
+            Endpoint::Unix(local.to_string_lossy().into_owned()),
+            Endpoint::Unix(ECHO_SOCKET.into()),
+        ),
+    )
+    .await
+    .expect("forward");
+    let mut stream = within("connect", tokio::net::UnixStream::connect(&local))
+        .await
+        .expect("socket");
+    within_for("echo", Duration::from_secs(20), async {
+        stream.write_all(b"unix-to-unix\n").await.unwrap();
+        let mut line = String::new();
+        BufReader::new(&mut stream)
+            .read_line(&mut line)
+            .await
+            .unwrap();
+        assert_eq!(line, "unix-to-unix\n");
+    })
+    .await;
+    drop(stream);
+    within("stop", forward.stop()).await.expect("stop");
+    assert!(!local.exists(), "the socket file is removed on stop");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn remote_forward_of_a_socket_path_reaches_a_local_listener() {
+    let e2e = E2e::new();
+    let session = connect(&e2e).await;
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local_port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                if reader.read_line(&mut line).await.is_ok() {
+                    let _ = reader
+                        .get_mut()
+                        .write_all(format!("socket-pong:{line}").as_bytes())
+                        .await;
+                }
+            });
+        }
+    });
+    // streamlocal-forward@openssh.com: `-R /tmp/e2e-remote.sock:127.0.0.1:port`.
+    let forward = within(
+        "forward",
+        session.forward_remote_to(
+            Endpoint::Unix(REMOTE_SOCKET.into()),
+            Endpoint::tcp("127.0.0.1", local_port),
+        ),
+    )
+    .await
+    .expect("forward");
+    assert_eq!(forward.kind(), ForwardKind::Remote);
+    let ask = format!("echo socket-ping | timeout 10 socat - UNIX-CONNECT:{REMOTE_SOCKET}");
+    let answer = within_for("remote socket answers", UP, async {
+        loop {
+            let output = session.exec(&ask).await.expect("exec");
+            let text = output.stdout_text();
+            if text.contains("socket-pong") {
+                return text;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    })
+    .await;
+    assert_eq!(answer, "socket-pong:socket-ping\n");
+    within("stop", forward.stop()).await.expect("stop");
 }

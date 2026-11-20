@@ -407,7 +407,7 @@ function Section({ title, action, children }: { title: string; action?: ReactNod
 }
 
 /** Tone by how full: words carry the number, colour only adds to it. */
-function fillTone(percent: number): string {
+export function fillTone(percent: number): string {
   return percent >= 90 ? "bg-danger" : percent >= 80 ? "bg-warning" : "bg-(--accent)";
 }
 

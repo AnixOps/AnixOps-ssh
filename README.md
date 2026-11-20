@@ -38,7 +38,7 @@ current 1.x app.
 | **Hosts** | Saved hosts and every `Host` in `~/.ssh/config`, grouped, tagged, coloured and searchable. Create and edit hosts in the app. |
 | **Terminal** | xterm.js tabs on a real PTY: truecolor, 10,000-line scrollback (adjustable), find, copy and paste, reconnect, local shell tabs. |
 | **Files** | An SFTP pane beside the terminal: browse, upload by drag and drop, download, rename, delete, with a transfer queue. |
-| **Server monitor** | Beside a host's terminal: address, uptime, load, CPU, memory and swap, the busiest processes, network and latency over time, and disks. A full process list sorts by any column and can end a process. It reads `/proc` on the terminal's own connection (Linux servers, built-in engine), never connecting by itself. |
+| **Server monitor** | Beside a host's terminal: address, uptime, load, CPU, memory and swap, the busiest processes, network and latency over time, and disks. A full process list sorts by any column and can end a process. It reads `/proc` on the terminal's own connection (Linux servers), never connecting by itself: on the built-in engine through the shared connection, on OpenSSH (Linux, macOS) through the terminal's control socket (`ssh -M -S`, no prompts). On the phone a card over the terminal shows CPU, memory, the root disk, network rate, load and uptime every 3 s while it is open and the app is in front. |
 | **SSH engine** | The built-in engine (russh) is the default: a host's terminal, file pane and tunnels share one connection, so a password or key passphrase is asked once. Hosts that need something it does not do (`ProxyCommand`, `Match`, `LocalCommand`, certificates, a remote command, forwards stored in the config; FIDO2 keys too on a Windows without the WebAuthn API) run on the system OpenSSH automatically. OpenSSH is also an advanced choice, globally or per host, in **Settings → Advanced**; it is kept for compatibility and only gets fixes. Installs that never chose an engine use the built-in one; an explicit OpenSSH choice is kept. |
 | **Passwords** | The built-in engine asks in a dialog, once per connection. On OpenSSH hosts terminals ask in the terminal, and the file pane and tunnels ask in a dialog through `SSH_ASKPASS`. Answers go straight to the engine and are saved only if you choose "Remember in vault". |
 | **Snippets** | Saved commands, run in the active terminal or broadcast to all. |
@@ -121,6 +121,20 @@ completion with relative paths, a margin bar per prompt (green when the command
 succeeded, red when it failed, hover for the command and exit code), and the
 prompt jumps above. What the scripts do and the sequence format are in
 [`shell-integration/README.md`](shell-integration/README.md).
+
+## rz/sz in the terminal
+
+Run `sz file` on the host and the app asks nothing more than where to put it
+(the Downloads folder, or a Save dialog when **Ask where to save received
+files** is on); run `rz` and a file picker (several files at once) opens. A
+card over the terminal shows progress; Esc or Ctrl+C cancels and sends the
+ZMODEM abort sequence. Nothing of the transfer is written to the screen. It
+is on by default (**Settings → Terminal → rz/sz file transfer**) and on the
+desktop app only. The protocol is [zmodem.js](https://github.com/FGasper/zmodemjs)
+(Apache-2.0, a permissive licence compatible with this project's MIT); terminal
+output reaches the web view without losing a byte (bytes that are not UTF-8 are
+carried as private-use characters U+100080 to U+1000FF and turned back for the
+transfer). trzsz is not supported yet.
 
 ## Security boundary
 

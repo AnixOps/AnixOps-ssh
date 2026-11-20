@@ -51,7 +51,8 @@ pub use auth::{
 pub use channels::{ExecOutput, ExitStatus, ShellHandle, ShellOptions};
 pub use env::{default_terminal_modes, lang_for, local_shell_env, shell_env};
 pub use error::{AuthMethod, Error, Result};
-pub use forward::{Forward, ForwardFailures, ForwardKind};
+pub use forward::{Endpoint, Forward, ForwardFailures, ForwardKind};
+
 pub use interaction::{Decision, DenyAll, HostKeyDetails, Interaction, KbdPrompt};
 pub use known_hosts::{KnownHostStatus, KnownHosts, KnownHostsFile, MemoryKnownHosts};
 pub use params::{

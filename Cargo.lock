@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "anixops-ssh"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -1757,7 +1757,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "easyssh-ai"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "base64 0.22.1",
  "easyssh-crypto",
@@ -1773,7 +1773,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-core"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-crypto"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -1809,7 +1809,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-e2e"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1830,7 +1830,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-engine"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1856,7 +1856,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-import"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "csv",
  "easyssh-core",
@@ -1871,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-mobile-keys"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "base64 0.22.1",
  "easyssh-core",
@@ -1884,7 +1884,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-proto"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "chrono",
  "easyssh-core",
@@ -1900,7 +1900,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-server"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1926,7 +1926,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-services"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1946,7 +1946,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-sessionlog"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "chacha20poly1305",
  "chrono",
@@ -1961,7 +1961,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-ssh"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1986,7 +1986,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-store"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2007,7 +2007,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-sync"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "base64 0.22.1",
  "easyssh-crypto",
@@ -2024,7 +2024,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-telemetry"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -2038,7 +2038,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-unlock"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "block2",
  "ctap-hid-fido2",
@@ -2053,7 +2053,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-update"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2067,7 +2067,7 @@ dependencies = [
 
 [[package]]
 name = "easyssh-vault"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "easyssh-core",
  "easyssh-crypto",
@@ -2080,7 +2080,7 @@ dependencies = [
 
 [[package]]
 name = "easysshd"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

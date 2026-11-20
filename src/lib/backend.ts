@@ -69,6 +69,8 @@ export interface HostFields {
   engine?: EnginePreference | null;
   /** Opt-in: send the shell integration script after login. */
   shellIntegration: boolean;
+  /** X11 forwarding (`ssh -X`); the host then connects through OpenSSH. */
+  forwardX11?: boolean;
   /** An outbound proxy for the first hop; null or absent connects directly. Its password is a saved secret. */
   proxy?: ProxyFields | null;
   /** Set for a serial port; the SSH fields are then unused. */
@@ -148,6 +150,8 @@ export interface SessionHandle {
   /** The daemon's id for the session, kept so a layout can reattach to it. */
   id: string;
   write(data: string): void;
+  /** Like `write`, resolving once the backend has taken the data (rz/sz paces itself on it). */
+  writeAsync?(data: string): Promise<void>;
   resize(cols: number, rows: number): void;
   /** Stops listening; the session keeps running in the background daemon. */
   detach(): void;
@@ -363,6 +367,7 @@ function sessionHandle(id: string, engine: SshEngine | null = null, engineReason
     engine,
     engineReason,
     write: (data) => void invoke("session_write", { id, data }).catch(report),
+    writeAsync: (data) => invoke<void>("session_write", { id, data }),
     resize: (cols, rows) => void invoke("session_resize", { id, cols, rows }).catch(report),
     detach: () => void invoke("session_detach", { id }).catch(report),
     close: () => void invoke("session_close", { id }).catch(report),
@@ -988,6 +993,17 @@ const previewTunnels: Tunnel[] = [
     targetHost: "redis.internal",
     targetPort: 6379,
     status: { state: "running", port: 16379, lastError: "redis.internal:6379: connect failed", errorCount: 2 },
+  },
+  {
+    id: "tunnel-5",
+    name: "Docker",
+    hostId: "1",
+    kind: "local",
+    bindAddress: null,
+    bindPort: 2375,
+    targetHost: "/run/docker.sock",
+    targetPort: null,
+    status: { state: "stopped" },
   },
 ];
 

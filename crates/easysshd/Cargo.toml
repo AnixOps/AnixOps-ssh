@@ -33,7 +33,7 @@ serde_json.workspace = true
 sha1 = "0.10"
 sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "process"] }
 uuid.workspace = true
 zeroize = "1"
 serialport = { version = "4", default-features = false }

@@ -66,8 +66,12 @@ export function describe(forward: {
 }): string {
   const bind = listeningPort(forward);
   if (forward.kind === "dynamic") return `${bind} SOCKS`;
-  if (forward.kind === "remote") return `${bind} ← ${forward.targetHost}:${forward.targetPort}`;
-  return `${bind} → ${forward.targetHost}:${forward.targetPort}`;
+  // A Unix socket target (made on the desktop and synced) has no port.
+  const target = forward.targetHost?.startsWith("/")
+    ? forward.targetHost
+    : `${forward.targetHost}:${forward.targetPort}`;
+  if (forward.kind === "remote") return `${bind} ← ${target}`;
+  return `${bind} → ${target}`;
 }
 
 /** The first thing wrong with a draft, or the input to save. A forward without

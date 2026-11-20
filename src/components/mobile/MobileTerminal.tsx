@@ -2,8 +2,9 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ChevronLeft, ChevronsDown, FolderOpen, ChevronsUp, Keyboard, KeyboardOff, RotateCw, SlidersHorizontal, Unplug } from "lucide-react";
+import { Activity, ChevronLeft, ChevronsDown, FolderOpen, ChevronsUp, Keyboard, KeyboardOff, RotateCw, SlidersHorizontal, Unplug } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { MobileMonitor } from "@/components/mobile/MobileMonitor";
 import { MobileKeyBar, type KeyBarActions, type ModifierName } from "@/components/mobile/MobileKeyBar";
 import { SelectionOverlay } from "@/components/mobile/SelectionOverlay";
 import { attachTerminalTouch, type TouchController, type TouchOverlay } from "@/components/mobile/terminalTouch";
@@ -103,6 +104,7 @@ export function MobileTerminal({
   const [, redraw] = useState(0);
   const [preedit, setPreedit] = useState("");
   const [notice, setNotice] = useState("");
+  const [monitorOpen, setMonitorOpen] = useState(false);
 
   const setStatus = useCallback((next: Status | ((current: Status) => Status)) => {
     const value = typeof next === "function" ? next(statusRef.current) : next;
@@ -459,6 +461,15 @@ export function MobileTerminal({
           <Button
             variant="quiet"
             size="icon-lg"
+            aria-label={t.mobileMonitor}
+            aria-pressed={monitorOpen}
+            onClick={() => setMonitorOpen((on) => !on)}
+          >
+            <Activity />
+          </Button>
+          <Button
+            variant="quiet"
+            size="icon-lg"
             aria-label={prefs.extraRow ? t.mobileMoreKeysHide : t.mobileMoreKeys}
             aria-pressed={prefs.extraRow}
             onClick={() => updateMobilePrefs({ extraRow: !prefs.extraRow })}
@@ -510,6 +521,9 @@ export function MobileTerminal({
           >
             {notice}
           </p>
+        )}
+        {monitorOpen && (
+          <MobileMonitor hostId={host.id} connected={status.state === "connected"} onClose={() => setMonitorOpen(false)} />
         )}
         {card && (
           <div className="absolute inset-x-0 bottom-3 flex justify-center px-4">

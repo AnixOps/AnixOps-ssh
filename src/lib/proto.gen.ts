@@ -239,6 +239,10 @@ export interface Connection {
    * Absent means auto.
    */
   engine?: "auto" | "russh" | "openssh";
+  /**
+   * X11 forwarding (ssh -X); the host runs on the OpenSSH engine. Absent means off.
+   */
+  forward_x11?: boolean;
   proxy?: ProxySettings;
 }
 /**

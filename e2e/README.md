@@ -120,6 +120,7 @@ it passed against v1 unchanged.
 | `tunnels` | `dynamic_forward_speaks_socks5` | passes | -D, SOCKS5 CONNECT by hand | `russh_tunnels::dynamic_forward_speaks_socks5` | passes |
 | `tunnels` | `remote_forward_reaches_a_local_listener` | passes | -R, checked from inside the container | `russh_tunnels::remote_forward_reaches_a_local_listener` | passes |
 | `tunnels` | `forward_to_a_busy_local_port_fails_fast` | passes | ExitOnForwardFailure makes ssh exit | `russh_tunnels::forward_to_a_busy_local_port_fails_fast` | passes |
+| `tunnels` | (built-in engine only) | n/a | Unix socket forwards: `-L port:/tmp/e2e-echo.sock`, local socket to remote socket, `-R /tmp/e2e-remote.sock:...` (the container's sshd allows stream-local forwarding) | `russh_tunnels::local_forward_reaches_a_unix_socket_on_the_server`, `local_unix_socket_forwards_to_a_unix_socket_on_the_server`, `remote_forward_of_a_socket_path_reaches_a_local_listener` | not run yet (needs Docker) |
 | `password` | `exec_with_password_from_askpass` | passes | askpass was asked for the password | `russh_password::exec_with_password_from_the_interaction` | passes |
 | `password` | `wrong_password_fails_cleanly` | passes | Permission denied, no hang | `russh_password::wrong_password_fails_cleanly` | passes |
 | `password` | `sftp_session_with_password_from_askpass` | passes |  | `russh_password::sftp_session_with_password` | passes |
