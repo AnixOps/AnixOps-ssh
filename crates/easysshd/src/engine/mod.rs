@@ -175,6 +175,7 @@ impl Engine {
             (true, None) => AgentSource::Environment,
         };
         params.identity_files = spec.identity_files.clone();
+        params.identities_only = spec.identities_only;
         params.keyboard_interactive = spec.keyboard_interactive;
         params.password = spec.password;
         params.password_attempts = spec.password_attempts;
@@ -250,6 +251,12 @@ impl Engine {
         self.registry
             .acquire(plan.key.shard(shard), || self.connect(plan, agent))
             .await
+    }
+
+    /// A lease on the shared connection for `plan` only when it is up now.
+    /// Never connects (the monitor must not start a login on its own).
+    pub fn existing(&self, plan: &RusshPlan) -> Option<Lease> {
+        self.registry.existing(&plan.key)
     }
 
     /// A shell on the host's shared connection. The lease keeps the

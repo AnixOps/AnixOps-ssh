@@ -21,6 +21,8 @@ const scenes = [
   { name: "find", query: "", open: ["prod-web-01"], find: "Ubuntu" },
   { name: "local", query: "", local: true, type: ["ls"] },
   { name: "files", query: "", open: ["prod-web-01"], type: ["ls"], files: true },
+  { name: "monitor", query: "", open: ["prod-web-01"], type: ["ls"], wait: 13000 },
+  { name: "processes", query: "", open: ["prod-web-01"], wait: 4000, clicks: [{ name: "全部进程" }], waitText: "node /srv/app/server.js" },
   { name: "search", query: "", search: "prod" },
   { name: "askpass", query: "askpass=1" },
   { name: "askpass-touch", query: "askpass=touch" },
@@ -124,6 +126,7 @@ for (const colorScheme of ["light", "dark"]) {
     locale: "zh-CN",
   });
   for (const scene of scenes) {
+    if (process.env.ONLY && !process.env.ONLY.split(",").includes(scene.name)) continue;
     const page = await context.newPage();
     page.on("pageerror", (error) => errors.push(`${scene.name}/${colorScheme}: ${error.message}`));
     page.on("console", (message) => {
@@ -158,6 +161,8 @@ for (const colorScheme of ["light", "dark"]) {
       await page.getByRole("button", { name: "上传", exact: true }).click();
       await page.waitForTimeout(1200);
     }
+    // The monitor samples every 3 s; its charts need a few points.
+    if (scene.wait) await page.waitForTimeout(scene.wait);
     if (scene.search) await page.getByRole("textbox").first().fill(scene.search);
     if (scene.nav) await page.getByRole("button", { name: scene.nav }).click();
     if (scene.run) await page.getByRole("button", { name: new RegExp(scene.run) }).first().click();
@@ -182,6 +187,7 @@ for (const colorScheme of ["light", "dark"]) {
 }
 for (const colorScheme of ["light", "dark"]) {
   for (const scene of mobileScenes) {
+    if (process.env.ONLY && !process.env.ONLY.split(",").includes(scene.name)) continue;
     const context = await browser.newContext({
       viewport: scene.viewport,
       deviceScaleFactor: Number(process.env.DSF || 2),

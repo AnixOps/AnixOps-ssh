@@ -10,6 +10,7 @@
 
 use crate::Target;
 use easyssh_core::security::{validate_connection, validate_host, validate_username};
+use easyssh_core::tunnel::bare_host;
 use easyssh_core::{AppConfig, Connection, ConnectionTarget, Group, Tunnel, TunnelKind};
 use easyssh_store::Store;
 use serde_json::{json, Value};
@@ -419,7 +420,7 @@ pub fn save_tunnel(store: &Store, input: &NewTunnel) -> Result<String, String> {
         kind: input.kind,
         bind_address: None,
         bind_port: input.bind_port,
-        target_host: (!dynamic).then(|| input.target_host.trim().to_owned()),
+        target_host: (!dynamic).then(|| bare_host(&input.target_host).to_owned()),
         target_port: (!dynamic).then_some(input.target_port),
     };
     if tunnel.name.is_empty() || tunnel.name.chars().any(char::is_control) {
@@ -752,7 +753,8 @@ mod tests {
             )
         };
         assert!(bad("", 1, 1, &host).is_err());
-        assert!(bad("x", 0, 80, &host).is_err());
+        // Port 0: the system picks a free one.
+        assert!(bad("x", 0, 80, &host).is_ok());
         assert!(bad("x", 80, 0, &host).is_err());
         assert!(bad("x", 8080, 80, "missing").is_err());
         // A phone cannot listen below 1024.
@@ -799,6 +801,12 @@ mod tests {
         assert_eq!((&socks.target_host, socks.target_port), (&None, None));
         assert_eq!(socks.bind_address, None);
         assert!(save(TunnelKind::Dynamic, 1023, "", 0).is_err());
-        assert!(save(TunnelKind::Dynamic, 0, "", 0).is_err());
+        save(TunnelKind::Dynamic, 0, "", 0).unwrap();
+        // An IPv6 target is saved without brackets.
+        let id = save(TunnelKind::Local, 2000, " [::1] ", 22).unwrap();
+        let config = store.load_app_config().unwrap();
+        let saved = config.tunnels.iter().find(|t| t.id == id).unwrap();
+        assert_eq!(saved.target_host.as_deref(), Some("::1"));
+        assert_eq!(saved.forward_spec().unwrap(), "2000:[::1]:22");
     }
 }

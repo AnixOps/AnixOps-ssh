@@ -230,6 +230,12 @@ impl Interaction for PromptInteraction {
             .await
     }
 
+    async fn saved_password(&self, prompt: &str) -> Option<String> {
+        // The same once-only answer as `password`: whichever of the two the
+        // server asks through first uses it up.
+        self.saved_passwords.iter().find_map(|s| s.take(prompt))
+    }
+
     async fn keyboard_interactive(
         &self,
         name: &str,
@@ -361,6 +367,59 @@ mod tests {
             Some("pw-of-inner")
         );
         assert!(lock(&seen).is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_saved_password_answers_a_keyboard_interactive_password_round_once() {
+        use easyssh_crypto::SecretText;
+        use easyssh_store::{SecretFlags, StoredSecrets};
+        use easyssh_vault::{SecretSource, VaultError};
+
+        struct Vault;
+        impl SecretSource for Vault {
+            fn host_secrets(&self, _: &str) -> Result<StoredSecrets, VaultError> {
+                Ok(StoredSecrets {
+                    password: Some(SecretText::new("pw")),
+                    private_key: None,
+                    passphrase: None,
+                })
+            }
+            fn secret_flags(&self, _: &str) -> Result<SecretFlags, VaultError> {
+                Ok(SecretFlags {
+                    password: true,
+                    private_key: false,
+                    passphrase: false,
+                })
+            }
+        }
+        let (emit, seen) = recording();
+        let interaction = PromptInteraction {
+            prompts: Prompts::with_timeout(emit, Duration::from_millis(20)),
+            label: "inner".into(),
+            saved_passwords: vec![Arc::new(SavedPassword::new(
+                "me@inner".into(),
+                Arc::new(Vault),
+                "inner".into(),
+            ))],
+        };
+        assert_eq!(
+            interaction.saved_password("ops@bastion's password").await,
+            None
+        );
+        assert_eq!(
+            interaction
+                .saved_password("me@inner's password")
+                .await
+                .as_deref(),
+            Some("pw")
+        );
+        // Used once: the password method asks the user now.
+        assert_eq!(
+            interaction.saved_password("me@inner's password").await,
+            None
+        );
+        assert_eq!(interaction.password("me@inner's password").await, None);
+        assert_eq!(lock(&seen)[0].0, "askpass.prompt");
     }
 
     #[tokio::test]

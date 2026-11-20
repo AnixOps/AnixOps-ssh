@@ -1,41 +1,42 @@
-//! The authentication chain: agent, identity files, keyboard-interactive,
-//! password.
+//! The authentication chain: public keys (agent and identity files, in
+//! OpenSSH's order), keyboard-interactive, password. After a partial success
+//! (the server wants a further method) the remaining methods run again.
 
 use crate::error::{AuthMethod, Error, Result};
 use crate::interaction::{Interaction, KbdPrompt};
-use crate::params::{AgentSource, ConnectParams};
+use crate::params::{AgentSource, ConnectParams, MemoryIdentity};
 use crate::security_key::{default_security_key, SkKeyInfo, SkSignError, SkSigner};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse};
 use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::agent::AgentIdentity;
-use russh::keys::{PrivateKey, PrivateKeyWithHashAlg};
+use russh::keys::ssh_key::public::KeyData;
+use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
 use russh::MethodKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
 /// One step of the chain, in the order they are tried.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
-    Agent,
-    IdentityFiles,
+    /// Agent keys and identity files, ordered by [`order_identities`].
+    PublicKey,
     KeyboardInteractive,
     Password,
 }
 
 impl Stage {
-    pub const ORDER: [Stage; 4] = [
-        Stage::Agent,
-        Stage::IdentityFiles,
+    pub const ORDER: [Stage; 3] = [
+        Stage::PublicKey,
         Stage::KeyboardInteractive,
         Stage::Password,
     ];
 
     fn method(self) -> MethodKind {
         match self {
-            Stage::Agent | Stage::IdentityFiles => MethodKind::PublicKey,
+            Stage::PublicKey => MethodKind::PublicKey,
             Stage::KeyboardInteractive => MethodKind::KeyboardInteractive,
             Stage::Password => MethodKind::Password,
         }
@@ -64,8 +65,7 @@ impl StageConfig {
 
     fn enabled(&self, stage: Stage) -> bool {
         match stage {
-            Stage::Agent => self.agent,
-            Stage::IdentityFiles => self.identity_files,
+            Stage::PublicKey => self.agent || self.identity_files,
             Stage::KeyboardInteractive => self.keyboard_interactive,
             Stage::Password => self.password,
         }
@@ -78,6 +78,83 @@ pub fn plan(config: &StageConfig, server_methods: &[MethodKind]) -> Vec<Stage> {
         .into_iter()
         .filter(|stage| config.enabled(*stage) && server_methods.contains(&stage.method()))
         .collect()
+}
+
+/// How many partial successes (a method accepted, another one required)
+/// one login goes through before giving up.
+pub const MAX_PARTIAL_SUCCESSES: usize = 4;
+
+/// The next stage to run: the first enabled one the server still accepts
+/// that has not run since the last partial success (`done`). After a
+/// partial success the caller clears `done`, so a method that ran before
+/// (with nothing to show then) can run again: the server may only accept a
+/// key once a keyboard-interactive step went through.
+pub fn next_stage(
+    config: &StageConfig,
+    server_methods: &[MethodKind],
+    done: &[Stage],
+) -> Option<Stage> {
+    Stage::ORDER.into_iter().find(|stage| {
+        config.enabled(*stage) && server_methods.contains(&stage.method()) && !done.contains(stage)
+    })
+}
+
+/// A key the public-key stage offers, in [`order_identities`] order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Candidate {
+    /// The agent's key at this index; the agent signs.
+    Agent(usize),
+    /// The identity file at this index; signed in memory, decrypted only
+    /// once the server accepted the key.
+    File(usize),
+}
+
+/// The order OpenSSH offers keys in: configured identities the agent holds
+/// first (signed by the agent, in the configured order), then the agent's
+/// other keys (left out with `IdentitiesOnly`), then the configured files
+/// the agent does not hold. `files` holds the public part of each configured
+/// file when it is known without a passphrase. A public key is never
+/// offered twice.
+pub fn order_identities<K: PartialEq>(
+    files: &[Option<K>],
+    agent: &[K],
+    identities_only: bool,
+) -> Vec<Candidate> {
+    let mut order: Vec<Candidate> = Vec::new();
+    let mut seen: Vec<&K> = Vec::new();
+    let mut file_in_agent = vec![false; files.len()];
+    for (index, file) in files.iter().enumerate() {
+        let Some(key) = file else { continue };
+        if let Some(held) = agent.iter().position(|a| a == key) {
+            file_in_agent[index] = true;
+            if !seen.contains(&key) {
+                seen.push(key);
+                order.push(Candidate::Agent(held));
+            }
+        }
+    }
+    if !identities_only {
+        for (index, key) in agent.iter().enumerate() {
+            if !seen.contains(&key) {
+                seen.push(key);
+                order.push(Candidate::Agent(index));
+            }
+        }
+    }
+    for (index, file) in files.iter().enumerate() {
+        if file_in_agent[index] {
+            continue;
+        }
+        match file {
+            Some(key) if seen.contains(&key) => {}
+            Some(key) => {
+                seen.push(key);
+                order.push(Candidate::File(index));
+            }
+            None => order.push(Candidate::File(index)),
+        }
+    }
+    order
 }
 
 /// The type of key an OpenSSH private key file holds when it is a FIDO2
@@ -201,15 +278,43 @@ async fn connect_agent(
     }
 }
 
-/// Keeps `remaining` current from a refused attempt.
-fn note_result(result: &AuthResult, remaining: &mut Vec<MethodKind>) -> bool {
-    match result {
-        AuthResult::Success => true,
-        AuthResult::Failure {
-            remaining_methods, ..
-        } => {
-            *remaining = remaining_methods.iter().copied().collect();
-            false
+/// What the chain knows while it runs.
+struct State {
+    remaining: Vec<MethodKind>,
+    tried: Vec<AuthMethod>,
+    notes: Vec<String>,
+    /// The last refusal said "partial success".
+    partial: bool,
+    /// Public keys already offered, so none is offered twice.
+    offered: Vec<KeyData>,
+    /// The agent and its keys, once asked.
+    agent: Option<AgentKeys>,
+    /// The public-key stage went through every key once.
+    keys_done: bool,
+    /// Keys whose passphrase was asked for before they could be offered.
+    unlocked: Vec<String>,
+    /// The agent holds user certificates, which the engine does not offer.
+    agent_certificates: bool,
+}
+
+struct AgentKeys {
+    client: Option<AgentClient<Box<dyn AgentStream + Send + Unpin>>>,
+    keys: Vec<PublicKey>,
+}
+
+impl State {
+    /// Keeps `remaining` current from a refused attempt; `true` on success.
+    fn note(&mut self, result: &AuthResult) -> bool {
+        match result {
+            AuthResult::Success => true,
+            AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            } => {
+                self.remaining = remaining_methods.iter().copied().collect();
+                self.partial |= *partial_success;
+                false
+            }
         }
     }
 }
@@ -221,67 +326,74 @@ pub(crate) async fn authenticate<H: client::Handler>(
     interaction: &dyn Interaction,
 ) -> Result<AuthMethod> {
     let user = params.username.as_str();
-    let mut tried: Vec<AuthMethod> = Vec::new();
-    let mut notes: Vec<String> = Vec::new();
+    let mut state = State {
+        remaining: Vec::new(),
+        tried: Vec::new(),
+        notes: Vec::new(),
+        partial: false,
+        offered: Vec::new(),
+        agent: None,
+        keys_done: false,
+        unlocked: Vec::new(),
+        agent_certificates: false,
+    };
 
     let first = handle.authenticate_none(user).await?;
-    let mut remaining: Vec<MethodKind> = Vec::new();
-    if note_result(&first, &mut remaining) {
+    if state.note(&first) {
         return Ok(AuthMethod::None);
     }
+    state.partial = false;
 
     let config = StageConfig::from_params(params);
-    for stage in Stage::ORDER {
-        if !config.enabled(stage) {
-            continue;
+    let mut done: Vec<Stage> = Vec::new();
+    let mut ran: Vec<Stage> = Vec::new();
+    let mut partials = 0;
+    while let Some(stage) = next_stage(&config, &state.remaining, &done) {
+        done.push(stage);
+        if !ran.contains(&stage) {
+            ran.push(stage);
         }
-        if !remaining.contains(&stage.method()) {
-            notes.push(format!("server does not offer {:?}", stage.method()));
-            continue;
-        }
+        state.partial = false;
         let outcome = match stage {
-            Stage::Agent => {
-                try_agent(handle, params, &mut remaining, &mut tried, &mut notes).await?
-            }
-            Stage::IdentityFiles => {
-                try_identity_files(
-                    handle,
-                    params,
-                    interaction,
-                    &mut remaining,
-                    &mut tried,
-                    &mut notes,
-                )
-                .await?
-            }
+            Stage::PublicKey => try_public_keys(handle, params, interaction, &mut state).await?,
             Stage::KeyboardInteractive => {
-                try_keyboard_interactive(
-                    handle,
-                    interaction,
-                    user,
-                    &mut remaining,
-                    &mut tried,
-                    &mut notes,
-                )
-                .await?
+                try_keyboard_interactive(handle, params, interaction, &mut state).await?
             }
-            Stage::Password => {
-                try_password(
-                    handle,
-                    params,
-                    interaction,
-                    &mut remaining,
-                    &mut tried,
-                    &mut notes,
-                )
-                .await?
-            }
+            Stage::Password => try_password(handle, params, interaction, &mut state).await?,
         };
         if let Some(method) = outcome {
             return Ok(method);
         }
+        if state.partial {
+            partials += 1;
+            if partials > MAX_PARTIAL_SUCCESSES {
+                state.notes.push("too many partial successes".into());
+                break;
+            }
+            done.clear();
+            // Keys already offered stay offered; the stage runs again for
+            // the ones it did not reach.
+            state.keys_done = false;
+        }
     }
-    Err(Error::AuthFailed { tried, notes })
+    for stage in Stage::ORDER {
+        if config.enabled(stage) && !ran.contains(&stage) {
+            state
+                .notes
+                .push(format!("server does not offer {:?}", stage.method()));
+        }
+    }
+    if state.agent_certificates {
+        // The server may want the certificate: let OpenSSH, which offers
+        // it, make the connection.
+        return Err(Error::Unsupported(
+            "the agent holds a user certificate, and no other key or method was accepted".into(),
+        ));
+    }
+    Err(Error::AuthFailed {
+        tried: state.tried,
+        notes: state.notes,
+    })
 }
 
 async fn rsa_hash<H: client::Handler>(
@@ -294,131 +406,415 @@ async fn rsa_hash<H: client::Handler>(
     Ok(handle.best_supported_rsa_hash().await?.flatten())
 }
 
-async fn try_agent<H: client::Handler>(
+/// Where a key's private part is, for signing once the server accepted it.
+#[derive(Clone)]
+enum KeySource {
+    File(PathBuf),
+    Memory(MemoryIdentity),
+}
+
+impl KeySource {
+    fn label(&self) -> String {
+        match self {
+            KeySource::File(path) => path.display().to_string(),
+            KeySource::Memory(identity) => identity.label.clone(),
+        }
+    }
+
+    fn method(&self) -> AuthMethod {
+        match self {
+            KeySource::File(path) => AuthMethod::IdentityFile(path.clone()),
+            KeySource::Memory(identity) => AuthMethod::StoredKey(identity.label.clone()),
+        }
+    }
+
+    /// The private key, asking for the passphrase when needed.
+    async fn load(&self, interaction: &dyn Interaction) -> Result<PrivateKey> {
+        match self {
+            KeySource::File(path) => load_identity(path, interaction).await,
+            KeySource::Memory(identity) => {
+                decode_identity(
+                    identity.text(),
+                    Path::new(&identity.label),
+                    identity.passphrase(),
+                    interaction,
+                )
+                .await
+            }
+        }
+    }
+}
+
+/// What can be told about a key without its passphrase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicPart {
+    pub key: Option<PublicKey>,
+    /// Only a public key is there (an `IdentityFile` naming a `.pub` file):
+    /// usable when the agent holds the key.
+    pub public_only: bool,
+}
+
+/// The public key of key `text`, read without decrypting it: the OpenSSH
+/// format keeps it in clear; an unencrypted PEM key is decoded; otherwise
+/// the `.pub` text beside it (`public_text`) tells.
+pub fn public_part(text: &str, public_text: Option<&str>) -> PublicPart {
+    let trimmed = text.trim_start();
+    if !trimmed.starts_with("-----") {
+        // A public key line (`ssh-ed25519 AAAA... comment`).
+        return PublicPart {
+            key: PublicKey::from_openssh(trimmed.trim()).ok(),
+            public_only: true,
+        };
+    }
+    let key = russh::keys::ssh_key::PrivateKey::from_openssh(text)
+        .ok()
+        .map(|key| key.public_key().clone())
+        .or_else(|| {
+            russh::keys::decode_secret_key(text, None)
+                .ok()
+                .map(|key| key.public_key().clone())
+        })
+        .or_else(|| public_text.and_then(|t| PublicKey::from_openssh(t.trim()).ok()));
+    PublicPart {
+        key,
+        public_only: false,
+    }
+}
+
+/// [`public_part`] of a key file: `path` itself, and `path.pub` beside it.
+async fn read_public_part(path: &Path) -> std::result::Result<PublicPart, String> {
+    let text = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut pub_path = path.as_os_str().to_owned();
+    pub_path.push(".pub");
+    let public_text = tokio::fs::read_to_string(PathBuf::from(pub_path))
+        .await
+        .ok();
+    let text = Zeroizing::new(text);
+    Ok(public_part(&text, public_text.as_deref()))
+}
+
+/// Signs for a key whose private part is loaded (and its passphrase asked
+/// for) only when the server accepted the public key.
+struct LazySigner<'a> {
+    source: &'a KeySource,
+    interaction: &'a dyn Interaction,
+}
+
+#[derive(Debug)]
+enum LazySignError {
+    Send(russh::SendError),
+    Failed(Error),
+}
+
+impl From<russh::SendError> for LazySignError {
+    fn from(error: russh::SendError) -> Self {
+        LazySignError::Send(error)
+    }
+}
+
+/// The SSH signature blob of `data` by `key`; `hash` picks the RSA variant.
+fn sign_blob(key: &PrivateKey, hash: Option<HashAlg>, data: &[u8]) -> Result<Vec<u8>> {
+    use russh::keys::signature::Signer;
+    use russh::keys::ssh_key::encoding::Encode;
+    use russh::keys::ssh_key::private::KeypairData;
+    use russh::keys::ssh_key::Signature;
+    let signature: Signature = match key.key_data() {
+        KeypairData::Rsa(rsa) => Signer::try_sign(&(rsa, hash), data),
+        other => Signer::try_sign(other, data),
+    }
+    .map_err(|e| Error::Protocol(format!("cannot sign: {e}")))?;
+    signature
+        .encode_vec()
+        .map_err(|e| Error::Protocol(format!("cannot encode the signature: {e}")))
+}
+
+impl russh::Signer for LazySigner<'_> {
+    type Error = LazySignError;
+
+    #[allow(clippy::manual_async_fn)]
+    fn auth_sign(
+        &mut self,
+        _key: &AgentIdentity,
+        hash_alg: Option<HashAlg>,
+        mut to_sign: Vec<u8>,
+    ) -> impl std::future::Future<Output = std::result::Result<Vec<u8>, Self::Error>> + Send {
+        async move {
+            let key = self
+                .source
+                .load(self.interaction)
+                .await
+                .map_err(LazySignError::Failed)?;
+            let signature = sign_blob(&key, hash_alg, &to_sign).map_err(LazySignError::Failed)?;
+            to_sign.extend_from_slice(&(signature.len() as u32).to_be_bytes());
+            to_sign.extend_from_slice(&signature);
+            Ok(to_sign)
+        }
+    }
+}
+
+/// One key the stage may offer.
+struct KeyEntry {
+    source: KeySource,
+    public: PublicPart,
+}
+
+async fn agent_keys(params: &ConnectParams, state: &mut State) {
+    if state.agent.is_some() {
+        return;
+    }
+    let mut found = AgentKeys {
+        client: None,
+        keys: Vec::new(),
+    };
+    if params.agent != AgentSource::Disabled {
+        match connect_agent(&params.agent).await {
+            Ok(mut client) => match client.request_identities().await {
+                Ok(identities) => {
+                    for identity in identities {
+                        let AgentIdentity::PublicKey { key, .. } = identity else {
+                            // Not offered; OpenSSH takes over if nothing
+                            // else gets in.
+                            state.agent_certificates = true;
+                            continue;
+                        };
+                        if key.algorithm().as_str().starts_with("sk-") {
+                            state.notes.push(
+                                "agent key skipped: FIDO2 sk-* keys are not supported".into(),
+                            );
+                            continue;
+                        }
+                        found.keys.push(key);
+                    }
+                    if found.keys.is_empty() {
+                        state.notes.push("agent holds no keys".into());
+                    }
+                    found.client = Some(client);
+                }
+                Err(e) => state.notes.push(format!("agent did not list keys: {e}")),
+            },
+            Err(reason) => state.notes.push(format!("agent unavailable: {reason}")),
+        }
+    }
+    state.agent = Some(found);
+}
+
+/// Agent keys and identity files, in OpenSSH's order, each offered once.
+/// A file's passphrase is asked for only after the server accepted its
+/// public key; a file whose public key cannot be read without the
+/// passphrase (an encrypted PEM key without a `.pub`) comes last.
+async fn try_public_keys<H: client::Handler>(
     handle: &mut client::Handle<H>,
     params: &ConnectParams,
-    remaining: &mut Vec<MethodKind>,
-    tried: &mut Vec<AuthMethod>,
-    notes: &mut Vec<String>,
+    interaction: &dyn Interaction,
+    state: &mut State,
 ) -> Result<Option<AuthMethod>> {
-    let mut agent = match connect_agent(&params.agent).await {
-        Ok(agent) => agent,
-        Err(reason) => {
-            notes.push(format!("agent unavailable: {reason}"));
-            return Ok(None);
-        }
-    };
-    let identities = match agent.request_identities().await {
-        Ok(identities) => identities,
-        Err(e) => {
-            notes.push(format!("agent did not list keys: {e}"));
-            return Ok(None);
-        }
-    };
-    if identities.is_empty() {
-        notes.push("agent holds no keys".into());
+    if state.keys_done {
         return Ok(None);
     }
-    for identity in identities {
-        let AgentIdentity::PublicKey { key, .. } = identity else {
-            continue; // certificates are not supported yet
-        };
-        if key.algorithm().as_str().starts_with("sk-") {
-            notes.push("agent key skipped: FIDO2 sk-* keys are not supported".into());
-            continue;
+    state.keys_done = true;
+    let user = params.username.as_str();
+
+    // Keys handed over in memory come first (a saved key is the one the
+    // user chose for this host).
+    let mut memory = Vec::new();
+    for identity in &params.memory_identities {
+        let text = identity.text();
+        let mut public = public_part(text, None);
+        if public.key.is_none() {
+            // A PEM key with its saved passphrase: no question either way.
+            if let Some(passphrase) = identity.passphrase() {
+                public.key = russh::keys::decode_secret_key(text, Some(passphrase))
+                    .ok()
+                    .map(|key| key.public_key().clone());
+            }
         }
-        if !remaining.contains(&MethodKind::PublicKey) {
-            break;
+        memory.push(KeyEntry {
+            source: KeySource::Memory(identity.clone()),
+            public,
+        });
+    }
+    let mut files = Vec::new();
+    for path in &params.identity_files {
+        match read_public_part(path).await {
+            Ok(public) => files.push(KeyEntry {
+                source: KeySource::File(path.clone()),
+                public,
+            }),
+            Err(note) => state.notes.push(note),
         }
-        if !tried.contains(&AuthMethod::Agent) {
-            tried.push(AuthMethod::Agent);
-        }
-        let hash = rsa_hash(handle, key.algorithm().is_rsa()).await?;
-        match handle
-            .authenticate_publickey_with(params.username.as_str(), key, hash, &mut agent)
-            .await
+    }
+    agent_keys(params, state).await;
+    let agent_held: Vec<KeyData> = state
+        .agent
+        .as_ref()
+        .map(|a| a.keys.iter().map(|k| k.key_data().clone()).collect())
+        .unwrap_or_default();
+    let file_keys: Vec<Option<KeyData>> = files
+        .iter()
+        .map(|f| f.public.key.as_ref().map(|k| k.key_data().clone()))
+        .collect();
+    let order = order_identities(&file_keys, &agent_held, params.identities_only);
+
+    let mut deferred: Vec<&KeyEntry> = Vec::new();
+    for entry in &memory {
+        if let Some(method) =
+            offer_entry(handle, params, interaction, state, entry, &mut deferred).await?
         {
-            Ok(result) => {
-                if note_result(&result, remaining) {
-                    return Ok(Some(AuthMethod::Agent));
+            return Ok(Some(method));
+        }
+    }
+    for candidate in order {
+        if !state.remaining.contains(&MethodKind::PublicKey) {
+            return Ok(None);
+        }
+        match candidate {
+            Candidate::Agent(index) => {
+                let Some(agent) = state.agent.as_mut() else {
+                    continue;
+                };
+                let key = agent.keys[index].clone();
+                if state.offered.contains(key.key_data()) {
+                    continue;
+                }
+                let Some(client) = agent.client.as_mut() else {
+                    continue;
+                };
+                state.offered.push(key.key_data().clone());
+                if !state.tried.contains(&AuthMethod::Agent) {
+                    state.tried.push(AuthMethod::Agent);
+                }
+                let hash = rsa_hash(handle, key.algorithm().is_rsa()).await?;
+                match handle
+                    .authenticate_publickey_with(user, key, hash, client)
+                    .await
+                {
+                    Ok(result) => {
+                        if state.note(&result) {
+                            return Ok(Some(AuthMethod::Agent));
+                        }
+                    }
+                    Err(e) => state.notes.push(format!("agent could not sign: {e}")),
                 }
             }
-            Err(e) => notes.push(format!("agent could not sign: {e}")),
+            Candidate::File(index) => {
+                if let Some(method) = offer_entry(
+                    handle,
+                    params,
+                    interaction,
+                    state,
+                    &files[index],
+                    &mut deferred,
+                )
+                .await?
+                {
+                    return Ok(Some(method));
+                }
+            }
+        }
+    }
+    // Keys whose public part needs the passphrase: last, as they ask first.
+    for entry in deferred {
+        if !state.remaining.contains(&MethodKind::PublicKey) {
+            break;
+        }
+        // Asked for once per login, also when the stage runs again after a
+        // partial success.
+        let label = entry.source.label();
+        if state.unlocked.contains(&label) {
+            continue;
+        }
+        state.unlocked.push(label);
+        let key = match entry.source.load(interaction).await {
+            Ok(key) => key,
+            Err(e) => {
+                state.notes.push(e.to_string());
+                continue;
+            }
+        };
+        if state.offered.contains(key.public_key().key_data()) {
+            continue;
+        }
+        state.offered.push(key.public_key().key_data().clone());
+        let method = entry.source.method();
+        state.tried.push(method.clone());
+        match offer_key(handle, params, interaction, key, &entry.source.label()).await? {
+            Ok(result) => {
+                if state.note(&result) {
+                    return Ok(Some(method));
+                }
+            }
+            Err(note) => state.notes.push(note),
         }
     }
     Ok(None)
 }
 
-async fn try_identity_files<H: client::Handler>(
+/// Offers one memory key or identity file that the agent does not hold.
+async fn offer_entry<'e, H: client::Handler>(
     handle: &mut client::Handle<H>,
     params: &ConnectParams,
     interaction: &dyn Interaction,
-    remaining: &mut Vec<MethodKind>,
-    tried: &mut Vec<AuthMethod>,
-    notes: &mut Vec<String>,
+    state: &mut State,
+    entry: &'e KeyEntry,
+    deferred: &mut Vec<&'e KeyEntry>,
 ) -> Result<Option<AuthMethod>> {
-    // Keys handed over in memory come first (a saved key is the one the
-    // user chose for this host), then the files.
-    for identity in &params.memory_identities {
-        if !remaining.contains(&MethodKind::PublicKey) {
-            break;
-        }
-        let key = match decode_identity(
-            identity.text(),
-            Path::new(&identity.label),
-            identity.passphrase(),
-            interaction,
-        )
+    if !state.remaining.contains(&MethodKind::PublicKey) {
+        return Ok(None);
+    }
+    let label = entry.source.label();
+    if entry.public.public_only {
+        state.notes.push(format!(
+            "{label} is a public key and the agent does not hold its private key"
+        ));
+        return Ok(None);
+    }
+    let Some(public) = entry.public.key.clone() else {
+        deferred.push(entry);
+        return Ok(None);
+    };
+    if state.offered.contains(public.key_data()) {
+        return Ok(None);
+    }
+    state.offered.push(public.key_data().clone());
+    let method = entry.source.method();
+    if public.algorithm().as_str().starts_with("sk-") {
+        // The security key signer needs the key handle from the private
+        // part, so it is loaded first.
+        let key = match entry.source.load(interaction).await {
+            Ok(key) => key,
+            Err(e) => {
+                state.notes.push(e.to_string());
+                return Ok(None);
+            }
+        };
+        state.tried.push(method.clone());
+        return match offer_key(handle, params, interaction, key, &label).await? {
+            Ok(result) => Ok(state.note(&result).then_some(method)),
+            Err(note) => {
+                state.notes.push(note);
+                Ok(None)
+            }
+        };
+    }
+    state.tried.push(method.clone());
+    let hash = rsa_hash(handle, public.algorithm().is_rsa()).await?;
+    let mut signer = LazySigner {
+        source: &entry.source,
+        interaction,
+    };
+    match handle
+        .authenticate_publickey_with(params.username.as_str(), public, hash, &mut signer)
         .await
-        {
-            Ok(key) => key,
-            Err(e) => {
-                notes.push(e.to_string());
-                continue;
-            }
-        };
-        let method = AuthMethod::StoredKey(identity.label.clone());
-        tried.push(method.clone());
-        match offer_key(handle, params, interaction, key, &identity.label).await? {
-            Ok(result) => {
-                if note_result(&result, remaining) {
-                    return Ok(Some(method));
-                }
-            }
-            Err(note) => notes.push(note),
+    {
+        Ok(result) => Ok(state.note(&result).then_some(method)),
+        Err(LazySignError::Send(_)) => Err(Error::Disconnected),
+        Err(LazySignError::Failed(error)) => {
+            state.notes.push(error.to_string());
+            Ok(None)
         }
     }
-    for path in &params.identity_files {
-        if !remaining.contains(&MethodKind::PublicKey) {
-            break;
-        }
-        let key = match load_identity(path, interaction).await {
-            Ok(key) => key,
-            Err(e) => {
-                notes.push(e.to_string());
-                continue;
-            }
-        };
-        let method = AuthMethod::IdentityFile(path.clone());
-        tried.push(method.clone());
-        match offer_key(
-            handle,
-            params,
-            interaction,
-            key,
-            &path.display().to_string(),
-        )
-        .await?
-        {
-            Ok(result) => {
-                if note_result(&result, remaining) {
-                    return Ok(Some(method));
-                }
-            }
-            Err(note) => notes.push(note),
-        }
-    }
-    Ok(None)
 }
 
 /// Offers `key` to the server and signs when the server accepts it. An
@@ -465,59 +861,114 @@ async fn offer_key<H: client::Handler>(
 
 const MAX_KBD_ROUNDS: usize = 8;
 
+/// Whether a keyboard-interactive round only asks for the login password:
+/// one hidden prompt that says "password" (and is not a password change).
+pub fn asks_only_for_password(prompts: &[KbdPrompt]) -> bool {
+    let [prompt] = prompts else {
+        return false;
+    };
+    let text = prompt.text.to_lowercase();
+    !prompt.echo
+        && text.contains("password")
+        && ![
+            "new", "again", "retype", "confirm", "old", "current", "expired",
+        ]
+        .iter()
+        .any(|word| text.contains(word))
+}
+
+fn password_prompt(params: &ConnectParams) -> String {
+    format!("{}@{}'s password", params.username, params.host)
+}
+
 async fn try_keyboard_interactive<H: client::Handler>(
     handle: &mut client::Handle<H>,
+    params: &ConnectParams,
     interaction: &dyn Interaction,
-    user: &str,
-    remaining: &mut Vec<MethodKind>,
-    tried: &mut Vec<AuthMethod>,
-    notes: &mut Vec<String>,
+    state: &mut State,
 ) -> Result<Option<AuthMethod>> {
-    tried.push(AuthMethod::KeyboardInteractive);
-    let mut response = handle
-        .authenticate_keyboard_interactive_start(user, None)
-        .await?;
-    for _ in 0..MAX_KBD_ROUNDS {
-        match response {
-            KeyboardInteractiveAuthResponse::Success => {
-                return Ok(Some(AuthMethod::KeyboardInteractive))
-            }
-            KeyboardInteractiveAuthResponse::Failure {
-                remaining_methods, ..
-            } => {
-                *remaining = remaining_methods.iter().copied().collect();
-                return Ok(None);
-            }
-            KeyboardInteractiveAuthResponse::InfoRequest {
-                name,
-                instructions,
-                prompts,
-            } => {
-                let prompts: Vec<KbdPrompt> = prompts
-                    .into_iter()
-                    .map(|p| KbdPrompt {
-                        text: p.prompt,
-                        echo: p.echo,
-                    })
-                    .collect();
-                let answers = if prompts.is_empty() {
-                    Some(Vec::new())
-                } else {
-                    interaction
-                        .keyboard_interactive(&name, &instructions, &prompts)
-                        .await
-                };
-                let Some(answers) = answers else {
-                    notes.push("keyboard-interactive cancelled".into());
+    if !state.tried.contains(&AuthMethod::KeyboardInteractive) {
+        state.tried.push(AuthMethod::KeyboardInteractive);
+    }
+    let mut saved_offered = false;
+    // A second attempt only when the saved password was refused: then the
+    // user is asked, as after a refused saved password for `password`.
+    for _attempt in 0..2 {
+        let mut saved_used = false;
+        let mut response = handle
+            .authenticate_keyboard_interactive_start(params.username.as_str(), None)
+            .await?;
+        let mut rounds = 0;
+        loop {
+            match response {
+                KeyboardInteractiveAuthResponse::Success => {
+                    return Ok(Some(AuthMethod::KeyboardInteractive))
+                }
+                KeyboardInteractiveAuthResponse::Failure {
+                    remaining_methods,
+                    partial_success,
+                } => {
+                    state.remaining = remaining_methods.iter().copied().collect();
+                    state.partial |= partial_success;
+                    if saved_used
+                        && !partial_success
+                        && state.remaining.contains(&MethodKind::KeyboardInteractive)
+                    {
+                        break;
+                    }
                     return Ok(None);
-                };
-                response = handle
-                    .authenticate_keyboard_interactive_respond(answers)
-                    .await?;
+                }
+                KeyboardInteractiveAuthResponse::InfoRequest {
+                    name,
+                    instructions,
+                    prompts,
+                } => {
+                    rounds += 1;
+                    if rounds > MAX_KBD_ROUNDS {
+                        state
+                            .notes
+                            .push("keyboard-interactive did not finish".into());
+                        return Ok(None);
+                    }
+                    let prompts: Vec<KbdPrompt> = prompts
+                        .into_iter()
+                        .map(|p| KbdPrompt {
+                            text: p.prompt,
+                            echo: p.echo,
+                        })
+                        .collect();
+                    // A server that asks for the password this way (PAM)
+                    // gets the saved one, once, as the password method would.
+                    let mut answers = None;
+                    if !saved_offered && asks_only_for_password(&prompts) {
+                        saved_offered = true;
+                        if let Some(password) =
+                            interaction.saved_password(&password_prompt(params)).await
+                        {
+                            saved_used = true;
+                            answers = Some(vec![password]);
+                        }
+                    }
+                    if answers.is_none() {
+                        answers = if prompts.is_empty() {
+                            Some(Vec::new())
+                        } else {
+                            interaction
+                                .keyboard_interactive(&name, &instructions, &prompts)
+                                .await
+                        };
+                    }
+                    let Some(answers) = answers else {
+                        state.notes.push("keyboard-interactive cancelled".into());
+                        return Ok(None);
+                    };
+                    response = handle
+                        .authenticate_keyboard_interactive_respond(answers)
+                        .await?;
+                }
             }
         }
     }
-    notes.push("keyboard-interactive did not finish".into());
     Ok(None)
 }
 
@@ -525,31 +976,33 @@ async fn try_password<H: client::Handler>(
     handle: &mut client::Handle<H>,
     params: &ConnectParams,
     interaction: &dyn Interaction,
-    remaining: &mut Vec<MethodKind>,
-    tried: &mut Vec<AuthMethod>,
-    notes: &mut Vec<String>,
+    state: &mut State,
 ) -> Result<Option<AuthMethod>> {
-    let prompt = format!("{}@{}'s password", params.username, params.host);
-    for attempt in 0..params.password_attempts.max(1) {
+    let prompt = password_prompt(params);
+    for _ in 0..params.password_attempts.max(1) {
         let Some(password) = interaction.password(&prompt).await else {
-            notes.push("password prompt cancelled".into());
+            state.notes.push("password prompt cancelled".into());
             break;
         };
-        if attempt == 0 {
-            tried.push(AuthMethod::Password);
+        if !state.tried.contains(&AuthMethod::Password) {
+            state.tried.push(AuthMethod::Password);
         }
         let result = handle
             .authenticate_password(params.username.as_str(), password)
             .await?;
-        if note_result(&result, remaining) {
+        if state.note(&result) {
             return Ok(Some(AuthMethod::Password));
         }
-        if !remaining.contains(&MethodKind::Password) {
+        if state.partial || !state.remaining.contains(&MethodKind::Password) {
             break;
         }
     }
     Ok(None)
 }
+
+#[cfg(test)]
+#[path = "auth_tests.rs"]
+mod login_tests;
 
 #[cfg(test)]
 mod tests {
@@ -578,8 +1031,7 @@ mod tests {
         assert_eq!(
             plan(&config(true), &ALL),
             vec![
-                Stage::Agent,
-                Stage::IdentityFiles,
+                Stage::PublicKey,
                 Stage::KeyboardInteractive,
                 Stage::Password
             ]
@@ -594,7 +1046,7 @@ mod tests {
         );
         assert_eq!(
             plan(&config(true), &[MethodKind::PublicKey]),
-            vec![Stage::Agent, Stage::IdentityFiles]
+            vec![Stage::PublicKey]
         );
         assert!(plan(&config(true), &[]).is_empty());
     }
@@ -615,14 +1067,18 @@ mod tests {
         let mut params = ConnectParams::new("h", 22, "u");
         assert_eq!(
             plan(&StageConfig::from_params(&params), &ALL),
-            vec![Stage::Agent, Stage::KeyboardInteractive, Stage::Password]
+            vec![
+                Stage::PublicKey,
+                Stage::KeyboardInteractive,
+                Stage::Password
+            ]
         );
         params.agent = AgentSource::Disabled;
         params.identity_files.push("k".into());
         params.password = false;
         assert_eq!(
             plan(&StageConfig::from_params(&params), &ALL),
-            vec![Stage::IdentityFiles, Stage::KeyboardInteractive]
+            vec![Stage::PublicKey, Stage::KeyboardInteractive]
         );
     }
 
@@ -751,7 +1207,7 @@ mod tests {
         ));
         assert_eq!(
             plan(&StageConfig::from_params(&params), &ALL),
-            vec![Stage::IdentityFiles]
+            vec![Stage::PublicKey]
         );
         let shown = format!("{params:?}");
         assert!(shown.contains("saved key"), "{shown}");

@@ -980,6 +980,8 @@ pub enum ImportFormat {
     Finalshell,
     #[serde(rename = "termius")]
     Termius,
+    #[serde(rename = "ansible")]
+    Ansible,
     #[serde(rename = "csv")]
     Csv,
     #[serde(rename = "openssh")]
@@ -994,6 +996,7 @@ impl ::std::fmt::Display for ImportFormat {
             Self::Xshell => f.write_str("xshell"),
             Self::Finalshell => f.write_str("finalshell"),
             Self::Termius => f.write_str("termius"),
+            Self::Ansible => f.write_str("ansible"),
             Self::Csv => f.write_str("csv"),
             Self::Openssh => f.write_str("openssh"),
         }
@@ -1011,6 +1014,7 @@ impl ::std::str::FromStr for ImportFormat {
             "xshell" => Ok(Self::Xshell),
             "finalshell" => Ok(Self::Finalshell),
             "termius" => Ok(Self::Termius),
+            "ansible" => Ok(Self::Ansible),
             "csv" => Ok(Self::Csv),
             "openssh" => Ok(Self::Openssh),
             _ => Err("invalid value".into()),
@@ -1239,6 +1243,96 @@ impl ::std::convert::TryFrom<&str> for Locale {
     }
 }
 impl ::std::convert::TryFrom<::std::string::String> for Locale {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///Command `monitor.sample` payload (russh engine): reads the server's load, memory, network, disks and processes on the connection the terminal already has. Never connects. Reply: MonitorSampleResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct MonitorSampleParams {
+    ///Also list every process's owner, command line and executable.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub detail: ::std::option::Option<bool>,
+    pub host_id: ::std::string::String,
+}
+///`MonitorSampleResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct MonitorSampleResult {
+    ///Keepalive round trip; null when the server did not answer it.
+    #[serde(deserialize_with = "::std::option::Option::deserialize")]
+    pub latency_ms: ::std::option::Option<f64>,
+    ///What the read-only sample script printed (`@section` markers, raw /proc and df text).
+    pub output: ::std::string::String,
+}
+///Command `monitor.signal` payload (russh engine): sends a signal to a process as the login user, on the existing connection.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct MonitorSignalParams {
+    pub host_id: ::std::string::String,
+    pub pid: ::std::num::NonZeroU64,
+    pub signal: MonitorSignalParamsSignal,
+}
+///`MonitorSignalParamsSignal`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum MonitorSignalParamsSignal {
+    #[serde(rename = "TERM")]
+    Term,
+    #[serde(rename = "KILL")]
+    Kill,
+    #[serde(rename = "HUP")]
+    Hup,
+    #[serde(rename = "INT")]
+    Int,
+}
+impl ::std::fmt::Display for MonitorSignalParamsSignal {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Term => f.write_str("TERM"),
+            Self::Kill => f.write_str("KILL"),
+            Self::Hup => f.write_str("HUP"),
+            Self::Int => f.write_str("INT"),
+        }
+    }
+}
+impl ::std::str::FromStr for MonitorSignalParamsSignal {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "TERM" => Ok(Self::Term),
+            "KILL" => Ok(Self::Kill),
+            "HUP" => Ok(Self::Hup),
+            "INT" => Ok(Self::Int),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for MonitorSignalParamsSignal {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for MonitorSignalParamsSignal {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
