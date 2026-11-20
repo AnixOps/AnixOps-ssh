@@ -12,14 +12,20 @@
 
 ## Building
 
-Nothing is compiled locally. CI (`.github/workflows/ci.yml`) runs on every
-push: frontend typecheck and build, Playwright screenshots in light and dark,
-then `cargo fmt`, `clippy -D warnings`, `cargo test` and `tauri build` on
-Windows, macOS and Linux.
+Nothing is compiled locally. CI (`.github/workflows/ci.yml`) runs once per
+pull request push (as `pull_request`) and on main after each merge: frontend
+typecheck and build, Playwright screenshots in light and dark, then
+`cargo fmt`, `clippy -D warnings` and `cargo test` on Windows, macOS and Linux.
 
 CI also builds the mobile prototype (`docs/mobile-prototype.md`): the
-"Android (debug APK)" job builds an APK, and "iOS (simulator)" builds the app
-library without signing.
+"Android (debug APK)" job builds an APK, and the macOS Rust job builds the iOS
+app library without signing (one macOS runner per run).
+
+`scripts/ci-changes.sh` decides the rest. `tauri build` (installers) runs on
+main, on manual runs (Actions → CI → Run workflow on the branch), and on pull
+requests that change the version or packaging files. End-to-end and Android
+are skipped when a pull request only touches frontend or docs files. The
+required Rust checks always run.
 
 Results (logs, screenshots, lockfiles) are force-pushed to the branch
 `ci-results/<branch>`; read them with
