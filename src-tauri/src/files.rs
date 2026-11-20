@@ -484,7 +484,8 @@ pub struct StartedTransfer {
 }
 
 /// Uploads `local` into the remote directory `remote`, or downloads the
-/// remote path `remote` into the user's Downloads folder.
+/// remote path `remote` into the user's Downloads folder (or, for a file
+/// opened for editing, into `local` in the editor cache).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn transfer_start(
@@ -510,7 +511,18 @@ pub async fn transfer_start(
             .rsplit('/')
             .find(|part| !part.is_empty())
             .ok_or("the remote path has no file name")?;
-        (unique_download_path(&safe_file_name(name))?, remote)
+        // A file opened for editing goes to its own copy; anything else to Downloads.
+        let target = match local {
+            Some(path) => {
+                let path = PathBuf::from(path);
+                if !crate::edit::owns(&app, &path) {
+                    return Err("the download target is not allowed".to_owned());
+                }
+                path
+            }
+            None => unique_download_path(&safe_file_name(name))?,
+        };
+        (target, remote)
     };
     if let Some(link) = daemon::russh_link(&daemon, &host_id).await {
         // Joins the host's transfer queue in the daemon: a few transfers run

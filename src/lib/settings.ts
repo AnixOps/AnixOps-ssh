@@ -28,6 +28,10 @@ export interface Settings {
   terminalOsc52: boolean;
   /** Reconnect by itself, with backoff, when a connection drops. */
   terminalAutoReconnect: boolean;
+  /** The command "Open in editor" starts with the file appended; empty uses the system's default application. */
+  editorCommand: string;
+  /** The files pane shows the folder the terminal is in (needs shell integration). */
+  followTerminalFolder: boolean;
   /** The SSH engine for hosts that follow the global setting: the built-in
    * engine unless OpenSSH was chosen (an advanced option kept for compatibility). */
   sshEngine: SshEngine;
@@ -51,6 +55,8 @@ let current: Settings = {
   terminalCopyOnSelect: false,
   terminalOsc52: true,
   terminalAutoReconnect: true,
+  editorCommand: "",
+  followTerminalFolder: false,
   sshEngine: "russh",
   crashReports: null,
   usageStats: false,

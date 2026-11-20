@@ -48,6 +48,12 @@ pub struct Settings {
     /// Reconnect by itself, with backoff, when a connection drops.
     #[serde(default = "yes")]
     terminal_auto_reconnect: bool,
+    /// The editor command for "Open in editor"; empty means the system default.
+    #[serde(default)]
+    editor_command: String,
+    /// The files pane follows the terminal's folder.
+    #[serde(default)]
+    follow_terminal_folder: bool,
 }
 
 fn default_line_height() -> f32 {
@@ -78,6 +84,28 @@ enum RightClick {
     #[default]
     Menu,
     Paste,
+}
+
+/// File pane behaviour, under its own key like `TerminalBehaviour`.
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
+#[serde(default)]
+struct FilesBehaviour {
+    editor_command: String,
+    follow_terminal_folder: bool,
+}
+
+const FILES_BEHAVIOUR: &str = "files_behaviour";
+
+fn files_behaviour() -> FilesBehaviour {
+    open_store()
+        .ok()
+        .and_then(|store| store.get_setting_as(FILES_BEHAVIOUR).ok().flatten())
+        .unwrap_or_default()
+}
+
+/// The configured editor command, empty for the system default.
+pub fn editor_command() -> String {
+    files_behaviour().editor_command
 }
 
 /// Terminal behaviour only the app's terminal view reads. Kept under its own
@@ -128,6 +156,7 @@ fn terminal_behaviour() -> TerminalBehaviour {
 pub fn settings_get() -> Result<Settings, String> {
     let config = load_config()?;
     let behaviour = terminal_behaviour();
+    let files = files_behaviour();
     Ok(Settings {
         theme: config.theme,
         locale: config.locale,
@@ -146,6 +175,8 @@ pub fn settings_get() -> Result<Settings, String> {
         terminal_copy_on_select: behaviour.copy_on_select,
         terminal_osc52: behaviour.osc52,
         terminal_auto_reconnect: behaviour.auto_reconnect,
+        editor_command: files.editor_command,
+        follow_terminal_folder: files.follow_terminal_folder,
     })
 }
 
@@ -198,6 +229,15 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     if behaviour != terminal_behaviour() {
         store
             .set_setting_as(TERMINAL_BEHAVIOUR, &behaviour)
+            .map_err(stored)?;
+    }
+    let files = FilesBehaviour {
+        editor_command: settings.editor_command.trim().to_owned(),
+        follow_terminal_folder: settings.follow_terminal_folder,
+    };
+    if files != files_behaviour() {
+        store
+            .set_setting_as(FILES_BEHAVIOUR, &files)
             .map_err(stored)?;
     }
     let mut telemetry = load_config()?.telemetry;

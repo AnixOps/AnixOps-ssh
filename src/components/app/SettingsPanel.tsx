@@ -54,10 +54,11 @@ export function SettingsPanel({
   const [transferState, setTransferState] = useState(transferPrefs());
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState("");
+  const [editor, setEditor] = useState(settings().editorCommand);
   const [fonts, setFonts] = useState<string[]>([]);
   const [fontText, setFontText] = useState(settings().terminalFontFamily);
 
-  useEffect(() => onSettings(setCurrent), []);
+  useEffect(() => onSettings((next) => (setCurrent(next), setEditor(next.editorCommand))), []);
   useEffect(() => setFontText(current.terminalFontFamily), [current.terminalFontFamily]);
   useEffect(() => {
     monospaceFonts().then(setFonts).catch(console.error);
@@ -263,6 +264,21 @@ export function SettingsPanel({
               on={transferState.askWhere}
               label={t.askSavePath}
               onClick={() => updateTransferPrefs({ askWhere: !transferState.askWhere })}
+            />
+          </SettingsRow>
+        </SettingsGroup>
+
+        <SettingsGroup title={t.files}>
+          <SettingsRow label={t.editorCommand} hint={t.editorCommandHint}>
+            <Input
+              value={editor}
+              onChange={(event) => setEditor(event.target.value)}
+              onBlur={() => editor.trim() !== current.editorCommand && update({ editorCommand: editor.trim() })}
+              onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
+              placeholder={t.editorCommandPlaceholder}
+              aria-label={t.editorCommand}
+              spellCheck={false}
+              className="h-7 w-56 font-mono text-callout"
             />
           </SettingsRow>
         </SettingsGroup>

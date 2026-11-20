@@ -448,7 +448,7 @@ export interface TransferRequest {
   upload: boolean;
   /** Upload: the remote directory. Download: the remote path. */
   remote: string;
-  /** Upload only: the local file or folder. */
+  /** Upload: the local file or folder. Download: a file in the editor cache (see `editPrepare`) instead of Downloads. */
   local?: string;
 }
 
@@ -533,6 +533,35 @@ export async function pickUploads(): Promise<string[]> {
   const picked = await openDialog({ multiple: true, directory: false });
   if (picked === null) return [];
   return Array.isArray(picked) ? picked : [picked];
+}
+
+/** Where the local copy of `remote` for editing goes; its folder is emptied. */
+export async function editPrepare(hostId: string, remote: string): Promise<string> {
+  if (!isTauri) return `/tmp/anixops-edit/${remote.split("/").filter(Boolean).pop() ?? "file"}`;
+  return invoke<string>("edit_prepare", { hostId, remote });
+}
+
+/** Opens the copy with the editor from Settings, or the system's default application. */
+export async function editOpen(local: string): Promise<void> {
+  if (isTauri) await invoke("edit_open", { local });
+}
+
+/** Reports saves of `local`; the returned function stops listening (the watch itself ends with `editStop`). */
+export async function editWatch(key: string, local: string, onSaved: () => void): Promise<() => void> {
+  if (!isTauri) return () => {};
+  const stop = await listen<string>("edit-saved", (event) => event.payload === key && onSaved());
+  try {
+    await invoke("edit_watch", { key, local });
+  } catch (reason) {
+    stop();
+    throw reason;
+  }
+  return stop;
+}
+
+/** Stops watching and deletes the copy. */
+export async function editStop(key: string, local: string): Promise<void> {
+  if (isTauri) await invoke("edit_stop", { key, local });
 }
 
 export async function revealLocal(path: string): Promise<void> {
