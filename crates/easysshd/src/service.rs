@@ -1123,6 +1123,31 @@ impl Daemon {
                 let _: proto::EngineConnectionsParams = parse(payload)?;
                 ok(self.engine.connections().await)
             }
+            "monitor.sample" => {
+                let p: proto::MonitorSampleParams = parse(payload)?;
+                let me = self.upgrade()?;
+                self.background(outbox, req_id, async move {
+                    let lease = me.monitor_lease(&p.host_id).await?;
+                    let sample = easyssh_engine::monitor::sample(&lease, p.detail.unwrap_or(false))
+                        .await
+                        .map_err(ssh_fail)?;
+                    Ok(json!({"output": sample.output, "latency_ms": sample.latency_ms}))
+                })
+            }
+            "monitor.signal" => {
+                let p: proto::MonitorSignalParams = parse(payload)?;
+                let signal = p.signal.to_string();
+                let pid = u32::try_from(p.pid.get())
+                    .map_err(|_| fail("invalid_command", "pid out of range"))?;
+                let me = self.upgrade()?;
+                self.background(outbox, req_id, async move {
+                    let lease = me.monitor_lease(&p.host_id).await?;
+                    easyssh_engine::monitor::signal(&lease, pid, &signal)
+                        .await
+                        .map_err(|error| fail("signal_failed", error.to_string()))?;
+                    Ok(Value::Null)
+                })
+            }
             "sftp.open" => {
                 let p: proto::SftpOpenParams = parse(payload)?;
                 let me = self.upgrade()?;
@@ -1299,6 +1324,14 @@ impl Daemon {
                 format!("this host runs on OpenSSH: {}", resolution.choice.reason),
             )
         })
+    }
+
+    /// The connection the host's terminal already has, for the monitor.
+    async fn monitor_lease(&self, host_id: &str) -> Result<engine::Lease, Failure> {
+        let plan = self.russh_plan(host_id).await?;
+        self.engine
+            .existing(&plan)
+            .ok_or_else(|| fail("not_connected", "the host is not connected"))
     }
 
     async fn start_tunnel(&self, tunnel: easyssh_core::Tunnel) -> Result<u16, Failure> {

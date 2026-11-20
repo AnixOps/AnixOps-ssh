@@ -345,6 +345,94 @@ async fn terminal_files_and_tunnel_share_one_connection() {
 
 #[tokio::test]
 #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn monitor_reads_the_server_on_the_terminal_connection() {
+    let (rig, hosts) = Rig::start(&[("target", "e2e-target")], None).await;
+    let host = &hosts[0];
+
+    // No terminal yet: the monitor never connects on its own.
+    let error = rig
+        .link
+        .request("monitor.sample", json!({"host_id": host.id}))
+        .await
+        .expect_err("no connection to read through");
+    assert_eq!(error.code, "not_connected", "{error}");
+    assert_eq!(rig.connections().await["opened"], 0);
+
+    let id = shell_says(
+        &rig,
+        host,
+        "sleep 4242 & echo started-$((1+1))",
+        "started-2",
+    )
+    .await;
+    let sample = within(
+        "monitor.sample",
+        rig.link.request(
+            "monitor.sample",
+            json!({"host_id": host.id, "detail": true}),
+        ),
+    )
+    .await
+    .expect("monitor.sample");
+    let output = sample["output"].as_str().unwrap();
+    for section in [
+        "@os Linux",
+        "@uptime",
+        "@loadavg",
+        "@stat",
+        "@meminfo",
+        "@netdev",
+        "@df",
+        "@pstat",
+        "@ps",
+        "@exe",
+    ] {
+        assert!(output.contains(section), "{section} missing in {output}");
+    }
+    assert!(output.trim_end().ends_with("@end"), "{output}");
+    assert!(sample["latency_ms"].as_f64().is_some(), "{sample}");
+
+    // The process list can end a process the login user owns.
+    let pid: u64 = output
+        .lines()
+        .find(|line| line.trim_end().ends_with("sleep 4242"))
+        .and_then(|line| line.split_whitespace().next())
+        .and_then(|pid| pid.parse().ok())
+        .unwrap_or_else(|| panic!("sleep 4242 not listed in {output}"));
+    rig.link
+        .request(
+            "monitor.signal",
+            json!({"host_id": host.id, "pid": pid, "signal": "TERM"}),
+        )
+        .await
+        .expect("monitor.signal");
+    let mut gone = false;
+    for _ in 0..50 {
+        if let Err(error) = rig
+            .link
+            .request(
+                "monitor.signal",
+                json!({"host_id": host.id, "pid": pid, "signal": "TERM"}),
+            )
+            .await
+        {
+            assert_eq!(error.code, "signal_failed", "{error}");
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(gone, "the process outlived TERM");
+
+    // Still the one connection the terminal opened.
+    let info = rig.connections().await;
+    assert_eq!(info["opened"], 1, "{info}");
+    rig.link.close_session(&id);
+    rig.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
 async fn jump_host_runs_on_the_built_in_engine() {
     let (rig, hosts) = Rig::start(&[("via bastion", "e2e-target-via-bastion")], None).await;
     let id = shell_says(&rig, &hosts[0], "echo jumped-$((40+2))", "jumped-42").await;
@@ -494,6 +582,13 @@ async fn proxy_command_falls_back_to_openssh() {
         .await
         .expect("engine.resolve");
     assert_eq!(resolved["engine"], "openssh");
+    // The monitor has no built-in connection to read through here.
+    let error = rig
+        .link
+        .request("monitor.sample", json!({"host_id": hosts[0].id}))
+        .await
+        .expect_err("OpenSSH hosts have no monitor");
+    assert_eq!(error.code, "wrong_engine", "{error}");
     rig.link.close_session(&opened.session_id);
     rig.finish().await;
 }

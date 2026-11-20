@@ -22,6 +22,8 @@ mod import;
 #[cfg(desktop)]
 mod known_hosts;
 #[cfg(desktop)]
+mod monitor;
+#[cfg(desktop)]
 mod serial;
 #[cfg(desktop)]
 mod session_logs;
@@ -134,6 +136,8 @@ fn desktop_run() {
             edit::edit_open,
             edit::edit_watch,
             edit::edit_stop,
+            monitor::monitor_sample,
+            monitor::monitor_signal,
             askpass::askpass_reply,
             askpass::askpass_unlock,
             sync::sync_call,
