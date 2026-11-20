@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bytesToText, displayText, textToBytes, ZMODEM_START } from "./terminalBytes";
+import { binaryInput, bytesToText, displayText, textToBytes, ZMODEM_START } from "./terminalBytes";
 import { engineDecode } from "./engineDecode.testutil";
 
 describe("the byte path", () => {
@@ -45,3 +45,13 @@ describe("the handshake", () => {
     expect(ZMODEM_START.test("$ ls\r\nfile\r\n")).toBe(false);
   });
 });
+
+describe("binary input", () => {
+  it("sends X10 mouse reports as raw bytes", () => {
+    // A click at column 200, row 10: ESC [ M, button, x + 32, y + 32.
+    const report = "\x1b[M" + String.fromCharCode(32, 200 + 32, 10 + 32);
+    expect(Array.from(textToBytes(binaryInput(report)))).toEqual([0x1b, 0x5b, 0x4d, 32, 232, 42]);
+    expect(binaryInput("\x1b[M #!")).toBe("\x1b[M #!");
+  });
+});
+

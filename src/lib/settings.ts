@@ -29,6 +29,8 @@ export interface Settings {
   terminalCtrlCopyPaste: boolean;
   /** Remote programs may write the clipboard with OSC 52 (never read it). */
   terminalOsc52: boolean;
+  /** Full-screen programs (btop, vim, tmux) may take mouse clicks and the wheel. */
+  terminalMouseReporting: boolean;
   /** Reconnect by itself, with backoff, when a connection drops. */
   terminalAutoReconnect: boolean;
   /** The command "Open in editor" starts with the file appended; empty uses the system's default application. */
@@ -58,6 +60,7 @@ let current: Settings = {
   terminalCopyOnSelect: false,
   terminalCtrlCopyPaste: typeof navigator !== "undefined" && /Win/.test(navigator.platform),
   terminalOsc52: true,
+  terminalMouseReporting: true,
   terminalAutoReconnect: true,
   editorCommand: "",
   followTerminalFolder: false,
