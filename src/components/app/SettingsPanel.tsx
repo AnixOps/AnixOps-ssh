@@ -135,7 +135,7 @@ export function SettingsPanel({
               </Stepper>
             </div>
           </SettingsRow>
-          <SettingsRow label={t.fontFamily} hint={t.fontFamilyHint}>
+          <SettingsRow label={t.fontFamily} hint={t.fontFamilyHint} stacked>
             <Input
               aria-label={t.fontFamily}
               list={FONT_LIST_ID}
@@ -144,7 +144,7 @@ export function SettingsPanel({
               onChange={(event) => setFontText(event.target.value)}
               onBlur={() => fontText.trim() !== current.terminalFontFamily && update({ terminalFontFamily: fontText.trim() })}
               onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
-              className="h-7 w-36"
+              className="h-7"
             />
             <datalist id={FONT_LIST_ID}>
               {fonts.map((family) => (
@@ -283,7 +283,7 @@ export function SettingsPanel({
         </SettingsGroup>
 
         <SettingsGroup title={t.files}>
-          <SettingsRow label={t.editorCommand} hint={t.editorCommandHint}>
+          <SettingsRow label={t.editorCommand} hint={t.editorCommandHint} stacked>
             <Input
               value={editor}
               onChange={(event) => setEditor(event.target.value)}
@@ -292,7 +292,7 @@ export function SettingsPanel({
               placeholder={t.editorCommandPlaceholder}
               aria-label={t.editorCommand}
               spellCheck={false}
-              className="h-7 w-56 font-mono text-callout"
+              className="h-7 font-mono text-callout"
             />
           </SettingsRow>
         </SettingsGroup>

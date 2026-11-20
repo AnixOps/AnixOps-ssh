@@ -52,12 +52,17 @@ export function MonitorPane({
   host,
   visible,
   active,
+  forceRail = false,
   onClose,
 }: {
   host: Host;
   visible: boolean;
   /** The tab is in front: sample only then. */
   active: boolean;
+  /** The window is too narrow for the full monitor beside a terminal
+   *  (workspaceFit.ts): show the rail; expanding it floats the monitor over
+   *  the terminal until it is folded again. */
+  forceRail?: boolean;
   onClose: () => void;
 }) {
   const [current, setCurrent] = useState<MonitorView | null>(null);
@@ -150,6 +155,13 @@ export function MonitorPane({
 
   const { width, collapsed } = useMonitorLayout();
   const [dragging, setDragging] = useState(false);
+  const [floating, setFloating] = useState(false);
+  useEffect(() => {
+    if (!forceRail) setFloating(false);
+  }, [forceRail]);
+  const rail = collapsed || forceRail;
+  const expand = () => (forceRail ? setFloating(true) : setMonitorLayout({ collapsed: false }));
+  const fold = () => (floating ? setFloating(false) : setMonitorLayout({ collapsed: true }));
   const linux = current && current.os === "Linux" ? current : null;
   const summary = linux ? summarize(linux) : null;
 
@@ -161,7 +173,7 @@ export function MonitorPane({
         "material-sidebar relative flex shrink-0 flex-col border-r",
         !dragging && "transition-[width] duration-toggle ease-standard",
       )}
-      style={{ width: collapsed ? RAIL_WIDTH : width }}
+      style={{ width: rail ? RAIL_WIDTH : width }}
       initial={{ opacity: 0 }}
       animate={
         visible
@@ -169,13 +181,21 @@ export function MonitorPane({
           : { opacity: 0, transitionEnd: { display: "none" }, transition: { duration: duration.micro, ease: ease.exit } }
       }
     >
-      {collapsed ? (
-        <Rail summary={summary} swap={linux?.swap && linux.swap.total > 0 ? (100 * linux.swap.used) / linux.swap.total : null} latency={latency} onExpand={() => setMonitorLayout({ collapsed: false })} onClose={onClose} />
-      ) : (
-        <>
+      {rail && (
+        <Rail summary={summary} swap={linux?.swap && linux.swap.total > 0 ? (100 * linux.swap.used) / linux.swap.total : null} latency={latency} onExpand={expand} onClose={onClose} />
+      )}
+      {(!rail || floating) && (
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 flex-col",
+            floating && "material-sidebar absolute inset-y-0 left-0 z-sticky max-w-full border-r shadow-3",
+          )}
+          style={floating ? { width } : undefined}
+          onKeyDown={(event) => floating && event.key === "Escape" && setFloating(false)}
+        >
           <div className="flex h-11 shrink-0 items-center gap-0.5 border-b pr-2 pl-4">
             <h2 className="mr-auto text-title-3">{t.monitor}</h2>
-            <IconButton label={t.collapseMonitor} onClick={() => setMonitorLayout({ collapsed: true })}>
+            <IconButton label={t.collapseMonitor} onClick={fold}>
               <PanelLeftClose />
             </IconButton>
             <IconButton label={t.closeMonitor} onClick={onClose}>
@@ -340,7 +360,7 @@ export function MonitorPane({
             )}
           </div>
           <ResizeHandle width={width} onDragging={setDragging} />
-        </>
+        </div>
       )}
 
       <AnimatePresence>
@@ -391,11 +411,11 @@ function Rail({
         className="flex min-h-0 flex-1 flex-col items-stretch gap-3 overflow-hidden px-1.5 py-3 outline-none hover:bg-fill-1 focus-visible:bg-fill-1"
       >
         <RailStat label={t.monitorCpu} percent={summary?.cpu ?? null} />
-        <RailStat label={t.monitorMemory} percent={summary?.mem ?? null} />
+        <RailStat label={t.monitorMemory} short={t.monitorMemoryShort} percent={summary?.mem ?? null} />
         {swap !== null && <RailStat label={t.monitorSwap} percent={swap} />}
         <RailStat label={t.monitorRoot} short={t.monitorDisks} percent={summary?.diskPercent ?? null} />
         <div className="text-center">
-          <div className="truncate text-caption text-label-2">{t.monitorLatency}</div>
+          <div className="truncate text-caption text-label-2" title={t.monitorLatency}>{t.monitorLatencyShort}</div>
           <div className="font-mono text-callout tabular-nums text-label-1">
             {latency === null ? <Absent /> : Math.round(latency)}
           </div>
