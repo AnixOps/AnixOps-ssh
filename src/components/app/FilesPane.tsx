@@ -48,7 +48,7 @@ interface TransferItem {
   name: string;
   upload: boolean;
   local: string;
-  state: "running" | "done" | "failed" | "cancelled";
+  state: "queued" | "running" | "done" | "failed" | "cancelled";
   bytes: number;
   total: number | null;
   message?: string;
@@ -186,7 +186,8 @@ export function FilesPane({
       const early: TransferEvent[] = [];
       const onEvent = (event: TransferEvent) => (ready ? apply(event) : early.push(event));
       const apply = (event: TransferEvent) => {
-        if (event.kind === "progress") updateTransfer(id, { bytes: event.bytes });
+        if (event.kind === "started") updateTransfer(id, { state: "running" });
+        else if (event.kind === "progress") updateTransfer(id, { bytes: event.bytes, state: "running" });
         else if (event.kind === "done") {
           updateTransfer(id, { state: "done", bytes: total ?? 0 });
           if (upload && handle && cwdRef.current === targetDir) void navigate(handle, targetDir);
@@ -202,7 +203,7 @@ export function FilesPane({
             name: localName(upload ? started.local : started.remote),
             upload,
             local: started.local,
-            state: "running",
+            state: started.queued ? "queued" : "running",
             bytes: 0,
             total,
           },
@@ -300,7 +301,7 @@ export function FilesPane({
     );
   }
 
-  const finished = transfers.some((item) => item.state !== "running");
+  const finished = transfers.some((item) => !isActive(item));
 
   return (
     <PaneFrame
@@ -418,7 +419,7 @@ export function FilesPane({
                 variant="quiet"
                 size="sm"
                 className="ml-auto"
-                onClick={() => setTransfers((current) => current.filter((item) => item.state === "running"))}
+                onClick={() => setTransfers((current) => current.filter(isActive))}
               >
                 {t.clearFinished}
               </Button>
@@ -604,6 +605,9 @@ function EditRow({
   );
 }
 
+/** Queued and running transfers can be cancelled and are kept in the list. */
+const isActive = (item: TransferItem) => item.state === "running" || item.state === "queued";
+
 function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => void }) {
   const progress = item.total ? Math.min(1, item.bytes / item.total) : null;
   const Direction = item.upload ? ArrowUp : ArrowDown;
@@ -613,7 +617,7 @@ function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => v
         <Direction className="size-4 shrink-0 text-label-2" strokeWidth={1.5} aria-label={item.upload ? t.upload : t.download} />
         <span className="min-w-0 flex-1 truncate">{item.name}</span>
         <TransferStatus item={item} />
-        {item.state === "running" && (
+        {isActive(item) && (
           <IconButton label={t.cancelTransfer} onClick={onCancel}>
             <X />
           </IconButton>
@@ -641,6 +645,7 @@ function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => v
 
 function TransferStatus({ item }: { item: TransferItem }) {
   const text = "shrink-0 text-callout";
+  if (item.state === "queued") return <span className={cn(text, "text-label-3")}>{t.transferQueued}</span>;
   if (item.state === "running") {
     return (
       <span className={cn(text, "flex items-center gap-1 text-label-2")}>

@@ -202,6 +202,8 @@ pub trait LinkHandler: Send + Sync + 'static {
     fn hostkey_prompt(&self, _prompt: HostKeyPrompt) {}
     /// Host key prompt `id` is over (answered, cancelled or timed out).
     fn hostkey_resolved(&self, _id: u64) {}
+    /// A queued transfer left the queue and runs.
+    fn transfer_started(&self, _transfer_id: &str) {}
     fn transfer_progress(&self, _transfer_id: &str, _bytes: u64) {}
     /// `status` is `completed`, `failed` or `cancelled`.
     fn transfer_done(&self, _transfer_id: &str, _status: &str, _error: Option<&str>) {}
@@ -353,6 +355,9 @@ impl Inner {
             Some("hostkey.resolved") => self
                 .handler
                 .hostkey_resolved(payload["id"].as_u64().unwrap_or(0)),
+            Some("transfer.started") => self
+                .handler
+                .transfer_started(payload["transfer_id"].as_str().unwrap_or_default()),
             Some("transfer.progress") => self.handler.transfer_progress(
                 payload["transfer_id"].as_str().unwrap_or_default(),
                 payload["bytes"].as_u64().unwrap_or(0),

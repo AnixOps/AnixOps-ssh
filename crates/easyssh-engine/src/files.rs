@@ -9,16 +9,26 @@ use easyssh_ssh::{DirEntry, EntryKind, Error as SshError, FileStat, Sftp};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::Handle;
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
 const CHUNK: usize = 64 * 1024;
 const PROGRESS_EVERY: Duration = Duration::from_millis(150);
+
+/// A file session no transfer is using is kept this long for the next one.
+const IDLE_SESSION: Duration = Duration::from_secs(20);
+
+/// Opens (or reuses) the connection a queued transfer runs on; called when
+/// the transfer leaves the queue, so a waiting transfer holds no channel.
+pub type Opener = Pin<Box<dyn Future<Output = Result<Lease, String>> + Send>>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
@@ -41,20 +51,74 @@ enum Partial {
 
 type Current = Arc<Mutex<Option<Partial>>>;
 
+/// The file session a transfer works on, once it has one.
+type Slot = Arc<Mutex<Option<Arc<SftpEntry>>>>;
+
 struct Transfer {
     task: JoinHandle<()>,
     runtime: Handle,
     /// Where this transfer reports to.
     events: Events,
-    entry: Arc<SftpEntry>,
+    entry: Slot,
     current: Current,
+    /// Runs on a file session of its own host queue.
+    pooled: bool,
 }
 
-#[derive(Default)]
+/// The transfer queue of one host: at most `limit` transfers run, the rest
+/// wait in order, and the file sessions they use are kept for the next ones
+/// instead of opening a channel per file (sshd refuses more than
+/// `MaxSessions`, 10 by default, per connection).
+struct Pool {
+    permits: Arc<Semaphore>,
+    idle: Mutex<Vec<Arc<SftpEntry>>>,
+    /// Changes whenever a session is taken or returned.
+    epoch: AtomicU64,
+}
+
 pub struct Files {
     sessions: Mutex<HashMap<String, Arc<SftpEntry>>>,
     transfers: Arc<Mutex<HashMap<String, Transfer>>>,
+    pools: Mutex<HashMap<String, Arc<Pool>>>,
+    limit: AtomicUsize,
     next: AtomicU64,
+}
+
+impl Default for Files {
+    fn default() -> Self {
+        Files {
+            sessions: Mutex::default(),
+            transfers: Arc::default(),
+            pools: Mutex::default(),
+            limit: AtomicUsize::new(easyssh_core::transfer::concurrent_transfers()),
+            next: AtomicU64::new(0),
+        }
+    }
+}
+
+impl Pool {
+    fn take(&self) -> Option<Arc<SftpEntry>> {
+        self.epoch.fetch_add(1, Ordering::Relaxed);
+        lock(&self.idle).pop()
+    }
+
+    /// Keeps `entry` for the next transfer and closes what is not used for a
+    /// while.
+    fn give_back(self: &Arc<Self>, entry: Arc<SftpEntry>) {
+        lock(&self.idle).push(entry);
+        let seen = self.epoch.fetch_add(1, Ordering::Relaxed) + 1;
+        let pool = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(IDLE_SESSION).await;
+            if pool.epoch.load(Ordering::Relaxed) != seen {
+                return;
+            }
+            let idle: Vec<_> = lock(&pool.idle).drain(..).collect();
+            for entry in idle {
+                let _ = entry.sftp.close().await;
+            }
+        });
+    }
 }
 
 /// The `SftpEntry` JSON of the protocol.
@@ -192,10 +256,30 @@ impl Files {
             }
         }
         lock(&self.sessions).clear();
+        lock(&self.pools).clear();
     }
 
-    /// `transfer.start`. The transfer runs in the background; `transfer.progress`
-    /// and `transfer.done` events report on it.
+    /// Sets how many transfers of a host run at once (at least 1). Applies to
+    /// hosts that have no queue yet.
+    pub fn set_concurrent_transfers(&self, limit: usize) {
+        self.limit.store(limit.max(1), Ordering::Relaxed);
+    }
+
+    fn pool(&self, key: &str) -> Arc<Pool> {
+        lock(&self.pools)
+            .entry(key.to_owned())
+            .or_insert_with(|| {
+                Arc::new(Pool {
+                    permits: Arc::new(Semaphore::new(self.limit.load(Ordering::Relaxed))),
+                    idle: Mutex::default(),
+                    epoch: AtomicU64::new(0),
+                })
+            })
+            .clone()
+    }
+
+    /// `transfer.start` on an open file session. The transfer runs in the
+    /// background; `transfer.progress` and `transfer.done` events report on it.
     pub fn start_transfer(
         &self,
         entry: Arc<SftpEntry>,
@@ -205,27 +289,130 @@ impl Files {
         recursive: bool,
         broadcast: Events,
     ) -> String {
+        let work = Work {
+            upload,
+            local,
+            remote,
+            recursive,
+        };
+        self.launch(None, Some(entry), work, broadcast).0
+    }
+
+    /// `transfer.start` on the host `key`: the transfer joins that host's
+    /// queue and runs when fewer than the allowed number are running, on a
+    /// file session of the shared connection that `open` provides when none
+    /// is idle. Returns the transfer id and whether it has to wait; a waiting
+    /// transfer reports `transfer.started` when its turn comes. It can be
+    /// cancelled in the queue like any other.
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_queued_transfer(
+        &self,
+        key: &str,
+        open: Opener,
+        upload: bool,
+        local: PathBuf,
+        remote: String,
+        recursive: bool,
+        broadcast: Events,
+    ) -> (String, bool) {
+        let work = Work {
+            upload,
+            local,
+            remote,
+            recursive,
+        };
+        self.launch(Some((self.pool(key), open)), None, work, broadcast)
+    }
+
+    fn launch(
+        &self,
+        queue: Option<(Arc<Pool>, Opener)>,
+        entry: Option<Arc<SftpEntry>>,
+        work: Work,
+        broadcast: Events,
+    ) -> (String, bool) {
         let id = self.id("transfer");
         let events = broadcast.clone();
         let transfers = self.transfers.clone();
         let task_id = id.clone();
         let (go, gate) = tokio::sync::oneshot::channel::<()>();
         let current = Current::default();
-        let task_entry = entry.clone();
+        let slot: Slot = Arc::new(Mutex::new(entry));
+        let task_slot = slot.clone();
         let task_current = current.clone();
+        // Taken here so the answer to `transfer.start` says whether it waits.
+        let (permits, immediate) = match &queue {
+            Some((pool, _)) => match pool.permits.clone().try_acquire_owned() {
+                Ok(permit) => (None, Some(permit)),
+                Err(_) => (Some(pool.permits.clone()), None),
+            },
+            None => (None, None),
+        };
+        let queued = permits.is_some();
+        let queued_pool = queue.is_some();
         let task = tokio::spawn(async move {
             let _ = gate.await;
+            let mut permit = immediate;
+            if let Some(permits) = permits {
+                match permits.acquire_owned().await {
+                    Ok(got) => permit = Some(got),
+                    Err(_) => return,
+                }
+                broadcast.emit("transfer.started", json!({"transfer_id": task_id}));
+            }
+            // A session of the queue's host: an idle one, or a new channel.
+            let mut pooled = None;
+            if let Some((pool, open)) = queue {
+                let got = match pool.take() {
+                    Some(entry) => Ok(entry),
+                    None => match open.await {
+                        Ok(lease) => match lease.sftp().await {
+                            Ok(sftp) => Ok(Arc::new(SftpEntry {
+                                sftp,
+                                _lease: lease,
+                            })),
+                            Err(e) => Err(e.to_string()),
+                        },
+                        Err(message) => Err(message),
+                    },
+                };
+                match got {
+                    Ok(entry) => {
+                        *lock(&task_slot) = Some(entry);
+                        pooled = Some(pool);
+                    }
+                    Err(message) => {
+                        if lock(&transfers).remove(&task_id).is_some() {
+                            broadcast.emit(
+                                "transfer.done",
+                                json!({"transfer_id": task_id, "status": "failed", "error": message}),
+                            );
+                        }
+                        return;
+                    }
+                }
+            }
+            let Some(task_entry) = lock(&task_slot).clone() else {
+                return;
+            };
             let mut job = Job {
                 sftp: &task_entry.sftp,
                 progress: Progress::new(task_id.clone(), broadcast.clone()),
                 current: task_current.clone(),
             };
-            let result = if upload {
-                upload_path(&mut job, &local, &remote, recursive).await
+            let result = if work.upload {
+                upload_path(&mut job, &work.local, &work.remote, work.recursive).await
             } else {
-                download_path(&mut job, &remote, &local, recursive).await
+                download_path(&mut job, &work.remote, &work.local, work.recursive).await
             };
             job.progress.flush();
+            let ok = result.is_ok();
+            if ok {
+                if let Some(pool) = &pooled {
+                    lock(&task_slot).take();
+                    pool.give_back(task_entry.clone());
+                }
+            }
             // Whoever removes the entry reports the end: this task, or a
             // cancel that got there first.
             if lock(&transfers).remove(&task_id).is_none() {
@@ -236,6 +423,11 @@ impl Files {
                 Ok(()) => ("completed", None),
                 Err(e) => {
                     remove_partial(&task_entry.sftp, &task_current).await;
+                    if pooled.is_some() {
+                        // A session that failed is not trusted with the next
+                        // transfer.
+                        let _ = task_entry.sftp.close().await;
+                    }
                     ("failed", Some(e.to_string()))
                 }
             };
@@ -243,7 +435,9 @@ impl Files {
             if skipped > 0 {
                 done["skipped"] = json!(skipped);
             }
+            // The next in line starts once this one has reported its end.
             broadcast.emit("transfer.done", done);
+            drop(permit);
         });
         lock(&self.transfers).insert(
             id.clone(),
@@ -251,17 +445,19 @@ impl Files {
                 task,
                 runtime: Handle::current(),
                 events,
-                entry,
+                entry: slot,
                 current,
+                pooled: queued_pool,
             },
         );
         let _ = go.send(());
-        id
+        (id, queued)
     }
 
     /// `transfer.cancel`. Unknown or finished transfers are ignored. The
     /// end is reported to the sink the transfer was started with, once the
-    /// file it was writing is removed.
+    /// file it was writing is removed. A transfer still in the queue just
+    /// leaves it.
     pub fn cancel_transfer(&self, id: &str) {
         let Some(transfer) = lock(&self.transfers).remove(id) else {
             return;
@@ -272,19 +468,35 @@ impl Files {
             events,
             entry,
             current,
+            pooled,
         } = transfer;
         task.abort();
         let id = id.to_owned();
         runtime.spawn(async move {
             // Once the task has stopped it cannot create the file again.
             let _ = task.await;
-            remove_partial(&entry.sftp, &current).await;
+            let entry = lock(&entry).take();
+            if let Some(entry) = entry {
+                remove_partial(&entry.sftp, &current).await;
+                if pooled {
+                    // Cut off in the middle of a request: not reused.
+                    let _ = entry.sftp.close().await;
+                }
+            }
             events.emit(
                 "transfer.done",
                 json!({"transfer_id": id, "status": "cancelled", "error": null}),
             );
         });
     }
+}
+
+/// What a transfer is asked to do.
+struct Work {
+    upload: bool,
+    local: PathBuf,
+    remote: String,
+    recursive: bool,
 }
 
 async fn remove_partial(sftp: &Sftp, current: &Current) {
