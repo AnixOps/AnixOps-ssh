@@ -3,14 +3,15 @@
 //! The web view receives text, but a terminal stream is not always UTF-8: the
 //! ZMODEM file transfer (`rz`/`sz`) sends arbitrary bytes. A byte that can
 //! never be part of a UTF-8 character is therefore sent as the private-use
-//! character `U+F700 + byte` (the mapping Cygwin and Wine use), and
+//! character `U+100000 + byte` (Supplementary Private Use Area-B, which no font
+//! set uses; the BMP range Nerd Fonts fill with icons is left alone), and
 //! [`text_to_bytes`] undoes it on the way back. The web view shows those
 //! characters as U+FFFD while it is a plain terminal, and turns them back into
 //! bytes while a transfer runs.
 
-/// First private-use character of the escape range: `U+F780..=U+F7FF` stand
+/// Base of the escape range: `U+100080..=U+1000FF` stand
 /// for the bytes `0x80..=0xFF`.
-pub const ESCAPE_BASE: u32 = 0xF700;
+pub const ESCAPE_BASE: u32 = 0x10_0000;
 
 /// The character that carries an undecodable byte (`0x80..=0xFF`).
 pub fn escape_byte(byte: u8) -> char {
@@ -23,7 +24,7 @@ pub fn text_to_bytes(text: &str) -> Vec<u8> {
     let mut utf8 = [0u8; 4];
     for c in text.chars() {
         match u32::from(c) {
-            n @ 0xF780..=0xF7FF => out.push((n - ESCAPE_BASE) as u8),
+            n @ 0x10_0080..=0x10_00FF => out.push((n - ESCAPE_BASE) as u8),
             _ => out.extend_from_slice(c.encode_utf8(&mut utf8).as_bytes()),
         }
     }

@@ -17,7 +17,7 @@ describe("the byte path", () => {
   it("sends bytes back as text the engine turns into the same bytes", () => {
     const bytes = Uint8Array.from([0x00, 0x18, 0x41, 0x80, 0xc3, 0xff, 0x7f]);
     const text = bytesToText(bytes);
-    expect(text).toBe("\x00\x18A\x7f");
+    expect(text).toBe("\x00\x18A\u{100080}\u{1000c3}\u{1000ff}\x7f");
     expect(Array.from(textToBytes(text))).toEqual(Array.from(bytes));
   });
 
@@ -27,7 +27,9 @@ describe("the byte path", () => {
   });
 
   it("shows escaped bytes as the replacement character in a plain terminal", () => {
-    expect(displayText("ab")).toBe("a�b�");
+    expect(displayText("a\u{1000ff}b\u{100080}")).toBe("a\ufffdb\ufffd");
+    // Icon glyphs (Nerd Fonts live in the BMP private-use area) pass through unchanged.
+    expect(displayText("\uf780 \uf7ff \ue0b0")).toBe("\uf780 \uf7ff \ue0b0");
     expect(displayText("主机")).toBe("主机");
   });
 });

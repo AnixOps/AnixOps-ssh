@@ -1,13 +1,15 @@
 /* Terminal output reaches the web view as text, but a ZMODEM transfer is
    binary. The engine therefore never loses a byte: one that cannot be part of
-   UTF-8 is carried as the private-use character U+F700 + byte (U+F780 to
-   U+F7FF for 0x80 to 0xFF), and the same mapping runs backwards on input
+   UTF-8 is carried as the private-use character U+100000 + byte (U+100080 to
+   U+1000FF for 0x80 to 0xFF; Supplementary Private Use Area-B, outside what
+   Nerd Fonts use; JS holds them as surrogate pairs, so strings are walked by
+   code point), and the same mapping runs backwards on input
    (crates/easyssh-engine/src/utf8.rs). A plain terminal shows those as
    U+FFFD, as it always did; a transfer turns the text back into bytes. */
 
-const ESCAPE_BASE = 0xf700;
-const ESCAPE_FIRST = 0xf780;
-const ESCAPE_LAST = 0xf7ff;
+const ESCAPE_BASE = 0x100000;
+const ESCAPE_FIRST = 0x100080;
+const ESCAPE_LAST = 0x1000ff;
 
 const encoder = new TextEncoder();
 
@@ -62,14 +64,14 @@ export function bytesToText(bytes: ArrayLike<number>): string {
       const byte = bytes[i];
       codes.push(byte < 0x80 ? byte : ESCAPE_BASE + byte);
     }
-    out += String.fromCharCode(...codes);
+    out += String.fromCodePoint(...codes);
   }
   return out;
 }
 
 /** Output for xterm: escaped bytes (undecodable garbage) show as U+FFFD. */
 export function displayText(text: string): string {
-  return text.replace(/[-]/g, "�");
+  return text.replace(/[\u{100080}-\u{1000ff}]/gu, "\ufffd");
 }
 
 /** The start of a ZMODEM hex header: ZPAD ZPAD ZDLE 'B', then type 00 (ZRQINIT,

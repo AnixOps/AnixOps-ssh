@@ -222,7 +222,7 @@ describe("without a transfer", () => {
     const { shown, host } = plain();
     const transfer = new TerminalTransfer({} as TransferFiles, prefs());
     transfer.bind(host);
-    transfer.feed("hello  world\r\n");
+    transfer.feed("hello \u{1000ff} world\r\n");
     transfer.feed("**\x18B2 not zmodem");
     expect(shown.join("")).toBe("hello � world\r\n**\x18B2 not zmodem");
     expect(transfer.active()).toBe(false);
@@ -259,7 +259,7 @@ describe("without a transfer", () => {
     transfer.bind(host);
     transfer.feed("ready\r\n*");
     transfer.feed("*\x18B01000");
-    transfer.feed("00063f694\r\uf78a\x11");
+    transfer.feed("00063f694\r\u{10008a}\x11");
     expect(transfer.active()).toBe(true);
     expect(shown.join("")).not.toContain("B0100");
     // Cancelling (Esc) sends the abort sequence and the terminal is free again.

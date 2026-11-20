@@ -454,17 +454,39 @@ impl TermSession {
     }
 
     fn pump(&self, mut reader: Box<dyn Read + Send>, exit: &mpsc::Receiver<Option<u32>>) {
-        let mut buffer = [0u8; 16 * 1024];
+        // The blocking read runs on its own thread so a held-back lead byte
+        // can be released after a quiet moment (a binary transfer must not
+        // wait on it).
+        let (chunks, incoming) = mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            let mut buffer = [0u8; 16 * 1024];
+            while let Ok(read) = reader.read(&mut buffer) {
+                if read == 0 || chunks.send(buffer[..read].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
         let mut decoder = Utf8Stream::default();
         loop {
-            match reader.read(&mut buffer) {
-                Ok(0) | Err(_) => break,
-                Ok(read) => {
-                    let text = decoder.push(&buffer[..read]);
+            let wait = if decoder.has_pending() {
+                Duration::from_millis(25)
+            } else {
+                Duration::from_secs(3600)
+            };
+            match incoming.recv_timeout(wait) {
+                Ok(bytes) => {
+                    let text = decoder.push(&bytes);
                     if !text.is_empty() {
                         self.output(&text);
                     }
                 }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let text = decoder.flush();
+                    if !text.is_empty() {
+                        self.output(&text);
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
         let code = exit.recv_timeout(Duration::from_secs(3)).ok().flatten();

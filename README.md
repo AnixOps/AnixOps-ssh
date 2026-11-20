@@ -130,7 +130,7 @@ is on by default (**Settings → Terminal → rz/sz file transfer**) and on the
 desktop app only. The protocol is [zmodem.js](https://github.com/FGasper/zmodemjs)
 (Apache-2.0, a permissive licence compatible with this project's MIT); terminal
 output reaches the web view without losing a byte (bytes that are not UTF-8 are
-carried as private-use characters U+F780 to U+F7FF and turned back for the
+carried as private-use characters U+100080 to U+1000FF and turned back for the
 transfer). trzsz is not supported yet.
 
 ## Security boundary

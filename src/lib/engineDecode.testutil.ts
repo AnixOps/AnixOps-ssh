@@ -1,6 +1,6 @@
 /* Test helper: the same decoding the engine does to terminal bytes. */
 /** What the engine does to terminal bytes (crates/easyssh-engine/src/utf8.rs): valid
- *  UTF-8 becomes text, any other byte becomes U+F700 + byte, a character split across
+ *  UTF-8 becomes text, any other byte becomes U+100000 + byte, a character split across
  *  reads is held back. `reads` are the sizes of the chunks the bytes arrive in. */
 export function engineDecode(bytes: Uint8Array, reads: number[]): string[] {
   const out: string[] = [];
@@ -20,13 +20,13 @@ export function engineDecode(bytes: Uint8Array, reads: number[]): string[] {
       }
       const length = need(lead);
       if (length === 1 || lead > 0xf4) {
-        text += String.fromCharCode(0xf700 + lead);
+        text += String.fromCodePoint(0x100000 + lead);
         i += 1;
         continue;
       }
       if (i + length > pending.length) {
         if (last) {
-          for (; i < pending.length; i += 1) text += String.fromCharCode(0xf700 + pending[i]);
+          for (; i < pending.length; i += 1) text += String.fromCodePoint(0x100000 + pending[i]);
         }
         break;
       }
@@ -35,7 +35,7 @@ export function engineDecode(bytes: Uint8Array, reads: number[]): string[] {
         text += new TextDecoder("utf-8", { fatal: true }).decode(slice);
         i += length;
       } catch {
-        text += String.fromCharCode(0xf700 + lead);
+        text += String.fromCodePoint(0x100000 + lead);
         i += 1;
       }
     }
