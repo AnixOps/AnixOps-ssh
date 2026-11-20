@@ -2424,6 +2424,24 @@ impl ::std::convert::TryFrom<::std::string::String> for TransferDoneEventStatus 
         value.parse()
     }
 }
+///Command `transfer.enqueue` payload (russh engine): like `transfer.start`, but on the host's transfer queue instead of a file session of its own. At most a few transfers per host run at once, the others wait (`queued` in the reply) and report `transfer.started` when their turn comes. Reply: TransferEnqueueResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferEnqueueParams {
+    pub direction: TransferDirection,
+    pub host_id: ::std::string::String,
+    pub local_path: ::std::string::String,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub recursive: ::std::option::Option<bool>,
+    pub remote_path: ::std::string::String,
+}
+///`TransferEnqueueResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferEnqueueResult {
+    pub queued: bool,
+    pub transfer_id: ::std::string::String,
+}
 ///Event `transfer.progress` payload: bytes moved so far, and the total when known.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
@@ -2449,6 +2467,12 @@ pub struct TransferStartParams {
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TransferStartResult {
+    pub transfer_id: ::std::string::String,
+}
+///Event `transfer.started` payload: a queued transfer left the queue and runs.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferStartedEvent {
     pub transfer_id: ::std::string::String,
 }
 ///`TransferStatus`

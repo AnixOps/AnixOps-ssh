@@ -1,28 +1,8 @@
 /**
- * The file pane's transfer queue: how many transfers of one host run at once,
- * which queued ones start next, and the numbers shown for a running one
- * (speed, time left). Pure functions, so they are tested without a window.
+ * The numbers shown for a running transfer (speed, time left) and the wording
+ * of its failure. Pure functions, so they are tested without a window. The
+ * queue itself lives in the backend, per host.
  */
-
-/**
- * Transfers of one host running at once. Every transfer opens an SFTP channel
- * on the host's shared connection, and OpenSSH refuses more than `MaxSessions`
- * (default 10) channels on one connection, with the terminal and tunnels
- * sharing them. Four leaves room for those.
- */
-export const DEFAULT_TRANSFER_LIMIT = 4;
-
-export type QueueState = "queued" | "running" | "done" | "failed" | "cancelled";
-
-/** The ids of queued items to start now, oldest first, up to `limit` running. */
-export function pickToStart(items: { id: string; state: QueueState }[], limit: number): string[] {
-  const running = items.filter((item) => item.state === "running").length;
-  const free = Math.max(0, Math.floor(limit) - running);
-  return items
-    .filter((item) => item.state === "queued")
-    .slice(0, free)
-    .map((item) => item.id);
-}
 
 export interface Rate {
   /** Time of the last sample (ms). */

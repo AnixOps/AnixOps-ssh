@@ -1,35 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_TRANSFER_LIMIT,
-  failureMessage,
-  formatDuration,
-  nextRate,
-  pickToStart,
-  secondsLeft,
-  type QueueState,
-} from "./transferQueue";
-
-const items = (...states: QueueState[]) => states.map((state, index) => ({ id: `t${index}`, state }));
-
-describe("pickToStart", () => {
-  it("starts queued items in order up to the limit", () => {
-    const twelve = items(...Array<QueueState>(12).fill("queued"));
-    expect(pickToStart(twelve, DEFAULT_TRANSFER_LIMIT)).toEqual(["t0", "t1", "t2", "t3"]);
-  });
-
-  it("counts the running ones and ignores finished ones", () => {
-    const list = items("running", "done", "failed", "queued", "running", "queued", "queued", "cancelled");
-    expect(pickToStart(list, 4)).toEqual(["t3", "t5"]);
-  });
-
-  it("starts nothing when the limit is reached", () => {
-    expect(pickToStart(items("running", "running", "queued"), 2)).toEqual([]);
-  });
-
-  it("honours a lower limit than the default", () => {
-    expect(pickToStart(items("queued", "queued", "queued"), 1)).toEqual(["t0"]);
-  });
-});
+import { failureMessage, formatDuration, nextRate, secondsLeft } from "./transferProgress";
 
 describe("speed and time left", () => {
   it("has no speed from a single sample", () => {

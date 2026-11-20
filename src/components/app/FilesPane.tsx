@@ -40,33 +40,18 @@ import {
 import { t } from "@/lib/i18n";
 import { shortcutHint } from "@/lib/shortcutTable";
 import { appear, duration, ease } from "@/lib/motion";
-import {
-  DEFAULT_TRANSFER_LIMIT,
-  failureMessage,
-  formatDuration,
-  nextRate,
-  pickToStart,
-  secondsLeft,
-  type QueueState,
-  type Rate,
-} from "@/lib/transferQueue";
+import { failureMessage, formatDuration, nextRate, secondsLeft, type Rate } from "@/lib/transferProgress";
 import { locate, localName, parentPath, resolvePath, uploadConflicts } from "@/lib/remotePath";
 import { cn } from "@/lib/utils";
 
 interface TransferItem {
-  /** The pane's own id; `backendId` is the one the backend gave it once started. */
   id: string;
-  backendId?: string;
   name: string;
   upload: boolean;
   local: string;
-  /** The remote file or folder, for the messages. */
+  /** The remote file or folder, for failure messages. */
   remote: string;
-  /** What `startTransfer` is asked for: the remote folder (upload) or path (download). */
-  target: string;
-  /** The folder listed when an upload was queued, refreshed when it ends. */
-  dir: string;
-  state: QueueState;
+  state: "queued" | "running" | "done" | "failed" | "cancelled";
   bytes: number;
   total: number | null;
   rate?: Rate;
@@ -124,12 +109,6 @@ export function FilesPane({
   const [transfers, setTransfers] = useState<TransferItem[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const paneRef = useRef<HTMLElement>(null);
-  /** Counts the items queued, for their ids. */
-  const queued = useRef(0);
-  /** Items already handed to `begin`, so a re-render does not start one twice. */
-  const started = useRef(new Set<string>());
-  /** Items cancelled while their start call was still on its way. */
-  const cancelAsked = useRef(new Set<string>());
   const cwdRef = useRef("");
   /** The listing of `cwdRef`, for checking what an upload would replace. */
   const entriesRef = useRef<RemoteFile[]>([]);
@@ -202,90 +181,67 @@ export function FilesPane({
     setTransfers((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }, []);
 
-  /** Starts a queued item: it counts against the host's limit from here. */
-  const begin = useCallback(
-    async (item: TransferItem) => {
-      updateTransfer(item.id, { state: "running", bytes: 0, rate: undefined, message: undefined, backendId: undefined });
+  const transfer = useCallback(
+    async (upload: boolean, remote: string, local: string | undefined, total: number | null) => {
+      const targetDir = cwdRef.current;
+      let id = "";
+      // Events can arrive before the start call returns; hold them until the item exists.
       let ready = false;
       const early: TransferEvent[] = [];
       const onEvent = (event: TransferEvent) => (ready ? apply(event) : early.push(event));
       const apply = (event: TransferEvent) => {
-        // Whatever arrives after a cancel is ignored.
-        const settle = (change: (current: TransferItem) => Partial<TransferItem>) =>
+        if (event.kind === "started") updateTransfer(id, { state: "running" });
+        else if (event.kind === "progress") {
+          // The backend sizes the work once it runs, so `total` can arrive after the row exists.
           setTransfers((all) =>
-            all.map((current) => (current.id === item.id && current.state === "running" ? { ...current, ...change(current) } : current)),
+            all.map((item) =>
+              item.id === id
+                ? {
+                    ...item,
+                    state: "running",
+                    bytes: event.bytes,
+                    total: event.total ?? item.total,
+                    rate: nextRate(item.rate, event.bytes, Date.now()),
+                  }
+                : item,
+            ),
           );
-        if (event.kind === "progress") {
-          settle((current) => ({
-            bytes: event.bytes,
-            total: event.total ?? current.total,
-            rate: nextRate(current.rate, event.bytes, Date.now()),
-          }));
         } else if (event.kind === "done") {
-          settle((current) => ({ state: "done", bytes: current.total ?? current.bytes }));
-          if (item.upload && handle && cwdRef.current === item.dir) void navigate(handle, item.dir);
+          setTransfers((all) =>
+            all.map((item) => (item.id === id ? { ...item, state: "done", bytes: item.total ?? item.bytes } : item)),
+          );
+          if (upload && handle && cwdRef.current === targetDir) void navigate(handle, targetDir);
         } else if (event.kind === "failed") {
-          settle(() => ({ state: "failed", message: failureMessage(item.remote, event.message) }));
-        } else settle(() => ({ state: "cancelled" }));
+          setTransfers((all) =>
+            all.map((item) => (item.id === id ? { ...item, state: "failed", message: failureMessage(item.remote, event.message) } : item)),
+          );
+        }
+        else updateTransfer(id, { state: "cancelled" });
       };
       try {
-        const started = await startTransfer(
-          { hostId, upload: item.upload, remote: item.target, local: item.upload ? item.local : undefined },
-          onEvent,
-        );
-        updateTransfer(item.id, { backendId: started.id });
-        if (cancelAsked.current.delete(item.id)) void cancelTransfer(started.id);
+        const started = await startTransfer({ hostId, upload, remote, local }, onEvent);
+        id = started.id;
+        setTransfers((current) => [
+          {
+            id,
+            name: localName(upload ? started.local : started.remote),
+            upload,
+            local: started.local,
+            remote: started.remote,
+            state: started.queued ? "queued" : "running",
+            bytes: 0,
+            total,
+          },
+          ...current,
+        ]);
         ready = true;
         early.forEach(apply);
       } catch (reason) {
-        updateTransfer(item.id, { state: "failed", message: failureMessage(item.remote, reason) });
+        setActionError(String(reason));
       }
     },
     [handle, hostId, navigate, updateTransfer],
   );
-
-  // Starts queued transfers while the host has room, oldest first.
-  useEffect(() => {
-    for (const id of pickToStart(transfers, DEFAULT_TRANSFER_LIMIT)) {
-      const item = transfers.find((candidate) => candidate.id === id);
-      if (!item || started.current.has(id)) continue;
-      started.current.add(id);
-      void begin(item);
-    }
-  }, [transfers, begin]);
-
-  const transfer = useCallback(
-    (upload: boolean, remote: string, local: string | undefined, total: number | null) => {
-      const source = upload ? (local ?? "") : remote;
-      const item: TransferItem = {
-        id: `transfer-${++queued.current}`,
-        name: localName(source),
-        upload,
-        local: local ?? "",
-        remote: upload ? joinPath(remote, localName(source)) : remote,
-        target: remote,
-        dir: cwdRef.current,
-        state: "queued",
-        bytes: 0,
-        total,
-      };
-      setTransfers((current) => [...current, item]);
-    },
-    [],
-  );
-
-  const cancelItem = (item: TransferItem) => {
-    if (item.state === "running") {
-      if (item.backendId) void cancelTransfer(item.backendId);
-      else cancelAsked.current.add(item.id);
-    }
-    updateTransfer(item.id, { state: "cancelled" });
-  };
-
-  const retryItem = (item: TransferItem) => {
-    started.current.delete(item.id);
-    updateTransfer(item.id, { state: "queued", bytes: 0, rate: undefined, message: undefined, backendId: undefined });
-  };
 
   const uploadPaths = useCallback(
     async (paths: string[]) => {
@@ -300,7 +256,7 @@ export function FilesPane({
         const items = conflicts.length > 1 ? conflicts : undefined;
         if (!(await confirm({ title, body: t.uploadReplaceBody, verb: t.replace, items }))) return;
       }
-      for (const path of paths) transfer(true, dir, path, null);
+      for (const path of paths) void transfer(true, dir, path, null);
     },
     [confirm, transfer],
   );
@@ -329,8 +285,8 @@ export function FilesPane({
     if (!handle) return;
     const path = joinPath(cwd, entry.name);
     if (entry.kind === "directory") void navigate(handle, path);
-    else if (entry.kind === "symlink") void navigate(handle, path, false, () => transfer(false, path, undefined, null));
-    else transfer(false, path, undefined, entry.size);
+    else if (entry.kind === "symlink") void navigate(handle, path, false, () => void transfer(false, path, undefined, null));
+    else void transfer(false, path, undefined, entry.size);
   };
 
   const submitEdit = () => {
@@ -370,7 +326,7 @@ export function FilesPane({
     );
   }
 
-  const finished = transfers.some((item) => item.state !== "running" && item.state !== "queued");
+  const finished = transfers.some((item) => !isActive(item));
 
   return (
     <PaneFrame
@@ -456,7 +412,7 @@ export function FilesPane({
               selected={selected === entry.name}
               onSelect={() => setSelected(entry.name)}
               onOpen={() => open(entry)}
-              onDownload={() => transfer(false, joinPath(cwd, entry.name), undefined, entry.kind === "file" ? entry.size : null)}
+              onDownload={() => void transfer(false, joinPath(cwd, entry.name), undefined, entry.kind === "file" ? entry.size : null)}
               onRename={() => setEditing({ kind: "rename", from: entry.name, value: entry.name })}
               onDelete={async () => {
                 const directory = entry.kind === "directory";
@@ -488,7 +444,7 @@ export function FilesPane({
                 variant="quiet"
                 size="sm"
                 className="ml-auto"
-                onClick={() => setTransfers((current) => current.filter((item) => item.state === "running" || item.state === "queued"))}
+                onClick={() => setTransfers((current) => current.filter(isActive))}
               >
                 {t.clearFinished}
               </Button>
@@ -497,7 +453,10 @@ export function FilesPane({
           <ul className="space-y-1">
             <AnimatePresence initial={false}>
             {transfers.map((item) => (
-              <TransferRow key={item.id} item={item} onCancel={() => cancelItem(item)} onRetry={() => retryItem(item)} />
+              <TransferRow key={item.id} item={item} onCancel={() => {
+                void cancelTransfer(item.id);
+                updateTransfer(item.id, { state: "cancelled" });
+              }} />
             ))}
             </AnimatePresence>
           </ul>
@@ -671,7 +630,10 @@ function EditRow({
   );
 }
 
-function TransferRow({ item, onCancel, onRetry }: { item: TransferItem; onCancel: () => void; onRetry: () => void }) {
+/** Queued and running transfers can be cancelled and are kept in the list. */
+const isActive = (item: TransferItem) => item.state === "running" || item.state === "queued";
+
+function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => void }) {
   const progress = item.total ? Math.min(1, item.bytes / item.total) : null;
   const Direction = item.upload ? ArrowUp : ArrowDown;
   return (
@@ -680,14 +642,9 @@ function TransferRow({ item, onCancel, onRetry }: { item: TransferItem; onCancel
         <Direction className="size-4 shrink-0 text-label-2" strokeWidth={1.5} aria-label={item.upload ? t.upload : t.download} />
         <span className="min-w-0 flex-1 truncate">{item.name}</span>
         <TransferStatus item={item} />
-        {(item.state === "running" || item.state === "queued") && (
+        {isActive(item) && (
           <IconButton label={t.cancelTransfer} onClick={onCancel}>
             <X />
-          </IconButton>
-        )}
-        {item.state === "failed" && (
-          <IconButton label={t.retryTransfer} onClick={onRetry}>
-            <RotateCw />
           </IconButton>
         )}
         {item.state === "done" && !item.upload && isTauri && (
@@ -714,6 +671,7 @@ function TransferRow({ item, onCancel, onRetry }: { item: TransferItem; onCancel
 
 function TransferStatus({ item }: { item: TransferItem }) {
   const text = "shrink-0 text-callout";
+  if (item.state === "queued") return <span className={cn(text, "text-label-3")}>{t.transferQueued}</span>;
   if (item.state === "running") {
     return (
       <span className={cn(text, "flex items-center gap-1 text-label-2")}>
@@ -722,7 +680,6 @@ function TransferStatus({ item }: { item: TransferItem }) {
       </span>
     );
   }
-  if (item.state === "queued") return <span className={cn(text, "text-label-3")}>{t.transferQueued}</span>;
   if (item.state === "done") {
     return (
       <span className={cn(text, "flex items-center gap-1 text-success")}>

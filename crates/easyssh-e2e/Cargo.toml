@@ -24,4 +24,5 @@ easyssh-sessionlog = { path = "../easyssh-sessionlog" }
 easyssh-store = { path = "../easyssh-store" }
 easyssh-vault = { path = "../easyssh-vault" }
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
