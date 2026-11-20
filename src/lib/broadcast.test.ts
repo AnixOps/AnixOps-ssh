@@ -46,4 +46,17 @@ describe("paste confirmation", () => {
     expect(pasteNeedsConfirm("ls", 2)).toBe(false);
     expect(pasteNeedsConfirm("ls\n", 0)).toBe(false);
   });
+
+  it("asks before a multi-line paste into one pane without bracketed paste", () => {
+    const plain = { bracketedPaste: false, warnMultiline: true };
+    expect(pasteNeedsConfirm("rm -rf build\nmake\n", 0, plain)).toBe(true);
+    expect(pasteNeedsConfirm("a\rb", 0, plain)).toBe(true);
+    expect(pasteNeedsConfirm("one line", 0, plain)).toBe(false);
+    // The app takes the paste as one block: nothing runs by itself.
+    expect(pasteNeedsConfirm("a\nb", 0, { bracketedPaste: true, warnMultiline: true })).toBe(false);
+    // Turned off in the settings.
+    expect(pasteNeedsConfirm("a\nb", 0, { bracketedPaste: false, warnMultiline: false })).toBe(false);
+    // Several panes: always asked, whatever the pane's mode.
+    expect(pasteNeedsConfirm("a\nb", 2, { bracketedPaste: true, warnMultiline: false })).toBe(true);
+  });
 });

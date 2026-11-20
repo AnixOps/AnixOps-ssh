@@ -162,6 +162,8 @@ struct HostFieldsInput {
     username: Option<String>,
     port: u16,
     proxy_jump: Option<String>,
+    #[serde(default)]
+    proxy: Option<easyssh_core::ProxySettings>,
 }
 
 /// The part of the desktop's `HostInput` the mobile form fills in.
@@ -201,6 +203,7 @@ fn host_save(state: State<'_, Mobile>, input: HostInput) -> Result<String, Strin
                 tags: input.tags,
                 favorite: input.favorite,
                 jump: input.fields.proxy_jump,
+                proxy: input.fields.proxy,
             },
         )
     })

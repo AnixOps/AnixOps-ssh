@@ -929,7 +929,10 @@ impl Daemon {
             "secrets.set" => {
                 let p: proto::SecretsSetParams = parse(payload)?;
                 let host_id = p.host_id.clone();
-                let update = easyssh_vault::secrets_update(p.password, p.private_key, p.passphrase)
+                let mut update =
+                    easyssh_vault::secrets_update(p.password, p.private_key, p.passphrase)
+                        .map_err(|e| fail(e.code, e.message))?;
+                update.proxy_password = easyssh_vault::proxy_password_change(p.proxy_password)
                     .map_err(|e| fail(e.code, e.message))?;
                 let (vault, store) = (self.vault.clone(), self.store.clone());
                 let id = host_id.clone();
@@ -1306,12 +1309,13 @@ impl Daemon {
 
     /// The plan for a host that must run on the built-in engine.
     async fn russh_plan(&self, host_id: &str) -> Result<plan::RusshPlan, Failure> {
-        let (_, resolution) = self.resolution(host_id).await?;
-        resolution.plan.ok_or_else(|| {
-            fail(
+        let (connection, resolution) = self.resolution(host_id).await?;
+        resolution.plan.ok_or_else(|| match &connection.proxy {
+            Some(proxy) => proxy_needs_builtin(proxy, &resolution.choice.reason),
+            None => fail(
                 "wrong_engine",
                 format!("this host runs on OpenSSH: {}", resolution.choice.reason),
-            )
+            ),
         })
     }
 
@@ -1336,10 +1340,35 @@ impl Daemon {
                 return Err(ssh_shared(error));
             }
         };
+        // When the connection drops the tunnel leases a new one by itself,
+        // resolving the host again (it may have been edited meanwhile).
+        let me = self.me.clone();
+        let host_id = tunnel.host_id.clone();
+        let relink: engine::tunnels::Relink = Arc::new(move || {
+            let me = me.clone();
+            let host_id = host_id.clone();
+            Box::pin(async move {
+                let stopping = || engine::tunnels::RelinkError {
+                    message: "the daemon is stopping".into(),
+                    fatal: true,
+                };
+                let me = me.upgrade().ok_or_else(stopping)?;
+                let relink_failed = |failure: Failure| engine::tunnels::RelinkError {
+                    fatal: failure.code == "wrong_engine"
+                        || easyssh_engine::supervisor::is_fatal(failure.code),
+                    message: failure.message,
+                };
+                let plan = me.russh_plan(&host_id).await.map_err(relink_failed)?;
+                me.engine
+                    .lease(&plan, None)
+                    .await
+                    .map_err(|error| relink_failed(ssh_shared(error)))
+            })
+        });
         match self
             .engine
             .tunnels
-            .start(&tunnel, lease, broadcast.clone())
+            .start(&tunnel, lease, relink, broadcast.clone())
             .await
         {
             Ok(port) => Ok(port),
@@ -1384,7 +1413,12 @@ impl Daemon {
         }
         let mut chosen = None;
         if let Some(host_id) = &p.host_id {
-            let (_, resolution) = self.resolution(host_id).await?;
+            let (connection, resolution) = self.resolution(host_id).await?;
+            if resolution.plan.is_none() {
+                if let Some(proxy) = &connection.proxy {
+                    return Err(proxy_needs_builtin(proxy, &resolution.choice.reason));
+                }
+            }
             if let Some(plan) = resolution.plan {
                 // The built-in engine: connecting may involve prompts, so
                 // it finishes in the background and replies then.
@@ -1615,7 +1649,13 @@ impl Daemon {
     ) {
         let opened = self
             .engine
-            .open_shell(&plan, agent_sock.clone(), p.cols, p.rows)
+            .open_shell(
+                &plan,
+                agent_sock.clone(),
+                p.cols,
+                p.rows,
+                self.app_language(),
+            )
             .await;
         let result = match opened {
             Ok((shell, lease)) => {
@@ -1678,6 +1718,16 @@ impl Daemon {
                 self.log.error(&format!("session.open failed: {}", f.code));
                 outbox.send(error_reply(req_id, f.code, &f.message)).await;
             }
+        }
+    }
+
+    /// The app's language setting (`zh`, `en`), or `None` when it follows
+    /// the system.
+    fn app_language(&self) -> Option<&'static str> {
+        match lock(&self.store).get_setting_as("locale").ok().flatten() {
+            Some(easyssh_core::Locale::ZhCn) => Some("zh"),
+            Some(easyssh_core::Locale::En) => Some("en"),
+            _ => None,
         }
     }
 
@@ -1871,11 +1921,29 @@ fn vault_failure(error: VaultError) -> Failure {
     fail(error.code(), error.to_string())
 }
 
+/// A host with an outbound proxy cannot run on OpenSSH: there is no safe
+/// built-in `ProxyCommand` (it would need `nc` or `ncat`, which differ by
+/// system and cannot carry a proxy password without putting it on a command
+/// line), and starting `ssh` without the proxy would silently connect
+/// directly. So the host does not open, and the message says why.
+fn proxy_needs_builtin(proxy: &easyssh_core::ProxySettings, reason: &str) -> Failure {
+    fail(
+        "proxy_needs_builtin_engine",
+        format!(
+            "this host connects through the proxy {}, which only the built-in engine supports, \
+             but it would run on OpenSSH ({reason}). Use the built-in engine for this host, or \
+             remove the proxy.",
+            proxy.display()
+        ),
+    )
+}
+
 fn flags_json(flags: SecretFlags) -> Value {
     json!({
         "password": flags.password,
         "private_key": flags.private_key,
         "passphrase": flags.passphrase,
+        "proxy_password": flags.proxy_password,
     })
 }
 

@@ -214,6 +214,9 @@ pub struct Connection {
     pub local_forwards: ::std::vec::Vec<::std::string::String>,
     pub name: ::std::string::String,
     pub notes: ::std::string::String,
+    ///An outbound proxy for the first hop. Absent means a direct connection. The proxy password is a saved secret, not part of the record.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub proxy: ::std::option::Option<ProxySettings>,
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub proxy_jump: ::std::option::Option<::std::string::String>,
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
@@ -980,6 +983,8 @@ pub enum ImportFormat {
     Finalshell,
     #[serde(rename = "termius")]
     Termius,
+    #[serde(rename = "ansible")]
+    Ansible,
     #[serde(rename = "csv")]
     Csv,
     #[serde(rename = "openssh")]
@@ -994,6 +999,7 @@ impl ::std::fmt::Display for ImportFormat {
             Self::Xshell => f.write_str("xshell"),
             Self::Finalshell => f.write_str("finalshell"),
             Self::Termius => f.write_str("termius"),
+            Self::Ansible => f.write_str("ansible"),
             Self::Csv => f.write_str("csv"),
             Self::Openssh => f.write_str("openssh"),
         }
@@ -1011,6 +1017,7 @@ impl ::std::str::FromStr for ImportFormat {
             "xshell" => Ok(Self::Xshell),
             "finalshell" => Ok(Self::Finalshell),
             "termius" => Ok(Self::Termius),
+            "ansible" => Ok(Self::Ansible),
             "csv" => Ok(Self::Csv),
             "openssh" => Ok(Self::Openssh),
             _ => Err("invalid value".into()),
@@ -1366,6 +1373,72 @@ pub struct ProtoHelloResult {
     ///The protocol schema version the daemon speaks.
     pub schema_version: u64,
 }
+///Rust: domain::ProxyKind. SOCKS5 (RFC 1928, with RFC 1929 username/password) or HTTP CONNECT (with basic authentication).
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ProxyKind {
+    #[serde(rename = "socks5")]
+    Socks5,
+    #[serde(rename = "http")]
+    Http,
+}
+impl ::std::fmt::Display for ProxyKind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Socks5 => f.write_str("socks5"),
+            Self::Http => f.write_str("http"),
+        }
+    }
+}
+impl ::std::str::FromStr for ProxyKind {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "socks5" => Ok(Self::Socks5),
+            "http" => Ok(Self::Http),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ProxyKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for ProxyKind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///Rust: domain::ProxySettings. Where the outbound proxy of a host is.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct ProxySettings {
+    pub host: ::std::string::String,
+    pub kind: ProxyKind,
+    pub port: ::std::num::NonZeroU64,
+    ///The proxy login; absent means no authentication. Its password is the saved secret `proxy_password`.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub username: ::std::option::Option<::std::string::String>,
+}
 ///Answer to the Command with the same id: exactly one of `ok` or `error`.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(untagged, deny_unknown_fields)]
@@ -1422,6 +1495,9 @@ pub struct SecretsSetParams {
     ///Key text (PEM or OpenSSH). Absent keeps; empty clears.
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub private_key: ::std::option::Option<::std::string::String>,
+    ///Password of the host's outbound proxy. Absent keeps; empty clears.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub proxy_password: ::std::option::Option<::std::string::String>,
 }
 ///Command `secrets.status` payload. Reply: SecretsStatusResult. Needs no unlock.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -1436,6 +1512,9 @@ pub struct SecretsStatusResult {
     pub passphrase: bool,
     pub password: bool,
     pub private_key: bool,
+    ///The password of the host's outbound proxy. Absent from older daemons.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub proxy_password: ::std::option::Option<bool>,
 }
 ///A serial port the OS lists.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -2280,6 +2359,9 @@ impl ::std::convert::TryFrom<::std::string::String> for TransferDirection {
 pub struct TransferDoneEvent {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub error: ::std::option::Option<::std::string::String>,
+    ///Links a folder transfer left out: broken, or leading back up into a folder that holds them. Absent when none.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub skipped: ::std::option::Option<u64>,
     pub status: TransferDoneEventStatus,
     pub transfer_id: ::std::string::String,
 }
@@ -2549,13 +2631,19 @@ pub struct TunnelStartResult {
 pub struct TunnelState {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub bind_port: ::std::option::Option<u16>,
+    ///Connections the running forward accepted but could not pass on (the server refused the channel, the target is down). Optional; absent means none.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub channel_errors: ::std::option::Option<u64>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub error: ::std::option::Option<::std::string::String>,
     pub host_id: ::std::string::String,
     pub id: ::std::string::String,
+    ///Why the last of `channel_errors` failed, e.g. `127.0.0.1:1: connect failed`.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub last_channel_error: ::std::option::Option<::std::string::String>,
     pub state: TunnelStateName,
 }
-///`TunnelStateName`
+///`reconnecting`: the connection dropped; the forward is closed while a new connection is made (the reason is in `error`).
 #[derive(
     ::serde::Deserialize,
     ::serde::Serialize,
@@ -2573,6 +2661,8 @@ pub enum TunnelStateName {
     Starting,
     #[serde(rename = "running")]
     Running,
+    #[serde(rename = "reconnecting")]
+    Reconnecting,
     #[serde(rename = "stopped")]
     Stopped,
     #[serde(rename = "failed")]
@@ -2583,6 +2673,7 @@ impl ::std::fmt::Display for TunnelStateName {
         match *self {
             Self::Starting => f.write_str("starting"),
             Self::Running => f.write_str("running"),
+            Self::Reconnecting => f.write_str("reconnecting"),
             Self::Stopped => f.write_str("stopped"),
             Self::Failed => f.write_str("failed"),
         }
@@ -2596,6 +2687,7 @@ impl ::std::str::FromStr for TunnelStateName {
         match value {
             "starting" => Ok(Self::Starting),
             "running" => Ok(Self::Running),
+            "reconnecting" => Ok(Self::Reconnecting),
             "stopped" => Ok(Self::Stopped),
             "failed" => Ok(Self::Failed),
             _ => Err("invalid value".into()),
@@ -2624,9 +2716,15 @@ impl ::std::convert::TryFrom<::std::string::String> for TunnelStateName {
 pub struct TunnelStatusEvent {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub bind_port: ::std::option::Option<u16>,
+    ///Connections the running forward accepted but could not pass on (the server refused the channel, the target is down). Optional; absent means none.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub channel_errors: ::std::option::Option<u64>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub error: ::std::option::Option<::std::string::String>,
     pub id: ::std::string::String,
+    ///Why the last of `channel_errors` failed, e.g. `127.0.0.1:1: connect failed`.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub last_channel_error: ::std::option::Option<::std::string::String>,
     pub state: TunnelStateName,
 }
 ///Command `tunnel.stop` payload.

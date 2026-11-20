@@ -40,6 +40,8 @@ mod terminal_transfer;
 #[cfg(desktop)]
 mod tunnels;
 #[cfg(desktop)]
+mod update;
+#[cfg(desktop)]
 mod vault;
 
 #[cfg(mobile)]
@@ -109,6 +111,10 @@ fn desktop_run() {
             telemetry::telemetry_pending,
             telemetry::telemetry_delete_pending,
             telemetry::telemetry_report_frontend,
+            update::update_status,
+            update::update_set_auto,
+            update::update_check,
+            update::update_open,
             backup::config_export,
             backup::config_import,
             backup::sync_get,
@@ -173,6 +179,7 @@ fn desktop_run() {
         .setup(|app| {
             daemon::start(app.handle());
             telemetry::start_background();
+            update::start_background();
             Ok(())
         })
         .build(tauri::generate_context!())

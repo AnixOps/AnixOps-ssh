@@ -82,6 +82,9 @@ pub struct Key {
     pub target: String,
     /// The jump hops, in order, as `user@host:port`.
     pub jump: Vec<String>,
+    /// The outbound proxy of the first hop (`socks5://host:port`), so a host
+    /// whose proxy was edited does not reuse a connection made another way.
+    pub via: Option<String>,
     /// 0 for the host's usual connection; 1, 2, ... for extra ones opened
     /// because the server refused more sessions on the others.
     pub shard: u32,
@@ -438,6 +441,7 @@ mod tests {
             host_id: host.into(),
             target: format!("u@{host}:22"),
             jump: vec![],
+            via: None,
             shard: 0,
         }
     }

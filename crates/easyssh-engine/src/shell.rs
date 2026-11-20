@@ -12,7 +12,8 @@ use crate::files::Files;
 use crate::login::SavedPassword;
 use crate::prompts::{PromptInteraction, Prompts};
 use crate::registry::{self, Key, Registry};
-use crate::tunnels::Tunnels;
+use crate::supervisor::is_fatal;
+use crate::tunnels::{Relink, RelinkError, Tunnels};
 use crate::utf8::Utf8Stream;
 use crate::{Lease, SharedError};
 use easyssh_ssh::{
@@ -47,6 +48,9 @@ pub struct Target {
     pub jump: Vec<Target>,
     /// The saved password, offered once at the password prompt.
     pub saved_password: Option<Arc<SavedPassword>>,
+    /// The outbound proxy the first hop (the first jump host, or this host)
+    /// is reached through. [`crate::with_saved_login`] adds its password.
+    pub proxy: Option<easyssh_ssh::Proxy>,
 }
 
 impl Target {
@@ -61,6 +65,7 @@ impl Target {
             host_id: self.host_id.clone(),
             target: self.account(),
             jump: self.jump.iter().map(Target::account).collect(),
+            via: self.proxy.as_ref().map(|proxy| proxy.display()),
             shard: 0,
         }
     }
@@ -109,6 +114,7 @@ pub fn error_code(error: &SshError) -> &'static str {
         SshError::HostKeyMismatch { .. } => "hostkey_changed",
         SshError::HostKeyRevoked { .. } => "hostkey_revoked",
         SshError::Network(_) | SshError::Timeout(_) | SshError::Disconnected => "network",
+        SshError::Proxy(_) => "proxy_error",
         SshError::NotFound(_) => "not_found",
         _ => "ssh_error",
     }
@@ -131,6 +137,9 @@ pub struct Engine {
     next: AtomicU64,
     /// SSH keepalive interval for new connections (`None` turns them off).
     keepalive: Mutex<Option<Duration>>,
+    /// The app's language (`zh`, `en`) for `LANG` in new shells when the
+    /// process has no UTF-8 locale, as on a phone. `None`: `en_US.UTF-8`.
+    language: Mutex<Option<String>>,
 }
 
 fn fail(error: &SshError) -> OpenError {
@@ -158,6 +167,7 @@ impl Engine {
             shells: Mutex::new(HashMap::new()),
             next: AtomicU64::new(1),
             keepalive: Mutex::new(Some(Duration::from_secs(60))),
+            language: Mutex::new(None),
         })
     }
 
@@ -166,6 +176,12 @@ impl Engine {
     /// so a dead path is noticed sooner; `None` turns keepalives off.
     pub fn set_keepalive(&self, interval: Option<Duration>) {
         *lock(&self.keepalive) = interval;
+    }
+
+    /// Sets the app's language for shells opened from now on; see
+    /// [`easyssh_ssh::shell_env`].
+    pub fn set_language(&self, language: Option<String>) {
+        *lock(&self.language) = language;
     }
 
     pub fn prompts(&self) -> &Arc<Prompts> {
@@ -211,7 +227,14 @@ impl Engine {
     }
 
     async fn connect(&self, target: &Target) -> Result<Session, SharedError> {
-        let hops: Vec<ConnectParams> = target.jump.iter().map(|hop| self.params(hop)).collect();
+        let mut hops: Vec<ConnectParams> = target.jump.iter().map(|hop| self.params(hop)).collect();
+        let mut params = self.params(target);
+        // Only the first hop is reached over the network; the others go
+        // through the SSH connection before them.
+        match hops.first_mut() {
+            Some(first) => first.proxy = target.proxy.clone(),
+            None => params.proxy = target.proxy.clone(),
+        }
         let interaction = PromptInteraction {
             prompts: self.prompts.clone(),
             label: target.label.clone(),
@@ -222,7 +245,7 @@ impl Engine {
                 .filter_map(|t| t.saved_password.clone())
                 .collect(),
         };
-        Session::connect_via(&hops, self.params(target), &interaction)
+        Session::connect_via(&hops, params, &interaction)
             .await
             .map_err(Arc::new)
     }
@@ -265,12 +288,15 @@ impl Engine {
         rows: u16,
         sink: Arc<dyn ShellSink>,
     ) -> Result<String, OpenError> {
+        let env = easyssh_ssh::local_shell_env(lock(&self.language).as_deref(), &[]);
         let lease = self.lease(&target).await?;
         let shell = lease
             .shell(ShellOptions {
                 term: "xterm-256color".into(),
                 cols: u32::from(cols.max(1)),
                 rows: u32::from(rows.max(1)),
+                env,
+                ..ShellOptions::default()
             })
             .await
             .map_err(|error| fail(&error))?;
@@ -292,8 +318,10 @@ impl Engine {
     /// Starts the forward of `tunnel` on the host's shared connection and
     /// returns the port that listens. Progress is reported as `tunnel.status`
     /// events.
+    /// When the connection drops, the tunnel connects again by itself (see
+    /// [`crate::tunnels`]).
     pub async fn start_tunnel(
-        &self,
+        self: &Arc<Self>,
         tunnel: &easyssh_core::Tunnel,
         target: &Target,
     ) -> Result<u16, OpenError> {
@@ -311,7 +339,27 @@ impl Engine {
                 return Err(error);
             }
         };
-        match self.tunnels.start(tunnel, lease, self.events.clone()).await {
+        let engine = Arc::downgrade(self);
+        let again = target.clone();
+        let relink: Relink = Arc::new(move || {
+            let engine = engine.clone();
+            let target = again.clone();
+            Box::pin(async move {
+                let engine = engine.upgrade().ok_or_else(|| RelinkError {
+                    message: "the engine stopped".into(),
+                    fatal: true,
+                })?;
+                engine.lease(&target).await.map_err(|error| RelinkError {
+                    fatal: is_fatal(error.code),
+                    message: error.message,
+                })
+            })
+        });
+        match self
+            .tunnels
+            .start(tunnel, lease, relink, self.events.clone())
+            .await
+        {
             Ok(port) => Ok(port),
             Err(error) => {
                 self.tunnels.failed(tunnel, &error, &self.events);
@@ -460,6 +508,7 @@ mod tests {
             identity: None,
             jump,
             saved_password: None,
+            proxy: None,
         }
     }
 
