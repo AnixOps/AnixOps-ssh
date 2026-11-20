@@ -1576,7 +1576,9 @@ impl Daemon {
         let spawn_id = id.clone();
         let control = connection
             .as_ref()
-            .and_then(|_| monitor_ssh::control_path(&self.key_dir_root, &id));
+            .and_then(|_| monitor_ssh::control_path(&self.key_dir_root, &id))
+            // ssh cannot create the socket's directory; without it, skip -M.
+            .filter(|path| monitor_ssh::prepare_dir(path));
         let exit_log = self.log.clone();
         let exit_hub = self.askpass.clone();
         let (askpass_env, askpass_context) = match askpass {

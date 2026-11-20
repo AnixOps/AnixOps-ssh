@@ -48,6 +48,28 @@ pub fn control_path(runtime_dir: &Path, session_id: &str) -> Option<PathBuf> {
     (path.as_os_str().len() <= MAX_SOCKET_PATH).then_some(path)
 }
 
+/// Creates the directory of the socket at `path` (private to the user), which
+/// `ssh` does not do itself. False when it cannot exist; the session then
+/// starts without a master.
+pub fn prepare_dir(path: &Path) -> bool {
+    let Some(dir) = path.parent() else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(dir).is_ok()
+    }
+}
+
 /// Whether a master socket is there now.
 pub fn socket_exists(path: &Path) -> bool {
     #[cfg(unix)]
@@ -119,6 +141,14 @@ mod tests {
         } else {
             assert_eq!(a, None);
         }
+    }
+
+    #[test]
+    fn prepare_dir_creates_the_socket_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a").join("b").join("cm-x");
+        assert!(prepare_dir(&path));
+        assert!(path.parent().unwrap().is_dir());
     }
 
     #[test]
