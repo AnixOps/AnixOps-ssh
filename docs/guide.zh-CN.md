@@ -70,7 +70,7 @@ Windows 10/11 在“设置 → 系统 → 可选功能 → 添加 OpenSSH 客户
 
 ## 命令面板
 
-按 `Ctrl+Shift+K`（macOS 为 `⌘K`），在一个搜索框里找主机、命令片段、隧道和常用操作，回车执行。
+按 `Ctrl+Shift+K`（macOS 为 `⌘K`，在终端内为 `⌘⇧K` 或 `⌘⇧P`，因为终端内的 `⌘K` 用于清屏），在一个搜索框里找主机、命令片段、隧道和常用操作，回车执行。
 
 ![命令面板](screenshots/palette-dark.png)
 

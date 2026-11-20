@@ -130,3 +130,38 @@ describe("reserved app shortcuts", () => {
     expect(mac({ key: "n" })).toBe("new-host");
   });
 });
+
+describe("clear and zoom", () => {
+  const mac = (init: Partial<KeyInput> & { key: string }, inTerm = true) =>
+    resolveShortcut(key({ metaKey: true, ...init }), true, inTerm);
+
+  it("clears the terminal with Cmd+K on macOS only while the terminal has the focus", () => {
+    expect(mac({ key: "k" })).toBe("clear-terminal");
+    expect(mac({ key: "k" }, false)).toBe("search-hosts");
+  });
+
+  it("keeps the palette reachable inside a terminal on macOS", () => {
+    expect(mac({ key: "K", shiftKey: true })).toBe("search-hosts");
+    expect(mac({ key: "P", shiftKey: true })).toBe("search-hosts");
+  });
+
+  it("does not clear on Windows and Linux, where Ctrl+K belongs to the shell", () => {
+    expect(resolveShortcut(key({ key: "k", ctrlKey: true }), false, true)).toBeNull();
+    expect(resolveShortcut(key({ key: "K", ctrlKey: true, shiftKey: true }), false, true)).toBe("search-hosts");
+  });
+
+  it("zooms with Cmd+Plus, Cmd+Minus and Cmd+0 on macOS", () => {
+    expect(mac({ key: "=", code: "Equal" })).toBe("zoom-in");
+    expect(mac({ key: "+", code: "Equal", shiftKey: true })).toBe("zoom-in");
+    expect(mac({ key: "-", code: "Minus" })).toBe("zoom-out");
+    expect(mac({ key: "0", code: "Digit0" })).toBe("zoom-reset");
+  });
+
+  it("zooms with Ctrl+Shift on Windows and Linux, leaving plain Ctrl to the shell", () => {
+    const pc = (init: Partial<KeyInput> & { key: string }) => resolveShortcut(key({ ctrlKey: true, shiftKey: true, ...init }), false);
+    expect(pc({ key: "+", code: "Equal" })).toBe("zoom-in");
+    expect(pc({ key: "_", code: "Minus" })).toBe("zoom-out");
+    expect(pc({ key: ")", code: "Digit0" })).toBe("zoom-reset");
+    expect(resolveShortcut(key({ key: "-", code: "Minus", ctrlKey: true }), false)).toBeNull();
+  });
+});

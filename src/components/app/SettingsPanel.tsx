@@ -10,6 +10,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { SettingsRow, SettingsGroup } from "@/components/ui/settings";
+import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -25,6 +26,15 @@ import { t } from "@/lib/i18n";
 import type { LocaleSetting, ThemeSetting } from "@/lib/prefsMirror";
 import { onSettings, settings, updateSettings, type Settings } from "@/lib/settings";
 import { isMac } from "@/lib/shortcuts";
+import {
+  clampFont,
+  LETTER_SPACING_MAX,
+  LETTER_SPACING_MIN,
+  LINE_HEIGHT_MAX,
+  LINE_HEIGHT_MIN,
+  SUGGESTED_FONTS,
+  type TerminalFontSettings,
+} from "@/lib/terminalFont";
 import { pendingText, privacyView, type TelemetryStatus } from "@/lib/telemetry";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +65,9 @@ export function SettingsPanel({
     setError(null);
     updateSettings(patch).catch((reason) => setError(String(reason)));
   };
+
+  const updateFont = (patch: Partial<TerminalFontSettings>) =>
+    update({ terminalFont: clampFont({ ...current.terminalFont, ...patch }) });
 
   const themes: { value: ThemeSetting; label: string }[] = [
     { value: "system", label: t.themeSystem },
@@ -107,6 +120,52 @@ export function SettingsPanel({
                 label={`${t.fontSize} +`}
                 disabled={current.terminalFontSize >= 32}
                 onClick={() => update({ terminalFontSize: current.terminalFontSize + 1 })}
+              >
+                <Plus />
+              </Stepper>
+            </div>
+          </SettingsRow>
+          <SettingsRow label={t.fontFamily} hint={t.fontFamilyHint}>
+            <FontFamilyField
+              value={current.terminalFont.family}
+              onCommit={(family) => updateFont({ family })}
+            />
+          </SettingsRow>
+          <SettingsRow label={t.lineHeight}>
+            <div className="flex items-center gap-1">
+              <Stepper
+                label={`${t.lineHeight} −`}
+                disabled={current.terminalFont.lineHeight <= LINE_HEIGHT_MIN}
+                onClick={() => updateFont({ lineHeight: current.terminalFont.lineHeight - 0.1 })}
+              >
+                <Minus />
+              </Stepper>
+              <span className="w-9 text-center font-mono text-callout tabular-nums">
+                {current.terminalFont.lineHeight.toFixed(1)}
+              </span>
+              <Stepper
+                label={`${t.lineHeight} +`}
+                disabled={current.terminalFont.lineHeight >= LINE_HEIGHT_MAX}
+                onClick={() => updateFont({ lineHeight: current.terminalFont.lineHeight + 0.1 })}
+              >
+                <Plus />
+              </Stepper>
+            </div>
+          </SettingsRow>
+          <SettingsRow label={t.letterSpacing}>
+            <div className="flex items-center gap-1">
+              <Stepper
+                label={`${t.letterSpacing} −`}
+                disabled={current.terminalFont.letterSpacing <= LETTER_SPACING_MIN}
+                onClick={() => updateFont({ letterSpacing: current.terminalFont.letterSpacing - 1 })}
+              >
+                <Minus />
+              </Stepper>
+              <span className="w-9 text-center font-mono text-callout tabular-nums">{current.terminalFont.letterSpacing}</span>
+              <Stepper
+                label={`${t.letterSpacing} +`}
+                disabled={current.terminalFont.letterSpacing >= LETTER_SPACING_MAX}
+                onClick={() => updateFont({ letterSpacing: current.terminalFont.letterSpacing + 1 })}
               >
                 <Plus />
               </Stepper>
@@ -400,6 +459,32 @@ function PrivacySection({ current, update }: { current: Settings; update: (patch
           </pre>
         )}
       </div>
+    </>
+  );
+}
+
+/** The font name is saved when the field loses focus or Enter is pressed, not on every key. */
+function FontFamilyField({ value, onCommit }: { value: string; onCommit: (family: string) => void }) {
+  const [text, setText] = useState(value);
+  useEffect(() => setText(value), [value]);
+  const commit = () => text !== value && onCommit(text);
+  return (
+    <>
+      <Input
+        list="terminal-font-suggestions"
+        aria-label={t.fontFamily}
+        value={text}
+        placeholder={t.fontFamilyDefault}
+        onChange={(event) => setText(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => event.key === "Enter" && commit()}
+        className="h-7 w-48"
+      />
+      <datalist id="terminal-font-suggestions">
+        {SUGGESTED_FONTS.map((name) => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
     </>
   );
 }

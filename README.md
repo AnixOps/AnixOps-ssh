@@ -84,7 +84,7 @@ app checks this on start and in Settings.
 
 | Action | Windows and Linux | macOS |
 |---|---|---|
-| Command palette | Ctrl+Shift+K | ⌘K |
+| Command palette | Ctrl+Shift+K | ⌘K (⌘⇧K in a terminal; ⌘K clears there) |
 | New local terminal | Ctrl+Shift+T | ⌘T |
 | Close tab | Ctrl+Shift+W | ⌘W |
 | File pane | Ctrl+Shift+E | ⌘E |

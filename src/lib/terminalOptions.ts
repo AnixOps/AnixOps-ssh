@@ -2,7 +2,8 @@ import type { ITerminalOptions, ITheme } from "@xterm/xterm";
 import type { Settings } from "./settings";
 
 /** The parts of the settings the terminal reads. */
-export type TerminalSettings = Pick<Settings, "terminalFontSize" | "terminalScrollback" | "terminalOptionAsMeta">;
+export type TerminalSettings = Pick<Settings, "terminalFontSize" | "terminalScrollback" | "terminalOptionAsMeta"> &
+  Partial<Pick<Settings, "terminalFont">>;
 
 /** What differs per view: the font, the palette, and the size the view shows. */
 export interface TerminalOptionsInput {
@@ -18,7 +19,8 @@ export function terminalOptions(current: TerminalSettings, input: TerminalOption
   return {
     fontFamily: input.fontFamily,
     fontSize: input.fontSize ?? current.terminalFontSize,
-    lineHeight: 1.2,
+    lineHeight: current.terminalFont?.lineHeight ?? 1.2,
+    letterSpacing: current.terminalFont?.letterSpacing ?? 0,
     cursorBlink: true,
     scrollback: current.terminalScrollback,
     // Needed by the Unicode 11 width tables and shell integration.

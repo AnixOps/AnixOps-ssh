@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri, type SshEngine } from "./backend";
+import { defaultTerminalFont, type TerminalFontSettings } from "./terminalFont";
 import { readMirror, writeMirror, type LocaleSetting, type ThemeSetting } from "./prefsMirror";
 
 /** What a right-click in the terminal does: a menu, or paste (PuTTY style). */
@@ -19,6 +20,8 @@ export interface Settings {
   terminalCopyOnSelect: boolean;
   /** Remote programs may write the clipboard with OSC 52 (never read it). */
   terminalOsc52: boolean;
+  /** Font family, line height and letter spacing (the size is `terminalFontSize`). */
+  terminalFont: TerminalFontSettings;
   /** The SSH engine for hosts that follow the global setting: the built-in
    * engine unless OpenSSH was chosen (an advanced option kept for compatibility). */
   sshEngine: SshEngine;
@@ -37,6 +40,7 @@ let current: Settings = {
   terminalRightClick: "menu",
   terminalCopyOnSelect: false,
   terminalOsc52: true,
+  terminalFont: defaultTerminalFont,
   sshEngine: "russh",
   crashReports: null,
   usageStats: false,

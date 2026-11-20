@@ -36,6 +36,9 @@ pub struct Settings {
     /// Remote programs may write (never read) the clipboard with OSC 52.
     #[serde(default = "yes")]
     terminal_osc52: bool,
+    /// Font family, line height and letter spacing of the terminal.
+    #[serde(default)]
+    terminal_font: TerminalFont,
 }
 
 fn yes() -> bool {
@@ -76,6 +79,56 @@ impl Default for TerminalBehaviour {
     }
 }
 
+/// Font choices beyond the size, kept under their own settings key so the
+/// shared `terminal` preferences stay unchanged. An empty family means the
+/// default monospace stack of the system.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+struct TerminalFont {
+    family: String,
+    line_height: f32,
+    letter_spacing: f32,
+}
+
+impl Default for TerminalFont {
+    fn default() -> Self {
+        Self {
+            family: String::new(),
+            line_height: 1.2,
+            letter_spacing: 0.0,
+        }
+    }
+}
+
+impl TerminalFont {
+    fn validate(&self) -> Result<(), String> {
+        if self.family.chars().count() > 300
+            || self
+                .family
+                .chars()
+                .any(|c| c.is_control() || ";{}<>\\".contains(c))
+        {
+            return Err("the font family is not valid".to_owned());
+        }
+        if !(1.0..=2.0).contains(&self.line_height) {
+            return Err("the line height must be between 1 and 2".to_owned());
+        }
+        if !(-2.0..=10.0).contains(&self.letter_spacing) {
+            return Err("the letter spacing must be between -2 and 10".to_owned());
+        }
+        Ok(())
+    }
+}
+
+const TERMINAL_FONT: &str = "terminal_font";
+
+fn terminal_font() -> TerminalFont {
+    open_store()
+        .ok()
+        .and_then(|store| store.get_setting_as(TERMINAL_FONT).ok().flatten())
+        .unwrap_or_default()
+}
+
 const TERMINAL_BEHAVIOUR: &str = "terminal_behaviour";
 
 fn terminal_behaviour() -> TerminalBehaviour {
@@ -102,6 +155,7 @@ pub fn settings_get() -> Result<Settings, String> {
         terminal_right_click: behaviour.right_click,
         terminal_copy_on_select: behaviour.copy_on_select,
         terminal_osc52: behaviour.osc52,
+        terminal_font: terminal_font(),
     })
 }
 
@@ -113,6 +167,7 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     if !(1_000..=200_000).contains(&settings.terminal_scrollback) {
         return Err("scrollback must be between 1,000 and 200,000 lines".to_owned());
     }
+    settings.terminal_font.validate()?;
     // Only these settings are written, so a host saved by the daemon in the
     // meantime is not touched.
     let store = open_store()?;
@@ -143,6 +198,11 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     if behaviour != terminal_behaviour() {
         store
             .set_setting_as(TERMINAL_BEHAVIOUR, &behaviour)
+            .map_err(stored)?;
+    }
+    if settings.terminal_font != terminal_font() {
+        store
+            .set_setting_as(TERMINAL_FONT, &settings.terminal_font)
             .map_err(stored)?;
     }
     let mut telemetry = load_config()?.telemetry;
@@ -219,7 +279,7 @@ pub async fn ssh_status() -> Result<SshStatus, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_state, AgentState, RightClick, TerminalBehaviour};
+    use super::{agent_state, AgentState, RightClick, TerminalBehaviour, TerminalFont};
 
     #[test]
     fn terminal_behaviour_defaults_when_missing_or_partial() {
@@ -233,6 +293,26 @@ mod tests {
         assert!(!empty.option_as_meta);
         let on: TerminalBehaviour = serde_json::from_str(r#"{"option_as_meta":true}"#).unwrap();
         assert!(on.option_as_meta);
+    }
+
+    #[test]
+    fn terminal_font_defaults_and_validates() {
+        let empty: TerminalFont = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty, TerminalFont::default());
+        assert!(empty.validate().is_ok());
+        let custom: TerminalFont =
+            serde_json::from_str(r#"{"family":"JetBrains Mono","lineHeight":1.5}"#).unwrap();
+        assert_eq!(custom.line_height, 1.5);
+        assert!(custom.validate().is_ok());
+        for bad in [
+            r#"{"family":"a;b"}"#,
+            r#"{"family":"a{b"}"#,
+            r#"{"lineHeight":3}"#,
+            r#"{"letterSpacing":20}"#,
+        ] {
+            let font: TerminalFont = serde_json::from_str(bad).unwrap();
+            assert!(font.validate().is_err(), "{bad}");
+        }
     }
 
     #[test]

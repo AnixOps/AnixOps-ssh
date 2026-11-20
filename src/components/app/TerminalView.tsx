@@ -5,7 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ChevronDown, ChevronUp, ClipboardPaste, Copy, Eraser, LoaderCircle, Search, RotateCw, Sparkles, SquareArrowOutUpRight, Unplug, X } from "lucide-react";
+import { CaseSensitive, ChevronDown, ChevronUp, ClipboardPaste, Copy, Eraser, Regex, WholeWord, LoaderCircle, Search, RotateCw, Sparkles, SquareArrowOutUpRight, Unplug, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CompletionPopup, type PopupPlacement } from "@/components/app/CompletionPopup";
@@ -44,14 +44,17 @@ import { ShellIntegrationLineSource } from "@/lib/shellIntegration/lineSource";
 import { pasteNeedsConfirm, type BroadcastScope, targetsFor } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
 import { duration, ease, enter, leave } from "@/lib/motion";
-import { onSettings, settings } from "@/lib/settings";
+import { onSettings, settings, updateSettings } from "@/lib/settings";
 import { appShortcut, isMac } from "@/lib/shortcuts";
 import { shortcutHint } from "@/lib/shortcutTable";
 import { parseOsc52, sanitizeTitle, shouldOpenLink } from "@/lib/terminalInput";
 import { registerTerminal, terminalFor } from "@/lib/terminals";
 import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { exitTitle, RESIZE_DEBOUNCE_MS, TERMINAL_RESET, trailingDebounce, type SessionEnd } from "@/lib/terminalSession";
-import { terminalFont, terminalTheme } from "@/lib/terminalTheme";
+import { searchDecorations, terminalFont, terminalTheme } from "@/lib/terminalTheme";
+import { fontOptions, platformOf, zoomedSize } from "@/lib/terminalFont";
+import { defaultFindFlags, resultLabel, searchOptions, validRegex, type FindFlags, type FindResults } from "@/lib/terminalFind";
+import { OutputPump } from "@/lib/outputPump";
 
 /** The SSH engine a session runs on, and why. */
 export interface EngineInfo {
@@ -114,6 +117,8 @@ export function TerminalView({
   const aiReady = useAiReady();
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [flags, setFlags] = useState<FindFlags>(defaultFindFlags);
+  const [results, setResults] = useState<FindResults | null>(null);
   const findInputRef = useRef<HTMLInputElement>(null);
   const [pendingPaste, setPendingPaste] = useState<{ text: string; count: number } | null>(null);
   const pasteRef = useRef<(text: string, all: boolean) => void>(() => {});
@@ -147,11 +152,18 @@ export function TerminalView({
     if (!container) return;
     let disposed = false;
 
-    const terminal = new Terminal(terminalOptions(settings(), { fontFamily: terminalFont(), theme: terminalTheme() }));
+    const platform = platformOf(navigator.platform);
+    const fonts = () => fontOptions(settings(), platform, terminalFont());
+    const terminal = new Terminal({
+      ...terminalOptions(settings(), { fontFamily: fonts().fontFamily, theme: terminalTheme() }),
+    });
+    // Output is written once per frame, and held back while the parser is behind.
+    const pump = new OutputPump({ write: (data, done) => terminal.write(data, done) });
     const fit = new FitAddon();
     const search = new SearchAddon();
     terminal.loadAddon(fit);
     terminal.loadAddon(search);
+    const searchResults = search.onDidChangeResults((next) => setResults({ index: next.resultIndex, count: next.resultCount }));
     // Links open with Ctrl-click (⌘-click), so a plain click still selects.
     terminal.loadAddon(
       new WebLinksAddon(
@@ -271,6 +283,10 @@ export function TerminalView({
       } else if (shortcut === "find") {
         setFindOpen(true);
         window.requestAnimationFrame(() => findInputRef.current?.select());
+      } else if (shortcut === "clear-terminal") {
+        actionsRef.current.clear();
+      } else if (shortcut === "zoom-in" || shortcut === "zoom-out" || shortcut === "zoom-reset") {
+        void updateSettings({ terminalFontSize: zoomedSize(settings().terminalFontSize, shortcut) }).catch(console.error);
       } else if (shortcut === "prev-prompt" || shortcut === "next-prompt") {
         integration.jump(shortcut === "prev-prompt" ? "previous" : "next");
       }
@@ -335,7 +351,13 @@ export function TerminalView({
     actionsRef.current = {
       copy: copySelection,
       paste: () => void pasteText().then((text) => text && routePaste(text)),
-      clear: () => terminal.clear(),
+      // Scrollback and screen, as ⌘K does in iTerm2 and Terminal.app; the
+      // line the cursor is on stays so the prompt is not lost.
+      clear: () => {
+        terminal.clear();
+        search.clearDecorations();
+        setResults(null);
+      },
     };
     // Copy on select: once the mouse is released, not on every move of a drag.
     const onMouseUp = (event: MouseEvent) => {
@@ -354,6 +376,13 @@ export function TerminalView({
       } else setMenuAt({ x: event.clientX, y: event.clientY });
     };
     container.addEventListener("contextmenu", onContextMenu);
+    // Ctrl/⌘ + wheel zooms like the browser and Windows Terminal do.
+    const onWheel = (event: WheelEvent) => {
+      if (!(isMac ? event.metaKey : event.ctrlKey) || event.deltaY === 0) return;
+      event.preventDefault();
+      void updateSettings({ terminalFontSize: zoomedSize(settings().terminalFontSize, event.deltaY < 0 ? "zoom-in" : "zoom-out") }).catch(console.error);
+    };
+    container.addEventListener("wheel", onWheel, { passive: false });
 
     // OSC 52: remote programs (tmux, Vim) may write the clipboard, never read it.
     const osc52 = terminal.parser.registerOscHandler(52, (data) => {
@@ -387,7 +416,7 @@ export function TerminalView({
       const onEvent = (event: SessionEvent) => {
         if (disposed) return;
         if (event.kind === "data") {
-          terminal.write(event.data);
+          pump.push(event.data);
           if (!connected) {
             connected = true;
             report({ state: "connected", engine });
@@ -460,7 +489,7 @@ export function TerminalView({
     startRef.current = () => {
       // Undo modes the old session left on (alternate screen, mouse
       // reporting, bracketed paste) before the new one starts.
-      terminal.write(TERMINAL_RESET + "\r\n");
+      pump.push(TERMINAL_RESET + "\r\n");
       start();
       terminal.focus();
     };
@@ -474,7 +503,7 @@ export function TerminalView({
     const updateTheme = () => (terminal.options.theme = terminalTheme());
     scheme.addEventListener("change", updateTheme);
     const stopSettings = onSettings((next) => {
-      terminal.options.fontSize = next.terminalFontSize;
+      Object.assign(terminal.options, fonts());
       Object.assign(terminal.options, liveTerminalOptions(next));
       updateTheme();
       if (container.clientWidth > 0) fit.fit();
@@ -497,6 +526,9 @@ export function TerminalView({
       container.removeEventListener("paste", onPaste, true);
       container.removeEventListener("mouseup", onMouseUp);
       container.removeEventListener("contextmenu", onContextMenu);
+      container.removeEventListener("wheel", onWheel);
+      pump.dispose();
+      searchResults.dispose();
       osc52.dispose();
       titleChange.dispose();
       bell.dispose();
@@ -563,15 +595,33 @@ export function TerminalView({
     terminalRef.current?.focus();
   };
 
-  const find = (forward: boolean) => {
-    if (!query) return;
-    if (forward) searchRef.current?.findNext(query);
-    else searchRef.current?.findPrevious(query);
+  const find = (forward: boolean, incremental = false) => {
+    const addon = searchRef.current;
+    if (!addon) return;
+    if (!query) {
+      addon.clearDecorations();
+      setResults(null);
+      return;
+    }
+    const options = searchOptions(flags, searchDecorations(), incremental);
+    if (forward) addon.findNext(query, options);
+    else addon.findPrevious(query, options);
   };
+
+  // Typing or flipping a toggle searches again and highlights every match.
+  useEffect(() => {
+    if (findOpen) find(true, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, flags, findOpen]);
+
+  const toggleFlag = (key: keyof FindFlags) => setFlags((current) => ({ ...current, [key]: !current[key] }));
+  const badRegex = flags.regex && query !== "" && !validRegex(query);
+  const findLabel = badRegex ? t.findBadRegex : resultLabel(query, results, t.findNoResults);
 
   const closeFind = () => {
     setFindOpen(false);
     searchRef.current?.clearDecorations();
+    setResults(null);
     terminalRef.current?.focus();
   };
 
@@ -688,8 +738,24 @@ export function TerminalView({
             }}
             placeholder={t.find}
             aria-label={t.find}
-            className="h-7 w-52"
+            className="h-7 w-44"
           />
+          <FindToggle label={t.findMatchCase} on={flags.caseSensitive} onClick={() => toggleFlag("caseSensitive")}>
+            <CaseSensitive />
+          </FindToggle>
+          <FindToggle label={t.findWholeWord} on={flags.wholeWord} onClick={() => toggleFlag("wholeWord")}>
+            <WholeWord />
+          </FindToggle>
+          <FindToggle label={t.findRegex} on={flags.regex} onClick={() => toggleFlag("regex")}>
+            <Regex />
+          </FindToggle>
+          <span
+            role="status"
+            aria-live="polite"
+            className={`min-w-12 px-1 text-center text-caption tabular-nums ${findLabel === t.findNoResults || badRegex ? "text-danger" : "text-label-2"}`}
+          >
+            {findLabel}
+          </span>
           <IconButton label={t.findPrevious} onClick={() => find(false)}>
             <ChevronUp />
           </IconButton>
@@ -763,6 +829,26 @@ export function TerminalView({
       )}
       </AnimatePresence>
     </div>
+  );
+}
+
+function FindToggle({
+  label,
+  on,
+  onClick,
+  children,
+}: {
+  label: string;
+  on: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip label={label}>
+      <Button variant={on ? "secondary" : "quiet"} size="icon-sm" aria-label={label} aria-pressed={on} onClick={onClick}>
+        {children}
+      </Button>
+    </Tooltip>
   );
 }
 

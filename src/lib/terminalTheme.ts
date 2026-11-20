@@ -46,3 +46,18 @@ export function terminalTheme(): ITheme {
 export function terminalFont(): string {
   return token("--font-app-mono") || "monospace";
 }
+
+/** Highlight colours of the find bar, from the tokens (the addon wants #RRGGBB for fills). */
+export function searchDecorations() {
+  const hex = (value: string) => (/^#[0-9a-f]{6}$/i.test(value) ? value : undefined);
+  const match = token("--warning");
+  const active = token("--accent");
+  return {
+    matchBackground: hex(match),
+    matchBorder: match,
+    matchOverviewRuler: match,
+    activeMatchBackground: hex(active),
+    activeMatchBorder: active,
+    activeMatchColorOverviewRuler: active,
+  };
+}

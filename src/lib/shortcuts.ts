@@ -37,7 +37,11 @@ export type AppShortcut =
   | "go-snippets"
   | "go-team"
   | "import"
-  | "new-host";
+  | "new-host"
+  | "clear-terminal"
+  | "zoom-in"
+  | "zoom-out"
+  | "zoom-reset";
 
 const letters: Record<string, AppShortcut> = {
   k: "search-hosts",
@@ -72,15 +76,25 @@ export interface KeyInput {
   metaKey: boolean;
 }
 
+/** Zoom keys, matched by physical key as well so they work on every layout.
+ *  Cmd/Ctrl+Plus, Cmd/Ctrl+Minus, Cmd/Ctrl+0 (Shift is allowed because Plus is Shift+= on US keyboards). */
+function zoomShortcut(input: KeyInput): AppShortcut | null {
+  if (input.key === "+" || input.key === "=" || input.code === "Equal" || input.code === "NumpadAdd") return "zoom-in";
+  if (input.key === "-" || input.key === "_" || input.code === "Minus" || input.code === "NumpadSubtract") return "zoom-out";
+  if (input.key === "0" || input.key === ")" || input.code === "Digit0" || input.code === "Numpad0") return "zoom-reset";
+  return null;
+}
+
 /** The terminal commands: Ctrl+Shift+key on Windows and Linux, Cmd+key on macOS.
  *
  *  Windows and Linux: Ctrl+Shift+key; "split down" is Ctrl+Shift+O (K22 rules out Ctrl+Alt).
  *  macOS: Cmd+key; Cmd+Shift+D splits down, Cmd+Option+Arrow moves focus,
  *  Cmd+Shift+B toggles broadcast. Prompt jumps: Ctrl+Shift+PageUp/PageDown, or
  *  Cmd+Up/Down on macOS. */
-export function resolveShortcut(input: KeyInput, mac: boolean): AppShortcut | null {
+export function resolveShortcut(input: KeyInput, mac: boolean, terminalFocus = false): AppShortcut | null {
   const { shiftKey, altKey } = input;
   const letter = input.key.toLowerCase();
+  const zoom = zoomShortcut(input);
   const isD = letter === "d" || input.code === "KeyD";
   if (mac) {
     if (!input.metaKey || input.ctrlKey) return null;
@@ -90,7 +104,12 @@ export function resolveShortcut(input: KeyInput, mac: boolean): AppShortcut | nu
       if (!altKey && !shiftKey) return input.key === "ArrowUp" ? "prev-prompt" : input.key === "ArrowDown" ? "next-prompt" : null;
       return null;
     }
+    if (zoom) return zoom;
     if (altKey) return null;
+    // As in iTerm2 and Terminal.app, Cmd+K clears the terminal that has the
+    // focus; the palette stays on Cmd+K elsewhere and on Cmd+Shift+K / Cmd+Shift+P.
+    if (letter === "k" && terminalFocus && !shiftKey) return "clear-terminal";
+    if (letter === "p" && shiftKey) return "search-hosts";
     if (isD) return shiftKey ? "split-down" : "split-right";
     if (letter === "b") return shiftKey ? "toggle-broadcast" : null;
     if (input.key === "Enter") return shiftKey ? "toggle-maximise" : null;
@@ -100,6 +119,7 @@ export function resolveShortcut(input: KeyInput, mac: boolean): AppShortcut | nu
   }
   if (!input.ctrlKey || !shiftKey || input.metaKey) return null;
   if (altKey) return null; // K22: Ctrl+Alt is AltGr on many layouts
+  if (zoom) return zoom;
   if (isD) return "split-right";
   if (letter === "o" || input.code === "KeyO") return "split-down";
   if (arrows[input.key]) return arrows[input.key];
@@ -150,7 +170,7 @@ export function inTerminal(event: Pick<Event, "target">): boolean {
 
 export function appShortcut(event: KeyboardEvent): AppShortcut | null {
   if (event.type !== "keydown") return null;
-  return resolveShortcut(event, isMac) ?? resolveGlobalShortcut(event, isMac, inTerminal(event));
+  return resolveShortcut(event, isMac, inTerminal(event)) ?? resolveGlobalShortcut(event, isMac, inTerminal(event));
 }
 
 /** Display form for a letter shortcut (Ctrl+Shift+W or ⌘W). */
