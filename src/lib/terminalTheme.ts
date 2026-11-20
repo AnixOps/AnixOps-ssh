@@ -19,7 +19,9 @@ export function isDark(): boolean {
 export function terminalTheme(): ITheme {
   const dark = isDark();
   return {
-    black: token(dark ? "--label-3" : "--label-1"),
+    // ANSI black is dark in both schemes, as in every common terminal theme:
+    // TUIs (htop, tmux, mc) put it on coloured bars as the text colour.
+    black: token(dark ? "--bg-elevated" : "--label-1"),
     red: token("--danger"),
     green: token("--success"),
     yellow: token("--warning"),

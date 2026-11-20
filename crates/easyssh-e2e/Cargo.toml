@@ -25,4 +25,4 @@ easyssh-store = { path = "../easyssh-store" }
 easyssh-vault = { path = "../easyssh-vault" }
 serde_json.workspace = true
 sha2.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-std"] }

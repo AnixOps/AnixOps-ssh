@@ -24,6 +24,9 @@ export interface Settings {
   terminalRightClick: TerminalRightClick;
   /** Selecting text copies it. */
   terminalCopyOnSelect: boolean;
+  /** Windows Terminal keys: Ctrl+C copies a selection (and interrupts without
+   *  one), Ctrl+V pastes. Not offered on macOS, where ⌘C / ⌘V do this. */
+  terminalCtrlCopyPaste: boolean;
   /** Remote programs may write the clipboard with OSC 52 (never read it). */
   terminalOsc52: boolean;
   /** Reconnect by itself, with backoff, when a connection drops. */
@@ -53,6 +56,7 @@ let current: Settings = {
   terminalWarnMultilinePaste: true,
   terminalRightClick: "menu",
   terminalCopyOnSelect: false,
+  terminalCtrlCopyPaste: typeof navigator !== "undefined" && /Win/.test(navigator.platform),
   terminalOsc52: true,
   terminalAutoReconnect: true,
   editorCommand: "",

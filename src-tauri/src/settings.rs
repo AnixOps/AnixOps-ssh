@@ -42,6 +42,9 @@ pub struct Settings {
     /// Selecting text in the terminal copies it.
     #[serde(default)]
     terminal_copy_on_select: bool,
+    /// Windows Terminal keys: Ctrl+C copies a selection, Ctrl+V pastes.
+    #[serde(default = "default_ctrl_copy_paste")]
+    terminal_ctrl_copy_paste: bool,
     /// Remote programs may write (never read) the clipboard with OSC 52.
     #[serde(default = "yes")]
     terminal_osc52: bool,
@@ -62,6 +65,12 @@ fn default_line_height() -> f32 {
 
 fn default_true() -> bool {
     true
+}
+
+/// On by default where Windows Terminal taught it (Windows); elsewhere Ctrl+V
+/// stays the shell's (quoted insert, Vim block selection).
+fn default_ctrl_copy_paste() -> bool {
+    cfg!(windows)
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +131,7 @@ struct TerminalBehaviour {
     warn_multiline_paste: bool,
     right_click: RightClick,
     copy_on_select: bool,
+    ctrl_copy_paste: bool,
     osc52: bool,
     auto_reconnect: bool,
 }
@@ -137,6 +147,7 @@ impl Default for TerminalBehaviour {
             warn_multiline_paste: true,
             right_click: RightClick::Menu,
             copy_on_select: false,
+            ctrl_copy_paste: default_ctrl_copy_paste(),
             osc52: true,
             auto_reconnect: true,
         }
@@ -173,6 +184,7 @@ pub fn settings_get() -> Result<Settings, String> {
         terminal_warn_multiline_paste: behaviour.warn_multiline_paste,
         terminal_right_click: behaviour.right_click,
         terminal_copy_on_select: behaviour.copy_on_select,
+        terminal_ctrl_copy_paste: behaviour.ctrl_copy_paste,
         terminal_osc52: behaviour.osc52,
         terminal_auto_reconnect: behaviour.auto_reconnect,
         editor_command: files.editor_command,
@@ -223,6 +235,7 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
         warn_multiline_paste: settings.terminal_warn_multiline_paste,
         right_click: settings.terminal_right_click,
         copy_on_select: settings.terminal_copy_on_select,
+        ctrl_copy_paste: settings.terminal_ctrl_copy_paste,
         osc52: settings.terminal_osc52,
         auto_reconnect: settings.terminal_auto_reconnect,
     };
@@ -365,6 +378,8 @@ mod tests {
         assert_eq!(empty, TerminalBehaviour::default());
         assert!(empty.warn_multiline_paste && empty.osc52 && !empty.copy_on_select);
         assert!(empty.auto_reconnect);
+        // Windows Terminal's Ctrl+C / Ctrl+V: on by default on Windows only.
+        assert_eq!(empty.ctrl_copy_paste, cfg!(windows));
         let partial: TerminalBehaviour =
             serde_json::from_str(r#"{"right_click":"paste"}"#).unwrap();
         assert_eq!(partial.right_click, RightClick::Paste);

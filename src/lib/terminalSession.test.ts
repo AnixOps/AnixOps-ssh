@@ -70,4 +70,17 @@ describe("TERMINAL_RESET", () => {
       expect(TERMINAL_RESET).toContain(sequence);
     }
   });
+
+  it("keeps the cursor where the old session left it", async () => {
+    const { Terminal } = await import("@xterm/headless");
+    const terminal = new Terminal({ cols: 40, rows: 10, allowProposedApi: true });
+    const write = (data: string) => new Promise<void>((resolve) => terminal.write(data, resolve));
+    await write("line 1\r\nline 2\r\nline 3\r\nlogout\r\n");
+    await write(TERMINAL_RESET + "\r\n");
+    expect(terminal.buffer.active.cursorY).toBe(5);
+    // From inside a full-screen program, the normal screen comes back as it was.
+    await write("\x1b[?1049hfull screen" + TERMINAL_RESET);
+    expect(terminal.buffer.active.type).toBe("normal");
+    expect(terminal.buffer.active.cursorY).toBe(5);
+  });
 });

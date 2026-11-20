@@ -39,7 +39,13 @@ export type AppShortcut =
   | "go-snippets"
   | "go-team"
   | "import"
-  | "new-host";
+  | "new-host"
+  | "next-tab"
+  | "prev-tab"
+  | "zoom-in"
+  | "zoom-out"
+  | "zoom-reset"
+  | "toggle-sidebar";
 
 const letters: Record<string, AppShortcut> = {
   k: "search-hosts",
@@ -82,6 +88,10 @@ export interface KeyInput {
  *  Cmd+Up/Down on macOS. */
 export function resolveShortcut(input: KeyInput, mac: boolean): AppShortcut | null {
   const { shiftKey, altKey } = input;
+  const tab = tabShortcut(input, mac);
+  if (tab) return tab;
+  const zoom = zoomShortcut(input, mac);
+  if (zoom) return zoom;
   const letter = input.key.toLowerCase();
   const isD = letter === "d" || input.code === "KeyD";
   if (mac) {
@@ -115,6 +125,33 @@ export function resolveShortcut(input: KeyInput, mac: boolean): AppShortcut | nu
   return letters[letter] ?? null;
 }
 
+/** Next and previous tab: Ctrl+Tab and Ctrl+Shift+Tab on every system
+ *  (keyboard.md; Windows Terminal, iTerm2 and browsers agree), and ⌘⇧] / ⌘⇧[
+ *  on macOS as in iTerm2 and Terminal. A shell has no use for Ctrl+Tab. */
+function tabShortcut(input: KeyInput, mac: boolean): AppShortcut | null {
+  if (input.altKey) return null;
+  if (input.key === "Tab" && input.ctrlKey && !input.metaKey) return input.shiftKey ? "prev-tab" : "next-tab";
+  if (mac && input.metaKey && input.shiftKey && !input.ctrlKey) {
+    if (input.code === "BracketRight" || input.key === "}") return "next-tab";
+    if (input.code === "BracketLeft" || input.key === "{") return "prev-tab";
+  }
+  return null;
+}
+
+/** Terminal font zoom, as in Windows Terminal, WezTerm, iTerm2 and VS Code:
+ *  Ctrl+= (or Ctrl++), Ctrl+- and Ctrl+0; ⌘ on macOS. Ctrl+Shift+- stays the
+ *  shell's (readline undo is Ctrl+_). */
+function zoomShortcut(input: KeyInput, mac: boolean): AppShortcut | null {
+  if (input.altKey) return null;
+  if (mac ? !input.metaKey || input.ctrlKey : !input.ctrlKey || input.metaKey) return null;
+  const code = input.code ?? "";
+  if (code === "Equal" || code === "NumpadAdd" || input.key === "=" || input.key === "+") return "zoom-in";
+  if (input.shiftKey) return null;
+  if (code === "Minus" || code === "NumpadSubtract" || input.key === "-") return "zoom-out";
+  if (code === "Digit0" || code === "Numpad0" || input.key === "0") return "zoom-reset";
+  return null;
+}
+
 /** The reserved app-wide shortcuts of keyboard.md section 3. Shortcuts follow the
  *  character on the key where there is one; digits and punctuation also match
  *  `code`, so they work on every layout (K8). */
@@ -125,6 +162,7 @@ export function resolveGlobalShortcut(input: KeyInput, mac: boolean, inTerminal:
   const slash = input.key === "/" || input.key === "?" || input.code === "Slash";
   const comma = input.key === "," || input.key === "<" || input.code === "Comma";
   const page = input.code ? pages[input.code] : undefined;
+  if (mac && input.metaKey && input.ctrlKey && !shiftKey && (letter === "s" || input.code === "KeyS")) return "toggle-sidebar";
   if (mac) {
     if (!input.metaKey || input.ctrlKey || shiftKey) return null;
     // iTerm2 habit: ⌘K clears the terminal; the palette is ⌘⇧K there.
@@ -146,6 +184,9 @@ export function resolveGlobalShortcut(input: KeyInput, mac: boolean, inTerminal:
   if (letter === "i") return "import";
   if (letter === "n") return "new-host";
   if (letter === "f") return "find";
+  // keyboard.md: Ctrl+B shows or hides the sidebar. Inside a terminal Ctrl+B is
+  // the shell's (and tmux's prefix), and Ctrl+Shift+B is broadcast.
+  if (letter === "b" && !inTerminal) return "toggle-sidebar";
   return null;
 }
 
