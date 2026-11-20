@@ -5,6 +5,8 @@ import { HostKeyDialog } from "@/components/app/HostKeyDialog";
 import { VaultUnlockDialog } from "@/components/app/VaultUnlockDialog";
 import { CommandPalette, type PaneAction } from "@/components/app/CommandPalette";
 import { FilesPane } from "@/components/app/FilesPane";
+import { MonitorPane } from "@/components/app/MonitorPane";
+import { monitorOpenByDefault, rememberMonitorOpen } from "@/lib/monitorPrefs";
 import { ForwardsPanel } from "@/components/app/ForwardsPanel";
 import { HostEditor } from "@/components/app/HostEditor";
 import { HostList } from "@/components/app/HostList";
@@ -83,6 +85,7 @@ function newTab(hostId: string | null, title: string, color: string | null, pane
     restored: {},
     filesOpen: false,
     filesMounted: false,
+    monitorOpen: hostId !== null && monitorOpenByDefault(),
   };
 }
 
@@ -309,12 +312,27 @@ export function App() {
     setTabs((current) => current.map((tab) => (tab.key === key && tab.hostId ? { ...tab, filesOpen, filesMounted: true } : tab)));
   }, []);
 
+  const setMonitorOpen = useCallback((key: string, monitorOpen: boolean) => {
+    rememberMonitorOpen(monitorOpen);
+    setTabs((current) => current.map((tab) => (tab.key === key && tab.hostId ? { ...tab, monitorOpen } : tab)));
+  }, []);
+
+  const toggleMonitor = useCallback(() => {
+    const tab = tabs.find((candidate) => candidate.key === activeKey);
+    if (tab) setMonitorOpen(tab.key, !tab.monitorOpen);
+  }, [tabs, activeKey, setMonitorOpen]);
+
   const toggleFiles = useCallback(() => {
     const tab = tabs.find((candidate) => candidate.key === activeKey);
     if (tab) setFilesOpen(tab.key, !tab.filesOpen);
   }, [tabs, activeKey, setFilesOpen]);
 
   const activeTab = tabs.find((tab) => tab.key === activeKey);
+  /** The SSH host a tab's monitor reads; null for local shells and serial ports. */
+  const monitorHost = (hostId: string | null): Host | null => {
+    const host = hostId ? snapshot.hosts.find((candidate) => candidate.id === hostId) : undefined;
+    return host && !host.fields.serial ? host : null;
+  };
   const activePane = activeTab?.panes.focused ?? null;
 
   const paneAction = useCallback(
@@ -418,6 +436,8 @@ export function App() {
               onOpenHost={openHost}
               onNewSerial={startSerialHost}
               onToggleFiles={toggleFiles}
+              monitorAvailable={monitorHost(activeTab?.hostId ?? null) !== null}
+              onToggleMonitor={toggleMonitor}
               onSplit={splitActive}
             />
           )}
@@ -429,6 +449,17 @@ export function App() {
           <div className="min-h-0 flex-1">
             {tabs.map((tab) => (
               <div key={tab.key} className="flex h-full" hidden={tab.key !== activeKey}>
+                {(() => {
+                  const host = monitorHost(tab.hostId);
+                  return host && tab.monitorOpen ? (
+                    <MonitorPane
+                      host={host}
+                      visible
+                      active={tab.key === activeKey}
+                      onClose={() => setMonitorOpen(tab.key, false)}
+                    />
+                  ) : null;
+                })()}
                 <PaneArea
                   tabKey={tab.key}
                   hostId={tab.hostId}
@@ -493,6 +524,7 @@ export function App() {
           }}
           onImport={() => setImporting(true)}
           onToggleFiles={toggleFiles}
+          onToggleMonitor={monitorHost(activeTab?.hostId ?? null) ? toggleMonitor : undefined}
           onPaneAction={paneAction}
           paneCount={activeTab ? leaves(activeTab.panes.tree).length : 0}
           maximised={activeTab?.panes.maximised != null}

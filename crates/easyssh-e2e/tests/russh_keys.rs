@@ -67,14 +67,16 @@ async fn wrong_passphrase_fails_with_the_key_tried() {
     let e2e = E2e::new();
     let key = encrypted_copy(&e2e, "right one");
     let mut params = e2e.russh_target();
-    params.identity_files = vec![key];
+    params.identity_files = vec![key.clone()];
     let interaction = Scripted::trusting().with_passphrase("wrong one");
     let error = within("connect", Session::connect(params, &interaction))
         .await
         .expect_err("must not authenticate");
     match error {
         Error::AuthFailed { tried, notes } => {
-            assert!(tried.is_empty(), "{tried:?}");
+            // The key was offered (its public part needs no passphrase) and
+            // accepted; only then was the passphrase asked for.
+            assert_eq!(tried, vec![AuthMethod::IdentityFile(key)]);
             assert!(
                 notes.iter().any(|n| n.contains("wrong passphrase")),
                 "{notes:?}"

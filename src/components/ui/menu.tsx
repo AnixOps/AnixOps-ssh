@@ -50,7 +50,7 @@ export function Menu({
   touch?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [place, setPlace] = useState<{ top: number; left: number } | null>(null);
+  const [place, setPlace] = useState<{ top: number; left: number; inModal: boolean } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -63,7 +63,9 @@ export function Menu({
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) return;
     const box = buttonRef.current.getBoundingClientRect();
-    setPlace({ top: box.bottom + 6, left: align === "end" ? box.right : box.left });
+    // Inside a dialog the list must sit above the dialog's layer.
+    const inModal = buttonRef.current.closest('[aria-modal="true"]') !== null;
+    setPlace({ top: box.bottom + 6, left: align === "end" ? box.right : box.left, inModal });
   }, [open, align]);
 
   useEffect(() => {
@@ -139,7 +141,8 @@ function MenuList({
   id: string;
   listRef: RefObject<HTMLDivElement | null>;
   label: string;
-  place: { top: number; left: number } | null;
+  /** `inModal`: the list must sit above an open dialog's layer. */
+  place: { top: number; left: number; inModal?: boolean } | null;
   align: "start" | "end";
   touch: boolean;
   items: MenuEntry[];
@@ -177,7 +180,7 @@ function MenuList({
           role="menu"
           aria-label={label}
           onKeyDown={keys}
-          style={{ top: place.top, left: place.left }}
+          style={{ top: place.top, left: place.left, zIndex: place.inModal ? "calc(var(--z-modal) + 1)" : undefined }}
           className={cn(
             "fixed z-dropdown rounded-sm bg-bg-elevated p-1 shadow-2 ring-1 ring-separator",
             touch ? "w-64" : "w-52",
