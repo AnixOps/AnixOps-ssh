@@ -103,6 +103,52 @@ async fn dynamic_forward_speaks_socks5() {
 
 #[tokio::test]
 #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn dynamic_forward_on_localhost_speaks_socks4a_on_both_families() {
+    let e2e = E2e::new();
+    let session = connect(&e2e).await;
+    let forward = within("forward", session.forward_dynamic("localhost", 0))
+        .await
+        .expect("forward");
+    let port = forward.local_addr().expect("address").port();
+    wait_for_port_open(port, UP).await;
+
+    // SOCKS4a: CONNECT to a name the server resolves (0.0.0.1 marks 4a).
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    within_for("socks4a", Duration::from_secs(20), async {
+        let mut request = vec![4, 1];
+        request.extend_from_slice(&ECHO_PORT.to_be_bytes());
+        request.extend_from_slice(&[0, 0, 0, 1]);
+        request.extend_from_slice(b"e2e\0localhost\0");
+        stream.write_all(&request).await.unwrap();
+        let mut reply = [0u8; 8];
+        stream.read_exact(&mut reply).await.expect("connect reply");
+        assert_eq!(reply[..2], [0, 90], "SOCKS4a connect refused: {reply:?}");
+    })
+    .await;
+    echo_roundtrip(&mut stream, "through-socks4a").await;
+    drop(stream);
+
+    // `localhost` listens on ::1 too, where the machine has IPv6.
+    if let Ok(mut stream) = TcpStream::connect(("::1", port)).await {
+        within_for("socks4 over ipv6", Duration::from_secs(20), async {
+            let mut request = vec![4, 1];
+            request.extend_from_slice(&ECHO_PORT.to_be_bytes());
+            request.extend_from_slice(&[127, 0, 0, 1, 0]);
+            stream.write_all(&request).await.unwrap();
+            let mut reply = [0u8; 8];
+            stream.read_exact(&mut reply).await.unwrap();
+            assert_eq!(reply[..2], [0, 90], "{reply:?}");
+        })
+        .await;
+        echo_roundtrip(&mut stream, "socks4-on-ipv6").await;
+    }
+
+    within("stop", forward.stop()).await.expect("stop");
+    wait_for_port_shut(port, Duration::from_secs(10)).await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
 async fn remote_forward_reaches_a_local_listener() {
     let e2e = E2e::new();
     let session = connect(&e2e).await;

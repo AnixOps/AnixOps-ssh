@@ -4,6 +4,7 @@
 
 use crate::events::Events;
 use crate::Lease;
+use easyssh_core::tunnel::bare_host;
 use easyssh_core::{Tunnel, TunnelKind};
 use easyssh_ssh::{Error as SshError, Forward};
 use serde_json::{json, Value};
@@ -55,12 +56,22 @@ fn announce(
 }
 
 /// The address to listen on: OpenSSH's default is the loopback interface.
+/// `localhost` and `*` are passed on as they are: the forward listens on
+/// both IPv4 and IPv6 for them.
 fn bind_host(tunnel: &Tunnel) -> &str {
-    match tunnel.bind_address.as_deref() {
-        None | Some("") | Some("localhost") => "127.0.0.1",
-        Some("*") => "0.0.0.0",
+    match tunnel.bind_address.as_deref().map(bare_host) {
+        None | Some("") | Some("localhost") => "localhost",
         Some(other) => other,
     }
+}
+
+/// A running tunnel's status with the port it listens on, which the UI
+/// shows for a tunnel saved with port 0 (any free port).
+fn with_port(mut status: Value, port: Option<u64>) -> Value {
+    if let (Some("running"), Some(port)) = (status["state"].as_str(), port) {
+        status["port"] = json!(port);
+    }
+    status
 }
 
 /// A tunnel's state as the UI's `TunnelStatus`: `{"state": "running"}`, or
@@ -79,9 +90,12 @@ pub fn ui_status(state: &str, error: Option<&str>) -> Value {
 pub fn ui_status_event(payload: &Value) -> Value {
     json!({
         "id": payload["id"],
-        "status": ui_status(
-            payload["state"].as_str().unwrap_or("failed"),
-            payload["error"].as_str(),
+        "status": with_port(
+            ui_status(
+                payload["state"].as_str().unwrap_or("failed"),
+                payload["error"].as_str(),
+            ),
+            payload["bind_port"].as_u64(),
         ),
     })
 }
@@ -91,7 +105,10 @@ impl Tunnels {
     /// never ran.
     pub fn ui_status_of(&self, id: &str) -> Value {
         match lock(&self.statuses).get(id) {
-            Some(status) => ui_status(status.state, status.error.as_deref()),
+            Some(status) => with_port(
+                ui_status(status.state, status.error.as_deref()),
+                status.bind_port.map(u64::from),
+            ),
             None => ui_status("stopped", None),
         }
     }
@@ -177,6 +194,7 @@ impl Tunnels {
             let host = tunnel
                 .target_host
                 .as_deref()
+                .map(bare_host)
                 .filter(|h| !h.is_empty())
                 .ok_or_else(|| SshError::Forward("the target host is required".into()))?;
             let port = tunnel
@@ -194,7 +212,12 @@ impl Tunnels {
             }
             TunnelKind::Remote => {
                 let (host, port) = target()?;
-                let bind = tunnel.bind_address.as_deref().unwrap_or("localhost");
+                let bind = tunnel
+                    .bind_address
+                    .as_deref()
+                    .map(bare_host)
+                    .filter(|b| !b.is_empty())
+                    .unwrap_or("localhost");
                 lease
                     .forward_remote(bind, tunnel.bind_port, host, port)
                     .await
@@ -327,11 +350,12 @@ mod tests {
 
     #[test]
     fn the_default_bind_is_loopback() {
-        assert_eq!(bind_host(&tunnel(None)), "127.0.0.1");
-        assert_eq!(bind_host(&tunnel(Some(""))), "127.0.0.1");
-        assert_eq!(bind_host(&tunnel(Some("localhost"))), "127.0.0.1");
-        assert_eq!(bind_host(&tunnel(Some("*"))), "0.0.0.0");
+        assert_eq!(bind_host(&tunnel(None)), "localhost");
+        assert_eq!(bind_host(&tunnel(Some(""))), "localhost");
+        assert_eq!(bind_host(&tunnel(Some("localhost"))), "localhost");
+        assert_eq!(bind_host(&tunnel(Some("*"))), "*");
         assert_eq!(bind_host(&tunnel(Some("10.0.0.2"))), "10.0.0.2");
+        assert_eq!(bind_host(&tunnel(Some("[::1]"))), "::1");
     }
 
     #[test]
@@ -345,6 +369,10 @@ mod tests {
         assert_eq!(
             ui_status_event(&json!({"id": "t", "state": "failed", "error": "lost"})),
             json!({"id": "t", "status": {"state": "failed", "message": "lost"}})
+        );
+        assert_eq!(
+            ui_status_event(&json!({"id": "t", "state": "running", "bind_port": 40123})),
+            json!({"id": "t", "status": {"state": "running", "port": 40123}})
         );
         assert_eq!(
             Tunnels::default().ui_status_of("never-ran"),
