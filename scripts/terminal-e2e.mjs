@@ -32,6 +32,8 @@ const mod = isMacRun ? "Meta" : "Control";
 const bridge = spawn(bridgePath, [], { stdio: ["pipe", "pipe", "inherit"] });
 let bridgePage = null;
 const pendingOpens = new Map();
+const openStarted = new Map();
+const openTimes = [];
 const ready = new Promise((resolve, reject) => {
   bridge.once("exit", (code) => reject(new Error(`web_bridge exited with ${code}`)));
   createInterface({ input: bridge.stdout }).on("line", (line) => {
@@ -43,6 +45,14 @@ const ready = new Promise((resolve, reject) => {
     }
     if (message.op === "ready") resolve();
     else if (message.op === "opened" || message.op === "error") {
+      const started = openStarted.get(message.seq);
+      if (started !== undefined) {
+        const ms = Date.now() - started;
+        openTimes.push(ms);
+        // A session that takes this long is worth seeing in the log even when the check passes.
+        if (ms > 5000) console.log(`slow session open: ${ms} ms (${message.op}${message.message ? `: ${message.message}` : ""})`);
+      }
+      openStarted.delete(message.seq);
       pendingOpens.get(message.seq)?.(message);
       pendingOpens.delete(message.seq);
     } else if (bridgePage) {
@@ -126,6 +136,7 @@ async function newPage({ width = 1200, height = 760, query = "" } = {}) {
     bridgePage = page;
     return new Promise((resolve) => {
       pendingOpens.set(id, resolve);
+      openStarted.set(id, Date.now());
       send({ op: "open", seq: id, host: "e2e-target", cols, rows });
     });
   });
@@ -141,7 +152,9 @@ async function newPage({ width = 1200, height = 760, query = "" } = {}) {
 async function openHost(page, name = "prod-web-01") {
   await page.getByRole("button", { name: new RegExp(name) }).first().click();
   await page.locator(".xterm-screen").last().waitFor();
-  await waitScreen(page, /keyuser@/);
+  // The engine gives a channel that does not open 15 s before it reconnects;
+  // the session-open times are reported at the end.
+  await waitScreen(page, /keyuser@/, { timeout: 35000 });
 }
 
 /** Text of the active terminal's viewport (or the whole buffer). */
@@ -780,6 +793,11 @@ await writeFile(
   `| 方面 | 检查 | 主流终端 | 结果 |\n|---|---|---|---|\n${rows.join("\n")}\n`,
 );
 await writeFile(join(outDir, "report.json"), JSON.stringify(results, null, 2));
+const sorted = [...openTimes].sort((a, b) => a - b);
+if (sorted.length)
+  console.log(
+    `session opens: ${sorted.length}, median ${sorted[Math.floor(sorted.length / 2)]} ms, slowest ${sorted.at(-1)} ms, over 5 s: ${sorted.filter((ms) => ms > 5000).length}`,
+  );
 const failed = results.filter((r) => !r.ok);
 console.log(`${results.length - failed.length}/${results.length} passed`);
 if (failed.length && !process.env.REPORT_ONLY) process.exit(1);
