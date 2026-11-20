@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openUrl as openWithSystem, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { previewCancel, previewFiles, previewTransfer } from "./previewFiles";
 import {
   previewApplyImport,
@@ -20,6 +20,7 @@ import {
   previewSnapshot,
 } from "./preview";
 import { previewMonitorSample, previewMonitorSignal } from "./previewMonitor";
+import { previewUpdateCheck, previewUpdateSetAuto, previewUpdateStatus } from "./previewUpdate";
 import { previewSession } from "./previewSession";
 import type { ExitReason } from "./terminalSession";
 import {
@@ -38,6 +39,7 @@ import type {
   ImportFormat,
 } from "./proto.gen";
 import { UNAVAILABLE, type PendingReports, type TelemetryStatus } from "./telemetry";
+import type { UpdateStatus } from "./update";
 
 export type HostSource = "saved" | "ssh_config";
 
@@ -67,8 +69,22 @@ export interface HostFields {
   engine?: EnginePreference | null;
   /** Opt-in: send the shell integration script after login. */
   shellIntegration: boolean;
+  /** An outbound proxy for the first hop; null or absent connects directly. Its password is a saved secret. */
+  proxy?: ProxyFields | null;
   /** Set for a serial port; the SSH fields are then unused. */
   serial?: SerialFields | null;
+}
+
+/** SOCKS5 (RFC 1928, with username and password) or HTTP CONNECT (with basic authentication). */
+export type ProxyKind = "socks5" | "http";
+
+/** Where a host's outbound proxy is. Mirrors `ProxySettings` in easyssh-core; the password is a saved secret. */
+export interface ProxyFields {
+  kind: ProxyKind;
+  host: string;
+  port: number;
+  /** The login; null or empty means no authentication. */
+  username?: string | null;
 }
 
 export type SerialParity = "none" | "odd" | "even";
@@ -201,13 +217,20 @@ export type {
 export type ImportSource = { kind: "file"; path: string } | { kind: "ssh_config" } | { kind: "service"; request: ServiceRequest };
 
 /** The services hosts can be imported from. */
-export type ServiceId = "control";
+export type ServiceId = "control" | "jumpserver";
 
 /** The plain settings of a service import (what the form remembers). */
 export interface ServiceForm {
   url: string;
   default_user: string;
   identity_file: string | null;
+  /** JumpServer only: */
+  access_key_id: string;
+  org_id: string;
+  gateway: boolean;
+  gateway_host: string;
+  gateway_port: number;
+  gateway_user: string;
 }
 
 /** What the form opens with: the saved settings, and whether a credential is saved in the vault. */
@@ -368,6 +391,12 @@ export async function attachSession(
   return sessionHandle(id, attached.engine, attached.engineReason);
 }
 
+/** Opens a web link in the default browser. Callers check it first (shouldOpenLink). */
+export async function openUrl(url: string): Promise<void> {
+  if (isTauri) await openWithSystem(url);
+  else window.open(url, "_blank", "noopener,noreferrer");
+}
+
 export async function copyText(text: string): Promise<void> {
   if (isTauri) await writeText(text);
   else await navigator.clipboard.writeText(text);
@@ -386,6 +415,9 @@ export interface RemoteFile {
   size: number;
   modified: string;
   permissions: string;
+  /** The owner and group as the server reported them (a name or a number), when it did. */
+  owner?: string | null;
+  group?: string | null;
 }
 
 export interface FilesHandle {
@@ -394,11 +426,14 @@ export interface FilesHandle {
   mkdir(path: string): Promise<void>;
   remove(path: string, directory: boolean): Promise<void>;
   rename(from: string, to: string): Promise<void>;
+  /** Sets the permission bits (`0o755` style); `recursive` applies them to everything inside a folder too. */
+  chmod(path: string, mode: number, recursive: boolean): Promise<void>;
   close(): void;
 }
 
 export type TransferEvent =
-  | { kind: "progress"; bytes: number }
+  | { kind: "started" }
+  | { kind: "progress"; bytes: number; total?: number | null }
   | { kind: "done" }
   | { kind: "failed"; message: string }
   | { kind: "cancelled" };
@@ -416,6 +451,8 @@ export interface StartedTransfer {
   id: string;
   local: string;
   remote: string;
+  /** Waits for the host's other transfers; a "started" event follows when its turn comes. */
+  queued?: boolean;
 }
 
 /** Opens a long-lived sftp process for browsing `hostId`. */
@@ -428,6 +465,7 @@ export async function openFiles(hostId: string): Promise<FilesHandle> {
     mkdir: (path) => invoke("sftp_mkdir", { id, path }),
     remove: (path, directory) => invoke("sftp_remove", { id, path, directory }),
     rename: (from, to) => invoke("sftp_rename", { id, from, to }),
+    chmod: (path, mode, recursive) => invoke("sftp_chmod", { id, path, mode, recursive }),
     close: () => void invoke("sftp_close", { id }).catch(console.error),
   };
 }
@@ -617,6 +655,8 @@ export interface SecretsStatus {
   password: boolean;
   privateKey: boolean;
   passphrase: boolean;
+  /** The password of the host's outbound proxy. */
+  proxyPassword: boolean;
 }
 
 /** A field left out keeps the saved value; an empty string clears it. */
@@ -624,6 +664,7 @@ export interface SecretsInput {
   password?: string;
   privateKey?: string;
   passphrase?: string;
+  proxyPassword?: string;
 }
 
 /** The vault's state for Settings → Security. */
@@ -736,6 +777,7 @@ export async function secretsSet(hostId: string, input: SecretsInput): Promise<S
         password: input.password ?? null,
         privateKey: input.privateKey ?? null,
         passphrase: input.passphrase ?? null,
+        proxyPassword: input.proxyPassword ?? null,
       })
     : previewSecretsSet(hostId, input);
 }
@@ -794,8 +836,12 @@ export type TunnelStatus =
   | { state: "stopped" }
   | { state: "starting" }
   /** `port`: the port that listens (it differs from the saved one for a
-   *  tunnel saved with port 0, any free port). */
-  | { state: "running"; port?: number }
+   *  tunnel saved with port 0, any free port). `lastError`/`errorCount`:
+   *  connections the forward accepted but could not pass on (the target
+   *  refused, the server prohibits it). */
+  | { state: "running"; port?: number; lastError?: string; errorCount?: number }
+  /** The connection dropped; the forward is closed while it reconnects. */
+  | { state: "reconnecting"; message?: string }
   | { state: "failed"; message: string };
 
 export interface Tunnel {
@@ -903,6 +949,17 @@ const previewTunnels: Tunnel[] = [
     targetPort: 3000,
     status: { state: "failed", message: "bind [127.0.0.1]:3000: Address already in use" },
   },
+  {
+    id: "tunnel-4",
+    name: "内网 Redis",
+    hostId: "3",
+    kind: "local",
+    bindAddress: null,
+    bindPort: 16379,
+    targetHost: "redis.internal",
+    targetPort: 6379,
+    status: { state: "running", port: 16379, lastError: "redis.internal:6379: connect failed", errorCount: 2 },
+  },
 ];
 
 export interface SshStatus {
@@ -910,21 +967,30 @@ export interface SshStatus {
   sftpFound: boolean;
   agent: "ready" | "empty" | "unavailable";
   agentKeys: string[];
+  /** Which agent the built-in engine found; null when none or only ssh-add answered. */
+  agentKind: "openssh" | "pageant" | "environment" | null;
   agentError: string | null;
   sshConfigHosts: number;
+}
+
+/** Installed monospace font families, for the terminal font list; empty outside the app. */
+export async function monospaceFonts(): Promise<string[]> {
+  if (!isTauri) return ["Menlo", "Consolas", "JetBrains Mono", "Fira Code"];
+  return invoke<string[]>("monospace_fonts");
 }
 
 /** Checks OpenSSH and the SSH agent. `?ssh=missing` previews a bare machine. */
 export async function sshStatus(): Promise<SshStatus> {
   if (!isTauri) {
     if (new URLSearchParams(window.location.search).get("ssh") === "missing") {
-      return { sshVersion: null, sftpFound: false, agent: "unavailable", agentKeys: [], agentError: null, sshConfigHosts: 0 };
+      return { sshVersion: null, sftpFound: false, agent: "unavailable", agentKeys: [], agentKind: null, agentError: null, sshConfigHosts: 0 };
     }
     return {
       sshVersion: "OpenSSH_9.5p1, LibreSSL 3.3.6",
       sftpFound: true,
       agent: "ready",
       agentKeys: ["256 SHA256:3fA9k2Lq0yQkZf1mJb7Vx2c8Tn5Rw4Hs6Pd0Ue1Gi9o you@laptop (ED25519)"],
+      agentKind: "environment",
       agentError: null,
       sshConfigHosts: 1,
     };
@@ -1028,6 +1094,30 @@ export async function telemetryPending(): Promise<PendingReports> {
 export async function telemetryDeletePending(): Promise<number> {
   if (!isTauri) return 0;
   return invoke<number>("telemetry_delete_pending");
+}
+
+/* Update check (check and notify only); see update.ts and crates/easyssh-update. */
+
+export async function updateStatus(): Promise<UpdateStatus> {
+  if (!isTauri) return previewUpdateStatus();
+  return invoke<UpdateStatus>("update_status");
+}
+
+export async function updateSetAuto(on: boolean): Promise<UpdateStatus> {
+  if (!isTauri) return previewUpdateSetAuto(on);
+  return invoke<UpdateStatus>("update_set_auto", { on });
+}
+
+/** Rejects with the reason when the feed could not be fetched or verified. */
+export async function updateCheck(): Promise<UpdateStatus> {
+  if (!isTauri) return previewUpdateCheck();
+  return invoke<UpdateStatus>("update_check");
+}
+
+/** Opens the verified release in the browser; the backend names the URL. */
+export async function updateOpen(): Promise<void> {
+  if (!isTauri) return;
+  await invoke("update_open");
 }
 
 /** The Rust side scrubs `message` and `stack` and decides whether to keep them. */

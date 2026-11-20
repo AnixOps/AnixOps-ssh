@@ -323,7 +323,7 @@ export function MobileTerminal({
     const scheme = window.matchMedia("(prefers-color-scheme: dark)");
     const updateTheme = () => (terminal.options.theme = terminalTheme());
     scheme.addEventListener("change", updateTheme);
-    const stopSettings = onSettings((next) => Object.assign(terminal.options, liveTerminalOptions(next)));
+    const stopSettings = onSettings((next) => Object.assign(terminal.options, liveTerminalOptions(next, terminalFont())));
 
     if (writesRef.current) {
       (window as unknown as { __mobileDebug?: unknown }).__mobileDebug = {

@@ -4,6 +4,7 @@ import { SecretField } from "@/components/app/SecretField";
 import { Button } from "@/components/ui/button";
 import { Field, Notice } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   serviceRemembered,
   testService,
@@ -30,7 +31,18 @@ export function ServiceImportForm({
   onBack: () => void;
   firstRef: React.Ref<HTMLInputElement>;
 }) {
-  const [form, setForm] = useState<ServiceForm>({ url: "", default_user: "root", identity_file: null });
+  const [form, setForm] = useState<ServiceForm>({
+    url: "",
+    default_user: "root",
+    identity_file: null,
+    access_key_id: "",
+    org_id: "",
+    gateway: true,
+    gateway_host: "",
+    gateway_port: 2222,
+    gateway_user: "",
+  });
+  const jumpserver = service === "jumpserver";
   const [saved, setSaved] = useState(false);
   const [secret, setSecret] = useState("");
   const [cleared, setCleared] = useState(false);
@@ -58,7 +70,10 @@ export function ServiceImportForm({
     secret: secret.trim() || null,
     clear_secret: cleared,
   });
-  const ready = form.url.trim() !== "" && (secret.trim() !== "" || (saved && !cleared));
+  const ready =
+    form.url.trim() !== "" &&
+    (secret.trim() !== "" || (saved && !cleared)) &&
+    (!jumpserver || (form.access_key_id.trim() !== "" && (!form.gateway || form.gateway_user.trim() !== "")));
   const edit = (patch: Partial<ServiceForm>) => {
     setForm({ ...form, ...patch });
     setTotal(null);
@@ -91,7 +106,7 @@ export function ServiceImportForm({
         if (ready && !busy) onPreview(request());
       }}
     >
-      <p className="text-callout font-normal text-label-2">{t.importControlIntro}</p>
+      <p className="text-callout font-normal text-label-2">{jumpserver ? t.importJmsIntro : t.importControlIntro}</p>
       <Field label={t.importServiceUrl} hint={t.importServiceHttpsOnly}>
         <Input
           ref={firstRef}
@@ -104,13 +119,40 @@ export function ServiceImportForm({
           className="font-mono"
         />
       </Field>
-      <Field label={t.importControlToken} hint={t.importControlTokenHint} group>
+      {jumpserver && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label={t.importJmsKeyId} hint={t.importJmsKeyIdHint}>
+            <Input
+              value={form.access_key_id}
+              onChange={(event) => edit({ access_key_id: event.target.value })}
+              autoComplete="off"
+              spellCheck={false}
+              className="font-mono"
+            />
+          </Field>
+          <Field label={t.importJmsOrg} hint={t.importJmsOrgHint}>
+            <Input
+              value={form.org_id}
+              onChange={(event) => edit({ org_id: event.target.value })}
+              placeholder="00000000-0000-0000-0000-000000000002"
+              autoComplete="off"
+              spellCheck={false}
+              className="font-mono"
+            />
+          </Field>
+        </div>
+      )}
+      <Field
+        label={jumpserver ? t.importJmsSecret : t.importControlToken}
+        hint={jumpserver ? undefined : t.importControlTokenHint}
+        group
+      >
         <SecretField
-          label={t.importControlToken}
+          label={jumpserver ? t.importJmsSecret : t.importControlToken}
           saved={saved}
           value={secret}
           cleared={cleared}
-          placeholder={t.importControlTokenPlaceholder}
+          placeholder={jumpserver ? undefined : t.importControlTokenPlaceholder}
           onValue={(value) => {
             setSecret(value);
             setTotal(null);
@@ -118,8 +160,54 @@ export function ServiceImportForm({
           onCleared={setCleared}
         />
       </Field>
+      {jumpserver && (
+        <div className="space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-callout text-label-1">{t.importGateway}</p>
+              <p className="mt-0.5 text-callout text-label-3">{t.importGatewayHint}</p>
+            </div>
+            <Switch on={form.gateway} label={t.importGateway} onClick={() => edit({ gateway: !form.gateway })} />
+          </div>
+          {form.gateway && (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <Field label={t.importGatewayUser}>
+                <Input
+                  value={form.gateway_user}
+                  onChange={(event) => edit({ gateway_user: event.target.value })}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="font-mono"
+                />
+              </Field>
+              <Field label={t.importGatewayHost} hint={t.optional}>
+                <Input
+                  value={form.gateway_host}
+                  onChange={(event) => edit({ gateway_host: event.target.value })}
+                  placeholder={t.importGatewayHostHint}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="font-mono"
+                />
+              </Field>
+              <Field label={t.importGatewayPort}>
+                <Input
+                  value={String(form.gateway_port)}
+                  onChange={(event) => edit({ gateway_port: Number(event.target.value.replace(/\D/g, "").slice(0, 5)) || 0 })}
+                  inputMode="numeric"
+                  autoComplete="off"
+                  className="font-mono"
+                />
+              </Field>
+            </div>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Field label={t.importDefaultUser}>
+        <Field
+          label={jumpserver && form.gateway ? t.importGatewayAccount : t.importDefaultUser}
+          hint={jumpserver && form.gateway ? t.importGatewayAccountHint : undefined}
+        >
           <Input
             value={form.default_user}
             onChange={(event) => edit({ default_user: event.target.value })}
@@ -149,7 +237,7 @@ export function ServiceImportForm({
         {total !== null && (
           <span role="status" className="flex items-center gap-1.5 text-callout text-success">
             <CircleCheck className="size-4 shrink-0" strokeWidth={1.5} aria-hidden />
-            {t.importTestOk} {total} {t.importTestOkNodes}
+            {jumpserver ? t.importTestOkJms : t.importTestOk} {total} {jumpserver ? t.importTestOkAssets : t.importTestOkNodes}
           </span>
         )}
         <div className="flex-1" />

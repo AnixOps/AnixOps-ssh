@@ -44,9 +44,21 @@ export function broadcastTargets(
   return participants(state, panes, tabKey).filter((id) => id !== source && isConnected(id));
 }
 
-/** Whether a paste needs confirmation before it is sent to several panes. */
-export function pasteNeedsConfirm(text: string, receivers: number): boolean {
-  return receivers > 0 && /[\r\n]/.test(text);
+/** What a single-pane paste check needs to know. */
+export interface PasteGuard {
+  /** The app in the pane turned on bracketed paste, so a newline will not run anything. */
+  bracketedPaste: boolean;
+  /** The setting: warn before a multi-line paste into one pane. */
+  warnMultiline: boolean;
+}
+
+/** Whether a paste needs confirmation: always when it has a newline and goes
+ *  to several panes; into one pane only when the setting asks for it and the
+ *  app there has not turned on bracketed paste (each line would run). */
+export function pasteNeedsConfirm(text: string, receivers: number, guard?: PasteGuard): boolean {
+  if (!/[\r\n]/.test(text)) return false;
+  if (receivers > 0) return true;
+  return guard !== undefined && guard.warnMultiline && !guard.bracketedPaste;
 }
 
 /* The store. */

@@ -13,6 +13,9 @@ const groups: { id: ShortcutRow["group"]; title: () => string }[] = [
   { id: "list", title: () => t.shortcutsList },
 ];
 
+/** A row with no key on this platform (⌘K clear is macOS only) is left out. */
+const onThisPlatform = (row: ShortcutRow) => (isMac ? row.mac : row.pc) !== "";
+
 /** The list of every shortcut, opened with Mod+/ (keyboard.md K9). It reads the
  *  same table the code and the tooltips use. */
 export function ShortcutList({ onClose, only }: { onClose: () => void; only?: readonly ShortcutId[] }) {
@@ -30,22 +33,22 @@ export function ShortcutList({ onClose, only }: { onClose: () => void; only?: re
       </div>
       <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 pt-4 pb-6">
         {groups
-          .filter((group) => shortcutTable.some((row) => row.group === group.id && (!only || only.includes(row.id))))
+          .filter((group) => shortcutTable.some((row) => row.group === group.id && onThisPlatform(row) && (!only || only.includes(row.id))))
           .map((group) => (
           <section key={group.id} aria-label={group.title()}>
             <h3 className="mb-2 text-callout text-label-2">{group.title()}</h3>
             <dl className="divide-y divide-separator">
               {shortcutTable
-                .filter((row) => row.group === group.id && (!only || only.includes(row.id)))
+                .filter((row) => row.group === group.id && onThisPlatform(row) && (!only || only.includes(row.id)))
                 .map((row) => (
                   <div key={`${row.group}-${row.id}`} className="flex items-center gap-3 py-2 text-callout">
                     <dt className="min-w-0 flex-1 truncate text-label-1">{row.title()}</dt>
                     <dd className="flex shrink-0 items-center gap-2">
                       <Kbd>{isMac ? row.mac : row.pc}</Kbd>
-                      {!isMac && row.pcInTerminal && (
+                      {(isMac ? row.macInTerminal : row.pcInTerminal) && (
                         <span className="flex items-center gap-1 text-label-3">
                           {t.shortcutsInTerminal}
-                          <Kbd>{row.pcInTerminal}</Kbd>
+                          <Kbd>{isMac ? row.macInTerminal : row.pcInTerminal}</Kbd>
                         </span>
                       )}
                     </dd>

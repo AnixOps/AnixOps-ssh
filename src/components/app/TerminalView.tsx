@@ -1,16 +1,19 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { ChevronDown, ChevronUp, LoaderCircle, RotateCw, Sparkles, SquareArrowOutUpRight, Unplug, X } from "lucide-react";
+import { CaseSensitive, ChevronDown, ChevronUp, ClipboardPaste, Copy, Eraser, LoaderCircle, Regex, RotateCw, Search, Sparkles, SquareArrowOutUpRight, Unplug, WholeWord, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CompletionPopup, type PopupPlacement } from "@/components/app/CompletionPopup";
 import { AskAiPanel, ASK_AI_WIDTH } from "@/components/app/AskAiPanel";
+import { useAiReady } from "@/lib/aiBackend";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ContextMenu, type MenuEntry } from "@/components/ui/menu";
 import { PasteConfirm, BroadcastBadge } from "@/components/app/PaneOverlays";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
@@ -18,15 +21,27 @@ import {
   copyText,
   isVaultLocked,
   loadHosts,
+  onAskpass,
+  onHostKey,
   openFiles,
   openExternal,
   openSession,
+  openUrl,
   pasteText,
   type FilesHandle,
   type SessionEvent,
   type SessionHandle,
   type SshEngine,
 } from "@/lib/backend";
+import {
+  beginRetry,
+  decideRetry,
+  nextRetry,
+  nudgeRetry,
+  retryNow,
+  secondsLeft,
+  type RetryPlan,
+} from "@/lib/autoReconnect";
 import { isSerialPermissionError } from "@/lib/serialUi";
 import { requestVaultUnlock } from "@/lib/vaultUi";
 import { CompletionController, type ViewState } from "@/lib/completion/controller";
@@ -40,12 +55,16 @@ import { ShellIntegrationLineSource } from "@/lib/shellIntegration/lineSource";
 import { pasteNeedsConfirm, type BroadcastScope, targetsFor } from "@/lib/broadcast";
 import { t } from "@/lib/i18n";
 import { duration, ease, enter, leave } from "@/lib/motion";
+import { animationFrameSchedule, OutputBuffer } from "@/lib/outputBuffer";
 import { onSettings, settings } from "@/lib/settings";
-import { appShortcut } from "@/lib/shortcuts";
+import { appShortcut, isMac } from "@/lib/shortcuts";
+import { shortcutHint } from "@/lib/shortcutTable";
+import { parseOsc52, sanitizeTitle, shouldOpenLink } from "@/lib/terminalInput";
 import { registerTerminal, terminalFor } from "@/lib/terminals";
 import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { exitTitle, RESIZE_DEBOUNCE_MS, TERMINAL_RESET, trailingDebounce, type SessionEnd } from "@/lib/terminalSession";
-import { terminalFont, terminalTheme } from "@/lib/terminalTheme";
+import { searchDecorations, terminalFont, terminalTheme } from "@/lib/terminalTheme";
+import { cn } from "@/lib/utils";
 
 /** The SSH engine a session runs on, and why. */
 export interface EngineInfo {
@@ -53,12 +72,22 @@ export interface EngineInfo {
   reason: string | null;
 }
 
-export type SessionStatus =
+/** What the remote side said about itself during one session. */
+export interface SessionMeta {
+  /** The window title the remote program set (OSC 0/2), sanitized. */
+  remoteTitle?: string;
+  /** The bell rang while the pane was not in front. */
+  bell?: boolean;
+}
+
+export type SessionStatus = (
   | { state: "connecting" }
   | { state: "connected"; engine?: EngineInfo }
   /** The connection to the background daemon dropped; the session is re-attached when it is back. */
   | { state: "reconnecting" }
-  | ({ state: "exited"; error?: string } & SessionEnd);
+  | ({ state: "exited"; error?: string } & SessionEnd)
+) &
+  SessionMeta;
 
 export function TerminalView({
   tabKey,
@@ -89,24 +118,49 @@ export function TerminalView({
   const searchRef = useRef<SearchAddon | null>(null);
   const sessionRef = useRef<SessionHandle | null>(null);
   const startRef = useRef<() => void>(() => {});
+  const cancelAutoRef = useRef<() => void>(() => {});
+  /** The next automatic attempt, or "gaveup" once the retries ran out. */
+  const [autoRetry, setAutoRetry] = useState<RetryPlan | "gaveup" | null>(null);
   const [status, setStatus] = useState<SessionStatus>({ state: "connecting" });
   /** Set while the session is over, so Enter reconnects instead of typing. */
   const endedRef = useRef(false);
   const integrationRef = useRef<ShellIntegrationHandle | null>(null);
   const [askOpen, setAskOpen] = useState(false);
+  // Hidden until AI is on and configured, so it cannot be hit by accident.
+  const aiReady = useAiReady();
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
+  const [regex, setRegex] = useState(false);
+  const [results, setResults] = useState<{ index: number; count: number } | null>(null);
+  const [badPattern, setBadPattern] = useState(false);
   const findInputRef = useRef<HTMLInputElement>(null);
   const [pendingPaste, setPendingPaste] = useState<{ text: string; count: number } | null>(null);
   const pasteRef = useRef<(text: string, all: boolean) => void>(() => {});
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const actionsRef = useRef({ copy: () => {}, paste: () => {}, clear: () => {} });
+  const metaRef = useRef<SessionMeta>({});
+  const statusRef = useRef<SessionStatus>({ state: "connecting" });
+  const activeRef = useRef(active);
+  activeRef.current = active;
 
   const report = useCallback(
     (next: SessionStatus) => {
       endedRef.current = next.state === "exited";
-      setStatus(next);
-      onStatus(tabKey, next);
+      const full = { ...next, ...metaRef.current };
+      statusRef.current = full;
+      setStatus(full);
+      onStatus(tabKey, full);
     },
     [onStatus, tabKey],
+  );
+  const updateMeta = useCallback(
+    (patch: SessionMeta) => {
+      metaRef.current = { ...metaRef.current, ...patch };
+      report(statusRef.current);
+    },
+    [report],
   );
 
   useEffect(() => {
@@ -119,6 +173,18 @@ export function TerminalView({
     const search = new SearchAddon();
     terminal.loadAddon(fit);
     terminal.loadAddon(search);
+    // Links open with Ctrl-click (⌘-click), so a plain click still selects.
+    terminal.loadAddon(
+      new WebLinksAddon(
+        (event, uri) => {
+          if (shouldOpenLink(uri, event, isMac)) void openUrl(uri).catch(console.error);
+        },
+        {
+          hover: () => (container.title = t.openLinkHint.replace("{key}", isMac ? "⌘" : "Ctrl")),
+          leave: () => container.removeAttribute("title"),
+        },
+      ),
+    );
     terminal.loadAddon(new Unicode11Addon());
     terminal.unicode.activeVersion = UNICODE_VERSION;
     terminal.open(container);
@@ -133,6 +199,15 @@ export function TerminalView({
       }
     }
     fit.fit();
+    // Output is written once per frame. The daemon protocol has no flow
+    // control to pause reads, so this only coalesces (see outputBuffer.ts).
+    const output = new OutputBuffer({
+      write: (data, done) => terminal.write(data, done),
+      schedule: animationFrameSchedule,
+    });
+    const searchResults = search.onDidChangeResults(({ resultIndex, resultCount }) =>
+      setResults({ index: resultIndex, count: resultCount }),
+    );
 
     // Command completion: follows what is typed and shows a list at the cursor.
     let files: FilesHandle | null = null;
@@ -226,6 +301,9 @@ export function TerminalView({
       } else if (shortcut === "find") {
         setFindOpen(true);
         window.requestAnimationFrame(() => findInputRef.current?.select());
+      } else if (shortcut === "clear-terminal") {
+        // ⌘K on macOS: the screen and the scrollback; the prompt line stays.
+        terminal.clear();
       } else if (shortcut === "prev-prompt" || shortcut === "next-prompt") {
         integration.jump(shortcut === "prev-prompt" ? "previous" : "next");
       }
@@ -261,20 +339,67 @@ export function TerminalView({
       terminal.focus();
     };
     pasteRef.current = pasteEverywhere;
+    // One pane: ask before a multi-line paste the shell would run line by
+    // line (no bracketed paste), unless that was turned off.
+    const singleNeedsConfirm = (text: string) =>
+      pasteNeedsConfirm(text, 0, {
+        bracketedPaste: terminal.modes.bracketedPasteMode,
+        warnMultiline: settings().terminalWarnMultilinePaste,
+      });
     function routePaste(text: string) {
       const count = receivers().length;
-      if (count === 0) terminal.paste(text);
-      else if (pasteNeedsConfirm(text, count)) setPendingPaste({ text, count });
+      if (count === 0 ? singleNeedsConfirm(text) : pasteNeedsConfirm(text, count)) setPendingPaste({ text, count });
+      else if (count === 0) terminal.paste(text);
       else pasteEverywhere(text, true);
     }
     const onPaste = (event: ClipboardEvent) => {
       const text = event.clipboardData?.getData("text") ?? "";
-      if (!text || receivers().length === 0) return;
+      if (!text || (receivers().length === 0 && !singleNeedsConfirm(text))) return;
       event.preventDefault();
       event.stopPropagation();
       routePaste(text);
     };
     container.addEventListener("paste", onPaste, true);
+
+    const copySelection = () => {
+      const selection = terminal.getSelection();
+      if (selection) void copyText(selection).catch(console.error);
+    };
+    actionsRef.current = {
+      copy: copySelection,
+      paste: () => void pasteText().then((text) => text && routePaste(text)),
+      clear: () => terminal.clear(),
+    };
+    // Copy on select: once the mouse is released, not on every move of a drag.
+    const onMouseUp = (event: MouseEvent) => {
+      if (event.button === 0 && settings().terminalCopyOnSelect && terminal.hasSelection()) copySelection();
+    };
+    container.addEventListener("mouseup", onMouseUp);
+    // Right-click: the menu, or (as in PuTTY and Windows Terminal) copy the
+    // selection if there is one and paste otherwise.
+    const onContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+      if (settings().terminalRightClick === "paste") {
+        if (terminal.hasSelection()) {
+          copySelection();
+          terminal.clearSelection();
+        } else actionsRef.current.paste();
+      } else setMenuAt({ x: event.clientX, y: event.clientY });
+    };
+    container.addEventListener("contextmenu", onContextMenu);
+
+    // OSC 52: remote programs (tmux, Vim) may write the clipboard, never read it.
+    const osc52 = terminal.parser.registerOscHandler(52, (data) => {
+      if (settings().terminalOsc52) {
+        const text = parseOsc52(data);
+        if (text !== null) void copyText(text).catch(console.error);
+      }
+      return true;
+    });
+    const titleChange = terminal.onTitleChange((title) => updateMeta({ remoteTitle: sanitizeTitle(title) || undefined }));
+    const bell = terminal.onBell(() => {
+      if (!activeRef.current) updateMeta({ bell: true });
+    });
     // The view fits at once; the session hears the size once dragging
     // settles, so the remote app redraws once instead of on every frame.
     const sendResize = trailingDebounce(
@@ -283,27 +408,99 @@ export function TerminalView({
     );
     terminal.onResize(({ cols, rows }) => sendResize(cols, rows));
 
+    // Automatic reconnect: a lost connection is retried with backoff, but
+    // only after a session that was open, and never past a question the
+    // user had to answer (password, passphrase, host key).
+    let everConnected = false;
+    let connectedAt: number | undefined;
+    let prompted = false;
+    let closing = false;
+    let plan: RetryPlan | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stopTimer = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+    };
+    const schedule = (next: RetryPlan) => {
+      plan = next;
+      stopTimer();
+      setAutoRetry(next);
+      timer = setTimeout(() => {
+        timer = undefined;
+        runStart(true);
+      }, Math.max(0, next.dueAt - Date.now()));
+    };
+    const onEnded = (end: SessionEnd & { error?: string }) => {
+      const decision = decideRetry(end, {
+        enabled: settings().terminalAutoReconnect && !closing,
+        remote: hostId !== null,
+        wasConnected: everConnected,
+        prompted,
+      });
+      if (!decision.retry) {
+        plan = null;
+        setAutoRetry(null);
+        return;
+      }
+      const now = Date.now();
+      // A session that held for a while starts a fresh chain; one that dropped
+      // again at once keeps counting, so a flapping link still backs off.
+      const stable = connectedAt !== undefined && now - connectedAt >= 10_000;
+      const next = plan && !stable ? nextRetry(plan, now) : beginRetry(now);
+      if (next) schedule(next);
+      else {
+        plan = null;
+        setAutoRetry("gaveup");
+      }
+    };
+    const unprompted = [
+      onAskpass(() => (prompted = true)),
+      onHostKey(() => (prompted = true)),
+    ];
+    const onOnline = () => {
+      if (plan && timer !== undefined) schedule(nudgeRetry(Date.now()));
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && plan && timer !== undefined) schedule(retryNow(plan, Date.now()));
+    };
+    window.addEventListener("online", onOnline);
+    document.addEventListener("visibilitychange", onVisible);
+    cancelAutoRef.current = () => {
+      stopTimer();
+      plan = null;
+      setAutoRetry(null);
+    };
+
     // Only the first start may reattach; "Reconnect" opens a fresh session.
     let reattach = sessionId;
     const start = () => {
+      metaRef.current = {};
       report({ state: "connecting" });
       let connected = false;
       let exited = false;
+      connectedAt = undefined;
+      prompted = false;
+      const up = () => {
+        connected = true;
+        everConnected = true;
+        connectedAt = Date.now();
+        setAutoRetry(null);
+      };
       // Known once the session is open; the first output may come sooner.
       let engine: EngineInfo | undefined;
       const onEvent = (event: SessionEvent) => {
         if (disposed) return;
         if (event.kind === "data") {
-          terminal.write(event.data);
+          output.push(event.data);
           if (!connected) {
-            connected = true;
+            up();
             report({ state: "connected", engine });
           }
         } else if (event.kind === "reconnecting") {
           if (!exited) report({ state: "reconnecting" });
         } else if (event.kind === "resumed") {
           if (!exited) {
-            connected = true;
+            up();
             report({ state: "connected", engine });
             // The view may have been resized while the link was down.
             sessionRef.current?.resize(terminal.cols, terminal.rows);
@@ -312,6 +509,7 @@ export function TerminalView({
           exited = true;
           sessionRef.current = null;
           report({ state: "exited", code: event.code, reason: event.reason, signal: event.signal });
+          onEnded({ code: event.code, reason: event.reason, signal: event.signal });
         }
       };
       const attaching = reattach;
@@ -336,7 +534,7 @@ export function TerminalView({
               // The replay was produced for whatever size the session had.
               session.resize(terminal.cols, terminal.rows);
               if (!connected) {
-                connected = true;
+                up();
                 report({ state: "connected", engine });
               }
             }
@@ -344,7 +542,10 @@ export function TerminalView({
         })
         .catch((reason) => {
           if (isVaultLocked(reason)) requestVaultUnlock();
-          if (!disposed) report({ state: "exited", code: null, error: String(reason) });
+          if (!disposed) {
+            report({ state: "exited", code: null, error: String(reason) });
+            onEnded({ code: null, error: String(reason) });
+          }
         });
     };
     const unregister = registerTerminal(tabKey, {
@@ -360,17 +561,26 @@ export function TerminalView({
       paste: (text) => terminal.paste(text),
       connected: () => sessionRef.current !== null,
       close() {
+        closing = true;
+        stopTimer();
         sessionRef.current?.close();
         sessionRef.current = null;
       },
     });
-    startRef.current = () => {
+    const runStart = (auto: boolean) => {
+      stopTimer();
+      if (!auto) {
+        plan = null;
+        setAutoRetry(null);
+      }
       // Undo modes the old session left on (alternate screen, mouse
       // reporting, bracketed paste) before the new one starts.
+      output.flush();
       terminal.write(TERMINAL_RESET + "\r\n");
       start();
       terminal.focus();
     };
+    startRef.current = () => runStart(false);
     start();
 
     const observer = new ResizeObserver(() => {
@@ -382,19 +592,26 @@ export function TerminalView({
     scheme.addEventListener("change", updateTheme);
     const stopSettings = onSettings((next) => {
       terminal.options.fontSize = next.terminalFontSize;
-      Object.assign(terminal.options, liveTerminalOptions(next));
+      Object.assign(terminal.options, liveTerminalOptions(next, terminalFont()));
       updateTheme();
       if (container.clientWidth > 0) fit.fit();
     });
 
     return () => {
       disposed = true;
+      stopTimer();
+      for (const stop of unprompted) stop();
+      window.removeEventListener("online", onOnline);
+      document.removeEventListener("visibilitychange", onVisible);
+      cancelAutoRef.current = () => {};
       unregister();
       stopView();
       stopPrefs();
       integration.dispose();
       integrationRef.current = null;
       writeParsed.dispose();
+      searchResults.dispose();
+      output.dispose();
       bufferChange.dispose();
       controller.dispose();
       controllerRef.current = null;
@@ -402,6 +619,11 @@ export function TerminalView({
       setCompletion(null);
       for (const type of typingEvents) container.removeEventListener(type, markTyping, true);
       container.removeEventListener("paste", onPaste, true);
+      container.removeEventListener("mouseup", onMouseUp);
+      container.removeEventListener("contextmenu", onContextMenu);
+      osc52.dispose();
+      titleChange.dispose();
+      bell.dispose();
       window.clearTimeout(typingTimer);
       sendResize.cancel();
       scheme.removeEventListener("change", updateTheme);
@@ -414,16 +636,17 @@ export function TerminalView({
       terminal.dispose();
       terminalRef.current = null;
     };
-  }, [hostId, onSession, report, sessionId, tabKey]);
+  }, [hostId, onSession, report, sessionId, tabKey, updateMeta]);
 
   useEffect(() => {
     if (!active) return;
+    if (metaRef.current.bell) updateMeta({ bell: false });
     const frame = window.requestAnimationFrame(() => {
       fitRef.current?.fit();
       terminalRef.current?.focus();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [active]);
+  }, [active, updateMeta]);
 
   // The badge strip changes the usable height.
   useEffect(() => {
@@ -464,17 +687,74 @@ export function TerminalView({
     terminalRef.current?.focus();
   };
 
-  const find = (forward: boolean) => {
-    if (!query) return;
-    if (forward) searchRef.current?.findNext(query);
-    else searchRef.current?.findPrevious(query);
+  const find = (forward: boolean, incremental = false) => {
+    const search = searchRef.current;
+    if (!search) return;
+    if (!query) {
+      search.clearDecorations();
+      setResults(null);
+      setBadPattern(false);
+      return;
+    }
+    const options = { caseSensitive, wholeWord, regex, incremental, decorations: searchDecorations() };
+    try {
+      setBadPattern(false);
+      if (forward) search.findNext(query, options);
+      else search.findPrevious(query, options);
+    } catch {
+      // An unfinished regular expression while typing.
+      setBadPattern(true);
+      setResults(null);
+    }
   };
+
+  // Highlights follow the text and the toggles as they change.
+  useEffect(() => {
+    if (!findOpen) return;
+    find(true, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findOpen, query, caseSensitive, wholeWord, regex]);
 
   const closeFind = () => {
     setFindOpen(false);
+    setResults(null);
     searchRef.current?.clearDecorations();
     terminalRef.current?.focus();
   };
+
+  const closeMenu = useCallback(() => {
+    setMenuAt(null);
+    terminalRef.current?.focus();
+  }, []);
+  const menuItems: MenuEntry[] = [
+    {
+      key: "copy",
+      label: t.copy,
+      icon: <Copy />,
+      shortcut: shortcutHint("copy"),
+      disabled: !terminalRef.current?.hasSelection(),
+      onSelect: () => actionsRef.current.copy(),
+    },
+    {
+      key: "paste",
+      label: t.paste,
+      icon: <ClipboardPaste />,
+      shortcut: shortcutHint("paste"),
+      onSelect: () => actionsRef.current.paste(),
+    },
+    {
+      key: "find",
+      label: t.find,
+      icon: <Search />,
+      shortcut: shortcutHint("find", "terminal"),
+      onSelect: () => {
+        setFindOpen(true);
+        window.requestAnimationFrame(() => findInputRef.current?.select());
+      },
+    },
+    "separator",
+    { key: "clear", label: t.clearTerminal, icon: <Eraser />, onSelect: () => actionsRef.current.clear() },
+  ];
 
   return (
     <div ref={wrapperRef} className="relative h-full min-w-0 flex-1 bg-bg">
@@ -483,9 +763,16 @@ export function TerminalView({
         style={{ right: askOpen ? ASK_AI_WIDTH : 0 }}
       />
       {broadcast && <BroadcastBadge scope={broadcast} />}
+      <ContextMenu
+        label={t.terminalMenu}
+        at={menuAt}
+        items={menuItems}
+        onClose={closeMenu}
+      />
       {pendingPaste && (
         <PasteConfirm
           count={pendingPaste.count}
+          lines={pendingPaste.text.split(/\r\n|\r|\n/).filter(Boolean).length}
           onChoose={(all) => {
             const { text } = pendingPaste;
             setPendingPaste(null);
@@ -508,7 +795,7 @@ export function TerminalView({
         />
       )}
 
-      {!askOpen && (
+      {aiReady && !askOpen && (
         <div className="absolute top-3 right-4 z-dropdown">
           <Tooltip label={t.askAi}>
             <Button variant="quiet" size="icon-sm" aria-label={t.askAi} onClick={() => setAskOpen(true)}>
@@ -535,7 +822,8 @@ export function TerminalView({
           initial={{ opacity: 0, y: -6 }}
           animate={{ opacity: 1, y: 0, transition: { duration: duration.toggle, ease: ease.emphasized } }}
           exit={{ opacity: 0, y: -6, transition: leave }}
-          style={{ right: askOpen ? `calc(${ASK_AI_WIDTH} + 1rem)` : "3.25rem" }}
+          style={{ right: askOpen ? `calc(${ASK_AI_WIDTH} + 1rem)` : aiReady ? "3.25rem" : "1rem" }}
+          onKeyDown={(event) => event.key === "Escape" && closeFind()}
           className="material-bar absolute top-3 z-dropdown flex items-center gap-1 rounded-sm p-1 shadow-2 ring-1 ring-separator"
         >
           <Input
@@ -544,12 +832,24 @@ export function TerminalView({
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") find(!event.shiftKey);
-              if (event.key === "Escape") closeFind();
             }}
             placeholder={t.find}
             aria-label={t.find}
-            className="h-7 w-52"
+            aria-invalid={badPattern || undefined}
+            className={cn("h-7 w-44", badPattern && "text-danger")}
           />
+          <ToggleButton label={t.findCaseSensitive} on={caseSensitive} onClick={() => setCaseSensitive((on) => !on)}>
+            <CaseSensitive />
+          </ToggleButton>
+          <ToggleButton label={t.findWholeWord} on={wholeWord} onClick={() => setWholeWord((on) => !on)}>
+            <WholeWord />
+          </ToggleButton>
+          <ToggleButton label={t.findRegex} on={regex} onClick={() => setRegex((on) => !on)}>
+            <Regex />
+          </ToggleButton>
+          <span aria-live="polite" className="min-w-12 px-1 text-center text-callout tabular-nums text-label-2">
+            {findCount(query, results)}
+          </span>
           <IconButton label={t.findPrevious} onClick={() => find(false)}>
             <ChevronUp />
           </IconButton>
@@ -603,15 +903,23 @@ export function TerminalView({
                   ? isSerialPermissionError(status.error)
                     ? t.serialPermissionDenied
                     : status.error
-                  : hostId
-                    ? t.enterToReconnect
-                    : t.enterToReopen}
+                  : autoRetry === "gaveup"
+                    ? t.autoReconnectGaveUp
+                    : hostId
+                      ? t.enterToReconnect
+                      : t.enterToReopen}
               </p>
+              {autoRetry && autoRetry !== "gaveup" && <AutoReconnectCountdown plan={autoRetry} />}
             </div>
             <Button variant="primary" size="sm" onClick={() => startRef.current()}>
               <RotateCw />
-              {hostId ? t.reconnect : t.reopen}
+              {autoRetry && autoRetry !== "gaveup" ? t.autoReconnectNow : hostId ? t.reconnect : t.reopen}
             </Button>
+            {autoRetry && autoRetry !== "gaveup" && (
+              <Button variant="secondary" size="sm" onClick={() => cancelAutoRef.current()}>
+                {t.autoReconnectCancel}
+              </Button>
+            )}
             {hostId && (
               <Button variant="secondary" size="sm" onClick={() => void openExternal(hostId)}>
                 <SquareArrowOutUpRight />
@@ -623,6 +931,21 @@ export function TerminalView({
       )}
       </AnimatePresence>
     </div>
+  );
+}
+
+/** "Reconnecting in 4s (attempt 2)", counting down each second. */
+function AutoReconnectCountdown({ plan }: { plan: RetryPlan }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [plan]);
+  return (
+    <p className="text-callout text-label-2" aria-live="polite">
+      {t.autoReconnectIn.replace("{seconds}", String(secondsLeft(plan, now))).replace("{attempt}", String(plan.attempt))}
+    </p>
   );
 }
 
@@ -638,6 +961,40 @@ function IconButton({
   return (
     <Tooltip label={label}>
       <Button variant="quiet" size="icon-sm" aria-label={label} onClick={onClick}>
+        {children}
+      </Button>
+    </Tooltip>
+  );
+}
+
+/** "3/17" for the current match, the count alone when it is unknown (past the addon's limit), or "No results". */
+function findCount(query: string, results: { index: number; count: number } | null): string {
+  if (!query || !results) return "";
+  if (results.count === 0) return t.findNoMatch;
+  return results.index < 0 ? `${results.count}+` : `${results.index + 1}/${results.count}`;
+}
+
+function ToggleButton({
+  label,
+  on,
+  onClick,
+  children,
+}: {
+  label: string;
+  on: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip label={label}>
+      <Button
+        variant="quiet"
+        size="icon-sm"
+        aria-label={label}
+        aria-pressed={on}
+        onClick={onClick}
+        className={cn(on && "bg-accent-soft text-accent hover:text-accent")}
+      >
         {children}
       </Button>
     </Tooltip>

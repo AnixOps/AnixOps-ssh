@@ -46,6 +46,10 @@ pub struct RemoteFile {
     /// As printed by the server, e.g. `Oct 14 09:12` or `Jan  3  2025`.
     pub modified: String,
     pub permissions: String,
+    /// The owner and group as the server printed them (a name or a number),
+    /// when it did.
+    pub owner: Option<String>,
+    pub group: Option<String>,
 }
 
 /// Arguments shared by browsing and transfer processes.
@@ -104,6 +108,11 @@ pub fn quote(path: &str) -> Result<String, OpenSshError> {
     }
     quoted.push('"');
     Ok(quoted)
+}
+
+/// The `sftp` command that sets `path` to `mode` (octal, up to `7777`).
+pub fn chmod_command(mode: u32, path: &str) -> Result<String, OpenSshError> {
+    Ok(format!("chmod {:o} {}", mode & 0o7777, quote(path)?))
 }
 
 /// Joins a remote directory and a name with `/`.
@@ -193,6 +202,8 @@ fn parse_listing_line(line: &str, prefix: &str) -> Option<RemoteFile> {
         size: fields[4].parse().unwrap_or(0),
         modified: format!("{} {} {}", fields[5], fields[6], fields[7]),
         permissions: permissions.to_owned(),
+        owner: Some(fields[2].to_owned()).filter(|owner| !owner.is_empty()),
+        group: Some(fields[3].to_owned()).filter(|group| !group.is_empty()),
     })
 }
 
@@ -326,6 +337,45 @@ impl SftpSession {
             .map(drop)
     }
 
+    /// Sets the permission bits of `path`, and of everything in it when
+    /// `recursive` is set (`sftp` has no recursive `chmod`, so the folder is
+    /// walked). Links are skipped: `chmod` would change what they point to.
+    pub fn chmod(&mut self, path: &str, mode: u32, recursive: bool) -> Result<(), OpenSshError> {
+        self.run(&chmod_command(mode, path)?)?;
+        if !recursive {
+            return Ok(());
+        }
+        let mut pending = vec![path.to_owned()];
+        while let Some(dir) = pending.pop() {
+            let listing = match self.list(&dir) {
+                Ok(listing) => listing,
+                // `path` is a file, or a link to one: nothing is inside it.
+                Err(_) if dir == path => return Ok(()),
+                Err(error) => return Err(error),
+            };
+            for file in listing {
+                if file.name.contains('/') {
+                    return Err(OpenSshError::Failed(format!(
+                        "{dir} lists an entry that cannot be changed: {:?}",
+                        file.name
+                    )));
+                }
+                let child = join_remote(&dir, &file.name);
+                match file.kind {
+                    RemoteFileKind::Symlink => {}
+                    RemoteFileKind::Directory => {
+                        self.run(&chmod_command(mode, &child)?)?;
+                        pending.push(child);
+                    }
+                    _ => {
+                        self.run(&chmod_command(mode, &child)?)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Runs one command and returns its standard output. Anything the
     /// command writes to standard error is treated as a failure.
     fn run(&mut self, command: &str) -> Result<String, OpenSshError> {
@@ -415,6 +465,16 @@ fn forward_lines(
     });
 }
 
+/// The batch command for a transfer: recursive, and keeping permissions
+/// and modification times (`-p`).
+fn transfer_command(upload: bool, local: &str, remote: &str) -> Result<String, OpenSshError> {
+    Ok(if upload {
+        format!("put -pr {} {}\n", quote(local)?, quote(remote)?)
+    } else {
+        format!("get -pr {} {}\n", quote(remote)?, quote(local)?)
+    })
+}
+
 /// Calls `line` for every line of `stream`, without the line break, until the
 /// stream ends or `line` returns false. Bytes that are not UTF-8 (a name in
 /// Latin-1, say) are replaced rather than ending the stream, which would
@@ -449,11 +509,7 @@ pub fn spawn_transfer(
     let local = local
         .to_str()
         .ok_or_else(|| OpenSshError::Failed("local path is not valid UTF-8".into()))?;
-    let command = if upload {
-        format!("put -r {} {}\n", quote(local)?, quote(remote)?)
-    } else {
-        format!("get -r {} {}\n", quote(remote)?, quote(local)?)
-    };
+    let command = transfer_command(upload, local, remote)?;
     let mut child = hide_window(&mut Command::new(openssh.sftp_path()?))
         .args(sftp_args(connection, true)?)
         .envs(env.iter().cloned())
@@ -470,6 +526,18 @@ pub fn spawn_transfer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transfers_keep_permissions_and_times() {
+        assert_eq!(
+            transfer_command(true, "/tmp/a b", "/srv/x").unwrap(),
+            "put -pr \"/tmp/a b\" \"/srv/x\"\n"
+        );
+        assert_eq!(
+            transfer_command(false, "/tmp/x", "/srv/run.sh").unwrap(),
+            "get -pr \"/srv/run.sh\" \"/tmp/x\"\n"
+        );
+    }
 
     #[test]
     fn lines_that_are_not_utf8_do_not_end_the_stream() {
@@ -494,6 +562,24 @@ mod tests {
             false
         });
         assert_eq!(first.len(), 1);
+    }
+
+    #[test]
+    fn chmod_uses_octal_and_quotes_the_path() {
+        assert_eq!(
+            chmod_command(0o755, "/srv/my app").unwrap(),
+            "chmod 755 \"/srv/my app\""
+        );
+        assert_eq!(chmod_command(0o4755, "/a").unwrap(), "chmod 4755 \"/a\"");
+        assert_eq!(chmod_command(0o10_0644, "/a").unwrap(), "chmod 644 \"/a\"");
+        assert!(chmod_command(0o644, "/a\nb").is_err());
+    }
+
+    #[test]
+    fn listings_report_owner_and_group() {
+        let files = parse_listing("-rw-r--r--    1 deploy   staff      12 Oct 13 18:40 a.txt\n");
+        assert_eq!(files[0].owner.as_deref(), Some("deploy"));
+        assert_eq!(files[0].group.as_deref(), Some("staff"));
     }
 
     #[test]
