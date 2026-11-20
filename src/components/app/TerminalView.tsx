@@ -21,6 +21,8 @@ import {
   copyText,
   isVaultLocked,
   loadHosts,
+  onAskpass,
+  onHostKey,
   openFiles,
   openExternal,
   openSession,
@@ -31,6 +33,15 @@ import {
   type SessionHandle,
   type SshEngine,
 } from "@/lib/backend";
+import {
+  beginRetry,
+  decideRetry,
+  nextRetry,
+  nudgeRetry,
+  retryNow,
+  secondsLeft,
+  type RetryPlan,
+} from "@/lib/autoReconnect";
 import { isSerialPermissionError } from "@/lib/serialUi";
 import { requestVaultUnlock } from "@/lib/vaultUi";
 import { CompletionController, type ViewState } from "@/lib/completion/controller";
@@ -108,6 +119,9 @@ export function TerminalView({
   const searchRef = useRef<SearchAddon | null>(null);
   const sessionRef = useRef<SessionHandle | null>(null);
   const startRef = useRef<() => void>(() => {});
+  const cancelAutoRef = useRef<() => void>(() => {});
+  /** The next automatic attempt, or "gaveup" once the retries ran out. */
+  const [autoRetry, setAutoRetry] = useState<RetryPlan | "gaveup" | null>(null);
   const [status, setStatus] = useState<SessionStatus>({ state: "connecting" });
   /** Set while the session is over, so Enter reconnects instead of typing. */
   const endedRef = useRef(false);
@@ -404,6 +418,69 @@ export function TerminalView({
     );
     terminal.onResize(({ cols, rows }) => sendResize(cols, rows));
 
+    // Automatic reconnect: a lost connection is retried with backoff, but
+    // only after a session that was open, and never past a question the
+    // user had to answer (password, passphrase, host key).
+    let everConnected = false;
+    let connectedAt: number | undefined;
+    let prompted = false;
+    let closing = false;
+    let plan: RetryPlan | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stopTimer = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = undefined;
+    };
+    const schedule = (next: RetryPlan) => {
+      plan = next;
+      stopTimer();
+      setAutoRetry(next);
+      timer = setTimeout(() => {
+        timer = undefined;
+        runStart(true);
+      }, Math.max(0, next.dueAt - Date.now()));
+    };
+    const onEnded = (end: SessionEnd & { error?: string }) => {
+      const decision = decideRetry(end, {
+        enabled: settings().terminalAutoReconnect && !closing,
+        remote: hostId !== null,
+        wasConnected: everConnected,
+        prompted,
+      });
+      if (!decision.retry) {
+        plan = null;
+        setAutoRetry(null);
+        return;
+      }
+      const now = Date.now();
+      // A session that held for a while starts a fresh chain; one that dropped
+      // again at once keeps counting, so a flapping link still backs off.
+      const stable = connectedAt !== undefined && now - connectedAt >= 10_000;
+      const next = plan && !stable ? nextRetry(plan, now) : beginRetry(now);
+      if (next) schedule(next);
+      else {
+        plan = null;
+        setAutoRetry("gaveup");
+      }
+    };
+    const unprompted = [
+      onAskpass(() => (prompted = true)),
+      onHostKey(() => (prompted = true)),
+    ];
+    const onOnline = () => {
+      if (plan && timer !== undefined) schedule(nudgeRetry(Date.now()));
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && plan && timer !== undefined) schedule(retryNow(plan, Date.now()));
+    };
+    window.addEventListener("online", onOnline);
+    document.addEventListener("visibilitychange", onVisible);
+    cancelAutoRef.current = () => {
+      stopTimer();
+      plan = null;
+      setAutoRetry(null);
+    };
+
     // Only the first start may reattach; "Reconnect" opens a fresh session.
     let reattach = sessionId;
     const start = () => {
@@ -411,6 +488,14 @@ export function TerminalView({
       report({ state: "connecting" });
       let connected = false;
       let exited = false;
+      connectedAt = undefined;
+      prompted = false;
+      const up = () => {
+        connected = true;
+        everConnected = true;
+        connectedAt = Date.now();
+        setAutoRetry(null);
+      };
       // Known once the session is open; the first output may come sooner.
       let engine: EngineInfo | undefined;
       const onEvent = (event: SessionEvent) => {
@@ -418,14 +503,14 @@ export function TerminalView({
         if (event.kind === "data") {
           pump.push(event.data);
           if (!connected) {
-            connected = true;
+            up();
             report({ state: "connected", engine });
           }
         } else if (event.kind === "reconnecting") {
           if (!exited) report({ state: "reconnecting" });
         } else if (event.kind === "resumed") {
           if (!exited) {
-            connected = true;
+            up();
             report({ state: "connected", engine });
             // The view may have been resized while the link was down.
             sessionRef.current?.resize(terminal.cols, terminal.rows);
@@ -434,6 +519,7 @@ export function TerminalView({
           exited = true;
           sessionRef.current = null;
           report({ state: "exited", code: event.code, reason: event.reason, signal: event.signal });
+          onEnded({ code: event.code, reason: event.reason, signal: event.signal });
         }
       };
       const attaching = reattach;
@@ -458,7 +544,7 @@ export function TerminalView({
               // The replay was produced for whatever size the session had.
               session.resize(terminal.cols, terminal.rows);
               if (!connected) {
-                connected = true;
+                up();
                 report({ state: "connected", engine });
               }
             }
@@ -466,7 +552,10 @@ export function TerminalView({
         })
         .catch((reason) => {
           if (isVaultLocked(reason)) requestVaultUnlock();
-          if (!disposed) report({ state: "exited", code: null, error: String(reason) });
+          if (!disposed) {
+            report({ state: "exited", code: null, error: String(reason) });
+            onEnded({ code: null, error: String(reason) });
+          }
         });
     };
     const unregister = registerTerminal(tabKey, {
@@ -482,17 +571,25 @@ export function TerminalView({
       paste: (text) => terminal.paste(text),
       connected: () => sessionRef.current !== null,
       close() {
+        closing = true;
+        stopTimer();
         sessionRef.current?.close();
         sessionRef.current = null;
       },
     });
-    startRef.current = () => {
+    const runStart = (auto: boolean) => {
+      stopTimer();
+      if (!auto) {
+        plan = null;
+        setAutoRetry(null);
+      }
       // Undo modes the old session left on (alternate screen, mouse
       // reporting, bracketed paste) before the new one starts.
       pump.push(TERMINAL_RESET + "\r\n");
       start();
       terminal.focus();
     };
+    startRef.current = () => runStart(false);
     start();
 
     const observer = new ResizeObserver(() => {
@@ -511,6 +608,11 @@ export function TerminalView({
 
     return () => {
       disposed = true;
+      stopTimer();
+      for (const stop of unprompted) stop();
+      window.removeEventListener("online", onOnline);
+      document.removeEventListener("visibilitychange", onVisible);
+      cancelAutoRef.current = () => {};
       unregister();
       stopView();
       stopPrefs();
@@ -809,15 +911,23 @@ export function TerminalView({
                   ? isSerialPermissionError(status.error)
                     ? t.serialPermissionDenied
                     : status.error
-                  : hostId
-                    ? t.enterToReconnect
-                    : t.enterToReopen}
+                  : autoRetry === "gaveup"
+                    ? t.autoReconnectGaveUp
+                    : hostId
+                      ? t.enterToReconnect
+                      : t.enterToReopen}
               </p>
+              {autoRetry && autoRetry !== "gaveup" && <AutoReconnectCountdown plan={autoRetry} />}
             </div>
             <Button variant="primary" size="sm" onClick={() => startRef.current()}>
               <RotateCw />
-              {hostId ? t.reconnect : t.reopen}
+              {autoRetry && autoRetry !== "gaveup" ? t.autoReconnectNow : hostId ? t.reconnect : t.reopen}
             </Button>
+            {autoRetry && autoRetry !== "gaveup" && (
+              <Button variant="secondary" size="sm" onClick={() => cancelAutoRef.current()}>
+                {t.autoReconnectCancel}
+              </Button>
+            )}
             {hostId && (
               <Button variant="secondary" size="sm" onClick={() => void openExternal(hostId)}>
                 <SquareArrowOutUpRight />
@@ -849,6 +959,21 @@ function FindToggle({
         {children}
       </Button>
     </Tooltip>
+  );
+}
+
+/** "Reconnecting in 4s (attempt 2)", counting down each second. */
+function AutoReconnectCountdown({ plan }: { plan: RetryPlan }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [plan]);
+  return (
+    <p className="text-callout text-label-2" aria-live="polite">
+      {t.autoReconnectIn.replace("{seconds}", String(secondsLeft(plan, now))).replace("{attempt}", String(plan.attempt))}
+    </p>
   );
 }
 

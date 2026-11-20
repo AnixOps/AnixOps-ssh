@@ -170,6 +170,11 @@ impl LinkHandler for Handler {
     fn lost(&self) {
         eprintln!("EasySSH: lost the connection to easysshd; reconnecting");
     }
+
+    fn resumed(&self) {
+        // A restarted daemon has none of the old one's tunnels.
+        crate::tunnels::resync_remote(&self.app);
+    }
 }
 
 /// Connects to the daemon, starting it if needed. Blocks for at most a few

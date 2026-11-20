@@ -20,6 +20,7 @@ import {
   previewSnapshot,
 } from "./preview";
 import { previewMonitorSample, previewMonitorSignal } from "./previewMonitor";
+import { previewUpdateCheck, previewUpdateSetAuto, previewUpdateStatus } from "./previewUpdate";
 import { previewSession } from "./previewSession";
 import type { ExitReason } from "./terminalSession";
 import {
@@ -38,6 +39,7 @@ import type {
   ImportFormat,
 } from "./proto.gen";
 import { UNAVAILABLE, type PendingReports, type TelemetryStatus } from "./telemetry";
+import type { UpdateStatus } from "./update";
 
 export type HostSource = "saved" | "ssh_config";
 
@@ -201,13 +203,20 @@ export type {
 export type ImportSource = { kind: "file"; path: string } | { kind: "ssh_config" } | { kind: "service"; request: ServiceRequest };
 
 /** The services hosts can be imported from. */
-export type ServiceId = "control";
+export type ServiceId = "control" | "jumpserver";
 
 /** The plain settings of a service import (what the form remembers). */
 export interface ServiceForm {
   url: string;
   default_user: string;
   identity_file: string | null;
+  /** JumpServer only: */
+  access_key_id: string;
+  org_id: string;
+  gateway: boolean;
+  gateway_host: string;
+  gateway_port: number;
+  gateway_user: string;
 }
 
 /** What the form opens with: the saved settings, and whether a credential is saved in the vault. */
@@ -800,8 +809,12 @@ export type TunnelStatus =
   | { state: "stopped" }
   | { state: "starting" }
   /** `port`: the port that listens (it differs from the saved one for a
-   *  tunnel saved with port 0, any free port). */
-  | { state: "running"; port?: number }
+   *  tunnel saved with port 0, any free port). `lastError`/`errorCount`:
+   *  connections the forward accepted but could not pass on (the target
+   *  refused, the server prohibits it). */
+  | { state: "running"; port?: number; lastError?: string; errorCount?: number }
+  /** The connection dropped; the forward is closed while it reconnects. */
+  | { state: "reconnecting"; message?: string }
   | { state: "failed"; message: string };
 
 export interface Tunnel {
@@ -908,6 +921,17 @@ const previewTunnels: Tunnel[] = [
     targetHost: "grafana.internal",
     targetPort: 3000,
     status: { state: "failed", message: "bind [127.0.0.1]:3000: Address already in use" },
+  },
+  {
+    id: "tunnel-4",
+    name: "内网 Redis",
+    hostId: "3",
+    kind: "local",
+    bindAddress: null,
+    bindPort: 16379,
+    targetHost: "redis.internal",
+    targetPort: 6379,
+    status: { state: "running", port: 16379, lastError: "redis.internal:6379: connect failed", errorCount: 2 },
   },
 ];
 
@@ -1034,6 +1058,30 @@ export async function telemetryPending(): Promise<PendingReports> {
 export async function telemetryDeletePending(): Promise<number> {
   if (!isTauri) return 0;
   return invoke<number>("telemetry_delete_pending");
+}
+
+/* Update check (check and notify only); see update.ts and crates/easyssh-update. */
+
+export async function updateStatus(): Promise<UpdateStatus> {
+  if (!isTauri) return previewUpdateStatus();
+  return invoke<UpdateStatus>("update_status");
+}
+
+export async function updateSetAuto(on: boolean): Promise<UpdateStatus> {
+  if (!isTauri) return previewUpdateSetAuto(on);
+  return invoke<UpdateStatus>("update_set_auto", { on });
+}
+
+/** Rejects with the reason when the feed could not be fetched or verified. */
+export async function updateCheck(): Promise<UpdateStatus> {
+  if (!isTauri) return previewUpdateCheck();
+  return invoke<UpdateStatus>("update_check");
+}
+
+/** Opens the verified release in the browser; the backend names the URL. */
+export async function updateOpen(): Promise<void> {
+  if (!isTauri) return;
+  await invoke("update_open");
 }
 
 /** The Rust side scrubs `message` and `stack` and decides whether to keep them. */

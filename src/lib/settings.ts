@@ -22,6 +22,8 @@ export interface Settings {
   terminalOsc52: boolean;
   /** Font family, line height and letter spacing (the size is `terminalFontSize`). */
   terminalFont: TerminalFontSettings;
+  /** Reconnect by itself, with backoff, when a connection drops. */
+  terminalAutoReconnect: boolean;
   /** The SSH engine for hosts that follow the global setting: the built-in
    * engine unless OpenSSH was chosen (an advanced option kept for compatibility). */
   sshEngine: SshEngine;
@@ -41,6 +43,7 @@ let current: Settings = {
   terminalCopyOnSelect: false,
   terminalOsc52: true,
   terminalFont: defaultTerminalFont,
+  terminalAutoReconnect: true,
   sshEngine: "russh",
   crashReports: null,
   usageStats: false,
