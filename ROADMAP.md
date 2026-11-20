@@ -20,6 +20,7 @@ The v2 direction (approved 2026-11-17, shipped in 2.0) is described in
 | v2.0 | v2 architecture | Background service, built-in russh engine (default) with OpenSSH fallback, SQLite store and importers, encrypted vault with Windows Hello and Touch ID, end-to-end encrypted sync and team vaults, splits, shell integration, completion, AI with your own key, encrypted session logs, serial ports, AnixOps Design 1.2.0 |
 | v2.1 | Keys and mobile | FIDO2 security keys on every desktop platform, vault unlock with a FIDO2 key, mobile app preview (Android and iOS) with terminal, files, forwards, vault and sync |
 | v2.2 | Parity and AnixOps integration | Behaviour aligned with OpenSSH and mainstream clients (sign-in order, known_hosts, ssh_config, terminal modes, SFTP fidelity, tunnels and connections that recover), terminal comfort (right-click, links, OSC 52, auto-reconnect), server monitor, imports from AnixOps Control, Ansible and JumpServer, outbound proxies, signed update feed |
+| v2.3 | Daily-use features | Patch releases 2.2.1 to 2.2.3 (transfer progress, Pageant, mobile jump-host chains, terminal fonts and find, file multi-select and chmod), then quick connect and `anixops-ssh://` links, remote editing in a local editor, files pane follows the terminal, rz/sz, server monitor on OpenSSH-engine hosts and on mobile, Unix socket forwards, X11 through OpenSSH |
 
 ## What drives the work
 
@@ -61,7 +62,7 @@ first. Details per phase are in
 
 ## 2.2.x and 2.3.0
 
-Planned 2026-11-20; details in [docs/roadmap-2.2.md](docs/roadmap-2.2.md).
+Planned 2026-11-20 and shipped the same day as 2.2.1, 2.2.2, 2.2.3 and 2.3.0; details in [docs/roadmap-2.2.md](docs/roadmap-2.2.md). Left for later: trzsz.
 
 | Version | Theme | Scope |
 |---|---|---|
