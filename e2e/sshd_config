@@ -6,6 +6,9 @@ UsePAM yes
 PermitRootLogin no
 PrintMotd no
 AllowTcpForwarding yes
+AllowStreamLocalForwarding yes
+# A -R socket left by an earlier run is replaced.
+StreamLocalBindUnlink yes
 Subsystem sftp /usr/lib/openssh/sftp-server
 
 PasswordAuthentication no

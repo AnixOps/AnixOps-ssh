@@ -29,6 +29,10 @@ pub struct HostFacts {
     pub local_command: bool,
     pub remote_command: bool,
     pub forwards: bool,
+    /// `ForwardX11 yes`.
+    pub x11: bool,
+    /// `ForwardX11Trusted yes` (`-Y`); `ssh` applies it by itself.
+    pub x11_trusted: bool,
     pub pubkey: bool,
     pub password: bool,
     pub keyboard_interactive: bool,
@@ -66,6 +70,8 @@ pub fn parse_ssh_g(text: &str) -> Option<HostFacts> {
         local_command: false,
         remote_command: false,
         forwards: false,
+        x11: false,
+        x11_trusted: false,
         pubkey: true,
         password: true,
         keyboard_interactive: true,
@@ -91,6 +97,8 @@ pub fn parse_ssh_g(text: &str) -> Option<HostFacts> {
             "localcommand" if set(value) => facts.local_command = true,
             "remotecommand" if set(value) => facts.remote_command = true,
             "localforward" | "remoteforward" | "dynamicforward" => facts.forwards = true,
+            "forwardx11" => facts.x11 = yes(value),
+            "forwardx11trusted" => facts.x11_trusted = yes(value),
             "pubkeyauthentication" => facts.pubkey = yes(value),
             "passwordauthentication" => facts.password = yes(value),
             "kbdinteractiveauthentication" => facts.keyboard_interactive = yes(value),
@@ -168,6 +176,9 @@ impl HostFacts {
         }
         if self.forwards {
             found.push(Unsupported::InlineForward);
+        }
+        if self.x11 {
+            found.push(Unsupported::X11Forwarding);
         }
         if !existing(&self.certificate_files).is_empty() {
             found.push(Unsupported::Certificate);
@@ -376,6 +387,8 @@ pub struct RusshPlan {
 pub struct Resolution {
     pub choice: Choice,
     pub plan: Option<RusshPlan>,
+    /// The host forwards X11 (the host's toggle or `ForwardX11 yes`).
+    pub x11: bool,
 }
 
 fn collect_hops(
@@ -390,7 +403,13 @@ fn collect_hops(
     for hop in spec.split(',').map(str::trim).filter(|h| !h.is_empty()) {
         let (user, host, port) = split_hop(hop);
         let facts = run_ssh_g(user.as_deref(), port, &host)?;
-        found.extend(facts.unsupported());
+        // `ForwardX11` on a jump host means nothing: only the target's counts.
+        found.extend(
+            facts
+                .unsupported()
+                .into_iter()
+                .filter(|item| *item != Unsupported::X11Forwarding),
+        );
         if let Some(inner) = &facts.proxy_jump {
             collect_hops(inner, depth + 1, found, hops)?;
         }
@@ -407,6 +426,7 @@ pub fn resolve(connection: &Connection, global: SshEngine) -> Resolution {
         return Resolution {
             choice: choose_engine(global, preference, &[]),
             plan: None,
+            x11: connection.forward_x11,
         };
     }
     let mut found = unsupported_by_connection(connection);
@@ -418,7 +438,11 @@ pub fn resolve(connection: &Connection, global: SshEngine) -> Resolution {
                 reason: extra,
             };
         }
-        Resolution { choice, plan: None }
+        Resolution {
+            choice,
+            plan: None,
+            x11: connection.forward_x11,
+        }
     };
 
     let target_facts = match &connection.target {
@@ -470,8 +494,13 @@ pub fn resolve(connection: &Connection, global: SshEngine) -> Resolution {
         }
     }
     let choice = choose_engine(global, preference, &found);
+    let x11 = found.contains(&Unsupported::X11Forwarding);
     if choice.engine != SshEngine::Russh {
-        return Resolution { choice, plan: None };
+        return Resolution {
+            choice,
+            plan: None,
+            x11,
+        };
     }
     let target = HostSpec::from_facts(&facts, connection.name.clone());
     let key = Key {
@@ -483,6 +512,7 @@ pub fn resolve(connection: &Connection, global: SshEngine) -> Resolution {
     Resolution {
         choice,
         plan: Some(RusshPlan { key, hops, target }),
+        x11,
     }
 }
 
@@ -562,6 +592,26 @@ proxycommand none
                 Unsupported::InlineForward
             ]
         );
+    }
+
+    #[test]
+    fn forwardx11_in_the_config_needs_openssh() {
+        let facts = parse_ssh_g("hostname h\nforwardx11 yes\nforwardx11trusted yes\n").unwrap();
+        assert!(facts.x11 && facts.x11_trusted);
+        assert_eq!(facts.unsupported(), vec![Unsupported::X11Forwarding]);
+        let off = parse_ssh_g("hostname h\nforwardx11 no\nforwardx11trusted no\n").unwrap();
+        assert!(!off.x11 && !off.x11_trusted);
+        assert!(off.unsupported().is_empty());
+    }
+
+    #[test]
+    fn socket_path_forwards_in_the_config_need_openssh() {
+        let facts = parse_ssh_g(
+            "hostname h\nlocalforward 8080 /run/docker.sock\n\
+             remoteforward /run/app.sock localhost:3000\n",
+        )
+        .unwrap();
+        assert_eq!(facts.unsupported(), vec![Unsupported::InlineForward]);
     }
 
     #[test]

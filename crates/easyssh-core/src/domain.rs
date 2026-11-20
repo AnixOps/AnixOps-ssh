@@ -235,6 +235,10 @@ pub struct Connection {
     /// Per-host engine override; absent means `auto`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<EnginePreference>,
+    /// X11 forwarding (`ssh -X`); runs the host on OpenSSH, which the
+    /// built-in engine cannot do. Absent means off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub forward_x11: bool,
 }
 
 impl Connection {
@@ -268,6 +272,7 @@ impl Connection {
             created_at: now,
             updated_at: now,
             engine: None,
+            forward_x11: false,
         }
     }
 }

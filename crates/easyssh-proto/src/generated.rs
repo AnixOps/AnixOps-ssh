@@ -207,6 +207,9 @@ pub struct Connection {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub engine: ::std::option::Option<EnginePreference>,
     pub favorite: bool,
+    ///X11 forwarding (ssh -X); the host runs on the OpenSSH engine. Absent means off.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub forward_x11: ::std::option::Option<bool>,
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub group_id: ::std::option::Option<::std::string::String>,
     pub id: ::std::string::String,

@@ -66,6 +66,8 @@ export interface HostFields {
   engine?: EnginePreference | null;
   /** Opt-in: send the shell integration script after login. */
   shellIntegration: boolean;
+  /** X11 forwarding (`ssh -X`); the host then connects through OpenSSH. */
+  forwardX11?: boolean;
   /** Set for a serial port; the SSH fields are then unused. */
   serial?: SerialFields | null;
 }
@@ -863,6 +865,17 @@ const previewTunnels: Tunnel[] = [
     targetHost: "grafana.internal",
     targetPort: 3000,
     status: { state: "failed", message: "bind [127.0.0.1]:3000: Address already in use" },
+  },
+  {
+    id: "tunnel-4",
+    name: "Docker",
+    hostId: "1",
+    kind: "local",
+    bindAddress: null,
+    bindPort: 2375,
+    targetHost: "/run/docker.sock",
+    targetPort: null,
+    status: { state: "stopped" },
   },
 ];
 

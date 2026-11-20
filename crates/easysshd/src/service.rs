@@ -1350,8 +1350,10 @@ impl Daemon {
             }
         }
         let mut chosen = None;
+        let mut x11 = false;
         if let Some(host_id) = &p.host_id {
             let (_, resolution) = self.resolution(host_id).await?;
+            x11 = resolution.x11;
             if let Some(plan) = resolution.plan {
                 // The built-in engine: connecting may involve prompts, so
                 // it finishes in the background and replies then.
@@ -1369,6 +1371,14 @@ impl Daemon {
         }
         let engine = chosen.map(|c| ("openssh", c.reason));
         let session = self.spawn_pty(&p, agent_sock).await?;
+        if x11 {
+            if let Some(hint) = engine::choice::x11_display_hint(
+                std::env::var("DISPLAY").ok().as_deref(),
+                std::env::consts::OS,
+            ) {
+                session.notice(&format!("\r\n[AnixOps SSH] {hint}\r\n\r\n"));
+            }
+        }
         self.publish(conn, outbox, req_id, session, engine).await;
         Ok(Outcome::Replied)
     }

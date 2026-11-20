@@ -90,6 +90,27 @@ impl client::Handler for ClientHandler {
         }
         Ok(())
     }
+
+    async fn server_channel_open_forwarded_streamlocal(
+        &mut self,
+        channel: Channel<Msg>,
+        socket_path: &str,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> std::result::Result<(), Error> {
+        tracing::debug!("forwarded-streamlocal {socket_path}");
+        match self.forwards.get_socket(socket_path) {
+            Some(target) => {
+                tokio::spawn(target.serve(channel, reply));
+            }
+            None => {
+                reply
+                    .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                    .await
+            }
+        }
+        Ok(())
+    }
 }
 
 fn details(
@@ -401,6 +422,57 @@ impl Session {
         tokio::time::timeout(CHANNEL_OPEN_TIMEOUT, open)
             .await
             .unwrap_or(Err(russh::Error::ConnectionTimeout))
+    }
+
+    /// A `direct-streamlocal@openssh.com` channel to a Unix socket on the
+    /// server, with the same time limit as [`Session::open_direct_tcpip`].
+    pub(crate) async fn open_direct_streamlocal(
+        &self,
+        path: &str,
+    ) -> std::result::Result<Channel<Msg>, russh::Error> {
+        let open = self
+            .inner
+            .handle
+            .channel_open_direct_streamlocal(path.to_owned());
+        tokio::time::timeout(CHANNEL_OPEN_TIMEOUT, open)
+            .await
+            .unwrap_or(Err(russh::Error::ConnectionTimeout))
+    }
+
+    /// A channel to a forward's target as seen from the server.
+    pub(crate) async fn open_endpoint(
+        &self,
+        target: &crate::forward::Endpoint,
+        origin: std::net::SocketAddr,
+    ) -> std::result::Result<Channel<Msg>, russh::Error> {
+        match target {
+            crate::forward::Endpoint::Tcp { host, port } => {
+                self.open_direct_tcpip(host, *port, origin).await
+            }
+            crate::forward::Endpoint::Unix(path) => self.open_direct_streamlocal(path).await,
+        }
+    }
+
+    pub(crate) async fn request_remote_socket_forward(&self, path: &str) -> Result<()> {
+        match self.inner.handle.streamlocal_forward(path.to_owned()).await {
+            Ok(()) => Ok(()),
+            Err(russh::Error::RequestDenied) => Err(Error::Forward(format!(
+                "the server refused to listen on {path}"
+            ))),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub(crate) async fn cancel_remote_socket_forward(&self, path: &str) -> Result<()> {
+        match self
+            .inner
+            .handle
+            .cancel_streamlocal_forward(path.to_owned())
+            .await
+        {
+            Ok(()) | Err(russh::Error::RequestDenied) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub(crate) async fn request_remote_forward(&self, bind: &str, port: u16) -> Result<u32> {

@@ -365,6 +365,20 @@ export function HostEditor({
           </div>
 
           {!serialOn && (
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-callout text-label-1">{t.hostForwardX11}</p>
+                <p className="mt-0.5 text-callout text-label-3">{t.hostForwardX11Hint}</p>
+              </div>
+              <Switch
+                on={fields.forwardX11 ?? false}
+                label={t.hostForwardX11}
+                onClick={() => set("forwardX11", !fields.forwardX11)}
+              />
+            </div>
+          )}
+
+          {!serialOn && (
             <section aria-labelledby="host-editor-credentials" className="space-y-3 rounded-md bg-fill-1 p-3">
               <div>
                 <h3 id="host-editor-credentials" className="text-callout text-label-2">

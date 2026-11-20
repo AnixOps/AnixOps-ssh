@@ -95,6 +95,7 @@ fn host_json(connection: &Connection) -> Option<Value> {
             "notes": connection.notes,
             "engine": null,
             "shellIntegration": false,
+            "forwardX11": false,
             "serial": null,
         },
     }))

@@ -4,7 +4,7 @@
 use crate::askpass;
 use crate::daemon::{self, DaemonState};
 use crate::hosts::{self, load_config, open_store};
-use easyssh_core::tunnel::{bare_host, spawn_tunnel};
+use easyssh_core::tunnel::{bare_host, is_socket_path, spawn_tunnel};
 use easyssh_core::{OpenSsh, Tunnel, TunnelKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -217,6 +217,14 @@ pub fn tunnel_save(input: TunnelInput) -> Result<String, String> {
         target_port: if dynamic { None } else { input.target_port },
     };
     tunnel.forward_spec().map_err(|error| error.to_string())?;
+    // A Unix socket to listen on here exists only on Unix; a socket on the
+    // server (or a remote forward's listen path) works from anywhere.
+    if cfg!(windows)
+        && tunnel.kind == TunnelKind::Local
+        && tunnel.bind_address.as_deref().is_some_and(is_socket_path)
+    {
+        return Err("a local Unix socket is not available on Windows".to_owned());
+    }
     hosts::connection(&tunnel.host_id)?;
     open_store()?
         .save_tunnel(&tunnel)

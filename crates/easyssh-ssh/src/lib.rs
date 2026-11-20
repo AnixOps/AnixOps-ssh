@@ -42,7 +42,7 @@ pub use auth::{
 };
 pub use channels::{ExecOutput, ExitStatus, ShellHandle, ShellOptions};
 pub use error::{AuthMethod, Error, Result};
-pub use forward::{Forward, ForwardKind};
+pub use forward::{Endpoint, Forward, ForwardKind};
 pub use interaction::{Decision, DenyAll, HostKeyDetails, Interaction, KbdPrompt};
 pub use known_hosts::{KnownHostStatus, KnownHosts, KnownHostsFile, MemoryKnownHosts};
 pub use params::{

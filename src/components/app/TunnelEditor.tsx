@@ -6,7 +6,7 @@ import { Overlay } from "@/components/ui/overlay";
 import { Segmented } from "@/components/ui/segmented";
 import { saveTunnel, type Host, type Tunnel, type TunnelKind } from "@/lib/backend";
 import { t } from "@/lib/i18n";
-import { describeTunnel } from "@/lib/tunnels";
+import { canListenOnSocket, describeTunnel, isSocketPath, validSocketPath } from "@/lib/tunnels";
 
 export function TunnelEditor({
   tunnel,
@@ -26,22 +26,37 @@ export function TunnelEditor({
   const [bindPort, setBindPort] = useState(String(tunnel?.bindPort ?? ""));
   const [targetHost, setTargetHost] = useState(tunnel?.targetHost ?? "");
   const [targetPort, setTargetPort] = useState(String(tunnel?.targetPort ?? ""));
+  // A Unix socket on either end keeps its path where a host or address goes
+  // and has no port (bind port 0, no target port): no schema change.
+  const [listenSocket, setListenSocket] = useState(isSocketPath(tunnel?.bindAddress));
+  const [targetSocket, setTargetSocket] = useState(isSocketPath(tunnel?.targetHost));
   const [error, setError] = useState<string | null>(null);
+
+  // Listening on a socket here needs Unix; a socket on the server works anywhere.
+  const localSockets = canListenOnSocket();
+  const listenSockets = kind === "remote" || (kind === "local" && localSockets);
+  const targetSockets = kind === "local" || (kind === "remote" && localSockets);
+  const listensOnSocket = kind !== "dynamic" && listenSockets && listenSocket;
+  const targetsSocket = kind !== "dynamic" && targetSockets && targetSocket;
 
   const input = {
     id: tunnel?.id ?? null,
     name,
     hostId,
     kind,
-    bindAddress: bindAddress.trim() || null,
-    bindPort: Number(bindPort) || 0,
+    bindAddress: (kind === "dynamic" && isSocketPath(bindAddress) ? "" : bindAddress.trim()) || null,
+    bindPort: listensOnSocket ? 0 : Number(bindPort) || 0,
     targetHost: kind === "dynamic" ? null : targetHost.trim() || null,
-    targetPort: kind === "dynamic" ? null : Number(targetPort) || null,
+    targetPort: kind === "dynamic" || targetsSocket ? null : Number(targetPort) || null,
   };
 
   const submit = async () => {
-    if (bindPort.trim() === "") {
-      setError(t.tunnelPortRequired);
+    if (listensOnSocket ? !validSocketPath(bindAddress) : bindPort.trim() === "") {
+      setError(listensOnSocket ? t.tunnelSocketInvalid : t.tunnelPortRequired);
+      return;
+    }
+    if (targetsSocket && !validSocketPath(targetHost)) {
+      setError(t.tunnelSocketInvalid);
       return;
     }
     try {
@@ -51,6 +66,11 @@ export function TunnelEditor({
       setError(String(reason));
     }
   };
+
+  const endpoints = (socketAllowed: boolean) => [
+    { value: false, label: t.tunnelEndpointTcp },
+    ...(socketAllowed ? [{ value: true, label: t.tunnelEndpointSocket }] : []),
+  ];
 
   const kinds: { value: TunnelKind; label: string; hint: string }[] = [
     { value: "local", label: t.tunnelLocal, hint: t.tunnelLocalHint },
@@ -94,27 +114,51 @@ export function TunnelEditor({
           </p>
         </Field>
 
-        <div className="grid grid-cols-[1fr_7rem] gap-3">
-          <Field label={kind === "remote" ? t.tunnelServerAddress : t.tunnelBindAddress} hint={t.optional}>
-            <Input value={bindAddress} onChange={(event) => setBindAddress(event.target.value)} placeholder="127.0.0.1" className="font-mono" />
+        {listenSockets && (
+          <Field label={t.tunnelListenOn} group>
+            <Segmented value={listenSocket} onChange={(socket) => { setListenSocket(socket); setBindAddress(""); }} label={t.tunnelListenOn} options={endpoints(true)} />
           </Field>
-          <Field label={kind === "remote" ? t.tunnelServerPort : t.tunnelLocalPort}>
-            <Input type="number" min={0} max={65535} title={t.tunnelAnyPortHint} value={bindPort} onChange={(event) => setBindPort(event.target.value)} placeholder="15432" className="font-mono" />
-          </Field>
-        </div>
+        )}
 
-        {kind !== "dynamic" && (
+        {listensOnSocket ? (
+          <Field label={kind === "remote" ? t.tunnelServerSocketPath : t.tunnelLocalSocketPath}>
+            <Input value={bindAddress} onChange={(event) => setBindAddress(event.target.value)} placeholder="/tmp/app.sock" className="font-mono" />
+          </Field>
+        ) : (
           <div className="grid grid-cols-[1fr_7rem] gap-3">
-            <Field label={t.tunnelTargetHost}>
-              <Input value={targetHost} onChange={(event) => setTargetHost(event.target.value)} placeholder="127.0.0.1" className="font-mono" />
+            <Field label={kind === "remote" ? t.tunnelServerAddress : t.tunnelBindAddress} hint={t.optional}>
+              <Input value={bindAddress} onChange={(event) => setBindAddress(event.target.value)} placeholder="127.0.0.1" className="font-mono" />
             </Field>
-            <Field label={t.tunnelTargetPort}>
-              <Input type="number" min={1} max={65535} value={targetPort} onChange={(event) => setTargetPort(event.target.value)} placeholder="5432" className="font-mono" />
+            <Field label={kind === "remote" ? t.tunnelServerPort : t.tunnelLocalPort}>
+              <Input type="number" min={0} max={65535} title={t.tunnelAnyPortHint} value={bindPort} onChange={(event) => setBindPort(event.target.value)} placeholder="15432" className="font-mono" />
             </Field>
           </div>
         )}
 
-        {bindPort.trim() !== "" && (
+        {kind !== "dynamic" && targetSockets && (
+          <Field label={t.tunnelTargetKind} group>
+            <Segmented value={targetSocket} onChange={(socket) => { setTargetSocket(socket); setTargetHost(""); }} label={t.tunnelTargetKind} options={endpoints(true)} />
+          </Field>
+        )}
+
+        {kind !== "dynamic" &&
+          (targetsSocket ? (
+            <Field label={kind === "local" ? t.tunnelServerSocketPath : t.tunnelLocalSocketPath}>
+              <Input value={targetHost} onChange={(event) => setTargetHost(event.target.value)} placeholder="/run/docker.sock" className="font-mono" />
+              <p className="mt-1.5 text-callout text-label-3">{t.tunnelSocketHint}</p>
+            </Field>
+          ) : (
+            <div className="grid grid-cols-[1fr_7rem] gap-3">
+              <Field label={t.tunnelTargetHost}>
+                <Input value={targetHost} onChange={(event) => setTargetHost(event.target.value)} placeholder="127.0.0.1" className="font-mono" />
+              </Field>
+              <Field label={t.tunnelTargetPort}>
+                <Input type="number" min={1} max={65535} value={targetPort} onChange={(event) => setTargetPort(event.target.value)} placeholder="5432" className="font-mono" />
+              </Field>
+            </div>
+          ))}
+
+        {(listensOnSocket ? bindAddress.trim() !== "" : bindPort.trim() !== "") && (
           <p className="rounded-sm bg-fill-1 px-3 py-2 font-mono text-callout text-label-2">
             {describeTunnel(input)}
           </p>
@@ -124,7 +168,7 @@ export function TunnelEditor({
           <p role="alert" className="flex items-start gap-2 rounded-sm bg-danger-soft px-3 py-2 text-callout text-danger">
             <CircleAlert className="mt-0.5 size-4 shrink-0" strokeWidth={1.5} />
             <span>
-              {error === t.tunnelPortRequired ? error : `${t.saveFailed}: ${error}`}
+              {error === t.tunnelPortRequired || error === t.tunnelSocketInvalid ? error : `${t.saveFailed}: ${error}`}
             </span>
           </p>
         )}

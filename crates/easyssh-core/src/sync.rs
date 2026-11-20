@@ -262,6 +262,7 @@ impl SyncConnection {
             created_at: now,
             updated_at: now,
             engine: None,
+            forward_x11: false,
         }
     }
 }

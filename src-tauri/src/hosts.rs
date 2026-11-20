@@ -106,6 +106,9 @@ pub struct HostFields {
     /// Opt-in shell integration for terminals on this host.
     #[serde(default)]
     pub shell_integration: bool,
+    /// X11 forwarding (`ssh -X`); the host then runs on OpenSSH.
+    #[serde(default)]
+    pub forward_x11: bool,
     /// Set for a serial port; the SSH fields are then unused.
     #[serde(default)]
     pub serial: Option<SerialFields>,
@@ -172,6 +175,7 @@ fn fields_of(connection: &Connection) -> HostFields {
         notes: connection.notes.clone(),
         engine: connection.engine,
         shell_integration: connection.shell_integration,
+        forward_x11: connection.forward_x11,
         port: 22,
         ..HostFields::default()
     };
@@ -265,6 +269,7 @@ fn apply(
         .engine
         .filter(|engine| *engine != EnginePreference::Auto);
     connection.shell_integration = fields.shell_integration;
+    connection.forward_x11 = fields.forward_x11;
     validate_connection(connection).map_err(|error| error.to_string())?;
     if let Some(jump) = &connection.proxy_jump {
         validate_alias(jump).map_err(|error| error.to_string())?;
