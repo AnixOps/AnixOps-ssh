@@ -1364,7 +1364,11 @@ impl Daemon {
         }
         let controls: Vec<PathBuf> = lock(&self.sessions)
             .values()
-            .filter(|s| s.is_running() && s.host_id() == Some(host_id) && s.engine().is_none())
+            .filter(|s| {
+                s.is_running()
+                    && s.host_id() == Some(host_id)
+                    && s.engine().is_some_and(|(engine, _)| engine == "openssh")
+            })
             .filter_map(|s| monitor_ssh::control_path(&self.key_dir_root, s.id()))
             .collect();
         for control in controls {
