@@ -1876,6 +1876,27 @@ export interface TransferStartResult {
   transfer_id: string;
 }
 /**
+ * Command `transfer.enqueue` payload (russh engine): like `transfer.start`, but on the host's transfer queue instead of a file session of its own. At most a few transfers per host run at once, the others wait (`queued` in the reply) and report `transfer.started` when their turn comes. Reply: TransferEnqueueResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferEnqueueParams".
+ */
+export interface TransferEnqueueParams {
+  host_id: string;
+  direction: TransferDirection;
+  local_path: string;
+  remote_path: string;
+  recursive?: boolean;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferEnqueueResult".
+ */
+export interface TransferEnqueueResult {
+  transfer_id: string;
+  queued: boolean;
+}
+/**
  * Command `transfer.cancel` payload.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -1893,6 +1914,15 @@ export interface TransferCancelParams {
 export interface TransferProgressEvent {
   transfer_id: string;
   bytes: number;
+}
+/**
+ * Event `transfer.started` payload: a queued transfer left the queue and runs.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferStartedEvent".
+ */
+export interface TransferStartedEvent {
+  transfer_id: string;
 }
 /**
  * Event `transfer.done` payload.

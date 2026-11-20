@@ -199,6 +199,9 @@ impl LinkHandler for Proxy {
     fn hostkey_resolved(&self, id: u64) {
         self.user.hostkey_resolved(id);
     }
+    fn transfer_started(&self, transfer_id: &str) {
+        self.user.transfer_started(transfer_id);
+    }
     fn transfer_progress(&self, transfer_id: &str, bytes: u64) {
         self.user.transfer_progress(transfer_id, bytes);
     }

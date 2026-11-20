@@ -851,3 +851,251 @@ async fn a_failed_folder_download_keeps_the_files_it_finished() {
     sh(&shell, &format!("rm -rf '{dir}'")).await;
     engine.shutdown().await;
 }
+
+async fn next_done(receiver: &mut mpsc::UnboundedReceiver<(String, Value)>) -> Value {
+    within("transfer", async {
+        loop {
+            let (name, payload) = receiver.recv().await.expect("events");
+            if name == "transfer.done" {
+                return payload;
+            }
+        }
+    })
+    .await
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// What the transfers of one queue reported, per transfer.
+#[derive(Default)]
+struct QueueLog {
+    started: Vec<String>,
+    done: Vec<(String, String, Option<String>)>,
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn dragging_many_files_queues_them_and_never_exceeds_the_session_limit() {
+    // sshd allows 10 sessions per connection; before the queue every
+    // transfer opened its own file session and the 11th failed.
+    const FILES: usize = 25;
+    let e2e = E2e::new();
+    let shell = pw_session(&e2e).await;
+    let engine = engine(PW_PASSWORD, Arc::default());
+    let target = target();
+    let (sftp_id, home) = within("sftp", engine.open_files(&target))
+        .await
+        .expect("open the files");
+    let dir = format!("{home}/{}", unique_name("e2e-queue"));
+    sh(&shell, &format!("mkdir '{dir}'")).await;
+
+    let scratch = tempfile::tempdir().unwrap();
+    let log = Arc::new(Mutex::new(QueueLog::default()));
+    let (sender, mut receiver) = mpsc::unbounded_channel::<()>();
+    let sink: easyssh_engine::Events = {
+        let log = log.clone();
+        Arc::new(move |name: &str, payload: Value| {
+            let id = payload["transfer_id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+            match name {
+                "transfer.started" => log.lock().unwrap().started.push(id),
+                "transfer.done" => {
+                    log.lock().unwrap().done.push((
+                        id,
+                        payload["status"].as_str().unwrap().to_owned(),
+                        payload["error"].as_str().map(str::to_owned),
+                    ));
+                    let _ = sender.send(());
+                }
+                _ => {}
+            }
+            1usize
+        })
+    };
+    let mut expected = Vec::new();
+    let mut queued = 0;
+    for index in 0..FILES {
+        let data = sample_bytes(2 * 1024 * 1024 + index * 1_000);
+        let local = scratch.path().join(format!("f{index:02}.bin"));
+        std::fs::write(&local, &data).unwrap();
+        let (_, waits) = engine.queue_transfer(
+            "e2e",
+            target.clone(),
+            true,
+            local,
+            format!("{dir}/f{index:02}.bin"),
+            false,
+            sink.clone(),
+        );
+        queued += usize::from(waits);
+        expected.push((format!("f{index:02}.bin"), sha256_hex(&data)));
+    }
+    assert!(queued > 0, "more files than the queue runs at once wait");
+    within("queue", async {
+        for _ in 0..FILES {
+            receiver.recv().await.expect("transfer events");
+        }
+    })
+    .await;
+    {
+        let log = log.lock().unwrap();
+        let failed: Vec<_> = log.done.iter().filter(|d| d.1 != "completed").collect();
+        assert!(failed.is_empty(), "{failed:?}");
+        assert_eq!(
+            log.started.len(),
+            queued,
+            "every waiting transfer got its turn"
+        );
+    }
+    let sums = sh(&shell, &format!("cd '{dir}' && sha256sum f*.bin")).await;
+    for (name, sum) in &expected {
+        assert!(sums.contains(&format!("{sum}  {name}")), "{name} differs");
+    }
+    assert_eq!(
+        sh(&shell, &format!("ls -A '{dir}' | wc -l")).await.trim(),
+        FILES.to_string(),
+        "no temporary files stay behind"
+    );
+    sh(&shell, &format!("rm -r '{dir}'")).await;
+    engine.files().close(&sftp_id).await;
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_transfer_waiting_in_the_queue_can_be_cancelled_and_never_starts() {
+    let engine = engine(PW_PASSWORD, Arc::default());
+    let target = target();
+    let (sftp_id, home) = within("sftp", engine.open_files(&target))
+        .await
+        .expect("open the files");
+    let scratch = tempfile::tempdir().unwrap();
+    let big = scratch.path().join("big.bin");
+    std::fs::write(&big, sample_bytes(8 * 1024 * 1024)).unwrap();
+    let events = Arc::new(Mutex::new(Vec::<(String, String, String)>::new()));
+    let sink: easyssh_engine::Events = {
+        let events = events.clone();
+        Arc::new(move |name: &str, payload: Value| {
+            events.lock().unwrap().push((
+                name.to_owned(),
+                payload["transfer_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                payload["status"].as_str().unwrap_or_default().to_owned(),
+            ));
+            1usize
+        })
+    };
+    let base = unique_name("e2e-queued-cancel");
+    let mut ids = Vec::new();
+    for index in 0..8 {
+        let (id, _) = engine.queue_transfer(
+            "e2e",
+            target.clone(),
+            true,
+            big.clone(),
+            format!("{home}/{base}-{index}.bin"),
+            false,
+            sink.clone(),
+        );
+        ids.push(id);
+    }
+    // The last one is certainly still waiting.
+    let waiting = ids.last().unwrap().clone();
+    engine.files().cancel_transfer(&waiting);
+    for id in &ids[..ids.len() - 1] {
+        engine.files().cancel_transfer(id);
+    }
+    within("cancels", async {
+        loop {
+            let done = events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e.0 == "transfer.done")
+                .count();
+            if done == ids.len() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    let events = events.lock().unwrap().clone();
+    assert!(events
+        .iter()
+        .any(|e| e.0 == "transfer.done" && e.1 == waiting && e.2 == "cancelled"));
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.0 == "transfer.started" && e.1 == waiting),
+        "a cancelled transfer never leaves the queue"
+    );
+    engine.files().close(&sftp_id).await;
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_large_file_round_trips_through_the_pipeline_with_the_same_checksum() {
+    let e2e = E2e::new();
+    let shell = pw_session(&e2e).await;
+    let engine = engine(PW_PASSWORD, Arc::default());
+    let target = target();
+    let (sftp_id, home) = within("sftp", engine.open_files(&target))
+        .await
+        .expect("open the files");
+    let scratch = tempfile::tempdir().unwrap();
+    // Not a multiple of any request size, so the last read is short.
+    let data = sample_bytes(24 * 1024 * 1024 + 12_345);
+    let local = scratch.path().join("large.bin");
+    std::fs::write(&local, &data).unwrap();
+    let remote = format!("{home}/{}.bin", unique_name("e2e-large"));
+    let sum = sha256_hex(&data);
+
+    let (sender, mut receiver) = mpsc::unbounded_channel::<(String, Value)>();
+    let sink: easyssh_engine::Events = Arc::new(move |name: &str, payload: Value| {
+        let _ = sender.send((name.to_owned(), payload));
+        1usize
+    });
+    let run = |upload: bool, from: std::path::PathBuf, to: String| {
+        let (id, _) =
+            engine.queue_transfer("e2e", target.clone(), upload, from, to, false, sink.clone());
+        id
+    };
+    let id = run(true, local.clone(), remote.clone());
+    let done = next_done(&mut receiver).await;
+    assert_eq!(done["transfer_id"], id.as_str());
+    assert_eq!(done["status"], "completed", "{done}");
+    assert_eq!(
+        sh(&shell, &format!("sha256sum '{remote}'"))
+            .await
+            .split_whitespace()
+            .next(),
+        Some(sum.as_str()),
+        "uploaded bytes"
+    );
+
+    let back = scratch.path().join("back.bin");
+    let id = run(false, back.clone(), remote.clone());
+    let done = next_done(&mut receiver).await;
+    assert_eq!(done["transfer_id"], id.as_str());
+    assert_eq!(done["status"], "completed", "{done}");
+    assert_eq!(
+        sha256_hex(&std::fs::read(&back).unwrap()),
+        sum,
+        "downloaded bytes"
+    );
+    sh(&shell, &format!("rm '{remote}'")).await;
+    engine.files().close(&sftp_id).await;
+    engine.shutdown().await;
+}
