@@ -1,7 +1,7 @@
 import { t } from "./i18n";
 import { isMac, type AppShortcut } from "./shortcuts";
 
-export type ShortcutId = AppShortcut | "focus-pane" | "rename" | "remove" | "select-all" | "properties" | "row-menu" | "next-tab";
+export type ShortcutId = AppShortcut | "focus-pane" | "rename" | "remove" | "select-all" | "properties" | "row-menu";
 
 export interface ShortcutRow {
   id: ShortcutId;
@@ -26,13 +26,19 @@ export const shortcutTable: ShortcutRow[] = [
   { id: "import", group: "app", title: () => t.importHosts, pc: "Ctrl+I", mac: "⌘I", pcInTerminal: "Ctrl+Shift+I" },
   { id: "new-host", group: "app", title: () => t.newHost, pc: "Ctrl+N", mac: "⌘N", pcInTerminal: "Ctrl+Shift+N" },
   { id: "find", group: "app", title: () => t.searchHosts, pc: "Ctrl+F", mac: "⌘F" },
+  { id: "toggle-sidebar", group: "app", title: () => t.toggleSidebar, pc: "Ctrl+B", mac: "⌃⌘S" },
   { id: "new-local", group: "terminal", title: () => t.newTab, pc: "Ctrl+Shift+T", mac: "⌘T" },
+  { id: "next-tab", group: "terminal", title: () => t.nextTab, pc: "Ctrl+Tab", mac: "⌃Tab" },
+  { id: "prev-tab", group: "terminal", title: () => t.previousTab, pc: "Ctrl+Shift+Tab", mac: "⌃⇧Tab" },
   { id: "close-tab", group: "terminal", title: () => t.closeTab, pc: "Ctrl+Shift+W", mac: "⌘W" },
   { id: "toggle-files", group: "terminal", title: () => t.toggleFiles, pc: "Ctrl+Shift+E", mac: "⌘E" },
   { id: "find", group: "terminal", title: () => t.find, pc: "Ctrl+Shift+F", mac: "⌘F" },
   { id: "clear-terminal", group: "terminal", title: () => t.clearTerminal, pc: "", mac: "⌘K" },
   { id: "copy", group: "terminal", title: () => t.copy, pc: "Ctrl+Shift+C", mac: "⌘C" },
   { id: "paste", group: "terminal", title: () => t.paste, pc: "Ctrl+Shift+V", mac: "⌘V" },
+  { id: "zoom-in", group: "terminal", title: () => t.zoomIn, pc: "Ctrl+=", mac: "⌘+" },
+  { id: "zoom-out", group: "terminal", title: () => t.zoomOut, pc: "Ctrl+-", mac: "⌘-" },
+  { id: "zoom-reset", group: "terminal", title: () => t.zoomReset, pc: "Ctrl+0", mac: "⌘0" },
   { id: "split-right", group: "terminal", title: () => t.splitRight, pc: "Ctrl+Shift+D", mac: "⌘D" },
   { id: "split-down", group: "terminal", title: () => t.splitDown, pc: "Ctrl+Shift+O", mac: "⌘⇧D" },
   { id: "focus-pane", group: "terminal", title: () => t.focusPane, pc: "Ctrl+Shift+←↑↓→", mac: "⌘⌥←↑↓→" },

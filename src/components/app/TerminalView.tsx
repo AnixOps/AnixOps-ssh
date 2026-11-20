@@ -70,6 +70,10 @@ import { searchDecorations, terminalFont, terminalTheme } from "@/lib/terminalTh
 import { createTerminalTransfer } from "@/lib/terminalTransferFiles";
 import { cn } from "@/lib/utils";
 
+/** Font zoom stays within what stays legible and fits a window. */
+const MIN_FONT_SIZE = 6;
+const MAX_FONT_SIZE = 48;
+
 /** The SSH engine a session runs on, and why. */
 export interface EngineInfo {
   engine: SshEngine;
@@ -195,8 +199,12 @@ export function TerminalView({
     terminal.loadAddon(new Unicode11Addon());
     terminal.unicode.activeVersion = UNICODE_VERSION;
     terminal.open(container);
+    // The terminal end-to-end test reads the buffer it renders; never set in the app.
+    const e2eTerminals = (window as { __anixopsE2eTerminals?: Map<string, Terminal> }).__anixopsE2eTerminals;
+    e2eTerminals?.set(tabKey, terminal);
     // Headless test browsers have no usable WebGL, so automation uses the DOM renderer.
-    if (!navigator.webdriver) {
+    // `?webgl=1` keeps WebGL under automation, for the terminal end-to-end test.
+    if (!navigator.webdriver || new URLSearchParams(window.location.search).has("webgl")) {
       try {
         const webgl = new WebglAddon();
         webgl.onContextLoss(() => webgl.dispose());
@@ -297,6 +305,25 @@ export function TerminalView({
     fitRef.current = fit;
     searchRef.current = search;
 
+    // Font zoom for this view only (Windows Terminal, iTerm2): a step from the
+    // size in Settings, which Ctrl+0 / ⌘0 goes back to.
+    let zoomSteps = 0;
+    const zoomedSize = (base: number) => Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, base + zoomSteps));
+    const zoom = (direction: 1 | -1 | 0) => {
+      const base = settings().terminalFontSize;
+      zoomSteps = direction === 0 ? 0 : zoomedSize(base + direction) - base;
+      terminal.options.fontSize = zoomedSize(base);
+      if (container.clientWidth > 0) fit.fit();
+    };
+    // Ctrl+wheel (⌘+wheel on macOS) zooms, instead of scrolling or zooming the page.
+    const onZoomWheel = (event: WheelEvent) => {
+      if (!(isMac ? event.metaKey : event.ctrlKey) || event.deltaY === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      zoom(event.deltaY < 0 ? 1 : -1);
+    };
+    container.addEventListener("wheel", onZoomWheel, { capture: true, passive: false });
+
     // The key the list took on keydown; its keypress and keyup are dropped too.
     let swallowed: string | null = null;
     terminal.attachCustomKeyEventHandler((event) => {
@@ -310,10 +337,36 @@ export function TerminalView({
         if (event.type === "keyup") swallowed = null;
         return false;
       }
+      // Windows Terminal keys (a setting, on by default on Windows): Ctrl+C
+      // copies when text is selected and is ^C otherwise; Ctrl+V pastes.
+      if (
+        !isMac &&
+        event.type === "keydown" &&
+        event.ctrlKey &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        settings().terminalCtrlCopyPaste
+      ) {
+        const key = event.code === "KeyC" || event.key.toLowerCase() === "c" ? "c" : event.code === "KeyV" || event.key.toLowerCase() === "v" ? "v" : null;
+        if (key === "c" && terminal.hasSelection()) {
+          event.preventDefault();
+          copySelection();
+          terminal.clearSelection();
+          return false;
+        }
+        if (key === "v") {
+          event.preventDefault();
+          actionsRef.current.paste();
+          return false;
+        }
+      }
       const shortcut = appShortcut(event);
       if (!shortcut) return true;
       event.preventDefault();
-      if (shortcut === "copy") {
+      if (shortcut === "zoom-in" || shortcut === "zoom-out" || shortcut === "zoom-reset") {
+        zoom(shortcut === "zoom-in" ? 1 : shortcut === "zoom-out" ? -1 : 0);
+      } else if (shortcut === "copy") {
         const selection = terminal.getSelection();
         if (selection) void copyText(selection);
       } else if (shortcut === "paste") {
@@ -653,7 +706,7 @@ export function TerminalView({
     const updateTheme = () => (terminal.options.theme = terminalTheme());
     scheme.addEventListener("change", updateTheme);
     const stopSettings = onSettings((next) => {
-      terminal.options.fontSize = next.terminalFontSize;
+      terminal.options.fontSize = zoomedSize(next.terminalFontSize);
       Object.assign(terminal.options, liveTerminalOptions(next, terminalFont()));
       updateTheme();
       if (container.clientWidth > 0) fit.fit();
@@ -686,6 +739,7 @@ export function TerminalView({
       container.removeEventListener("paste", onPaste, true);
       container.removeEventListener("mouseup", onMouseUp);
       container.removeEventListener("contextmenu", onContextMenu);
+      container.removeEventListener("wheel", onZoomWheel, { capture: true });
       osc52.dispose();
       capabilities.dispose();
       binary.dispose();
@@ -703,6 +757,7 @@ export function TerminalView({
       // (or this effect re-running) leaves it running in the daemon.
       sessionRef.current?.detach();
       sessionRef.current = null;
+      e2eTerminals?.delete(tabKey);
       terminal.dispose();
       terminalRef.current = null;
     };

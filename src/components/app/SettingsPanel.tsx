@@ -222,6 +222,15 @@ export function SettingsPanel({
               onClick={() => update({ terminalCopyOnSelect: !current.terminalCopyOnSelect })}
             />
           </SettingsRow>
+          {!isMac && (
+            <SettingsRow label={t.ctrlCopyPaste} hint={t.ctrlCopyPasteHint}>
+              <Switch
+                on={current.terminalCtrlCopyPaste}
+                label={t.ctrlCopyPaste}
+                onClick={() => update({ terminalCtrlCopyPaste: !current.terminalCtrlCopyPaste })}
+              />
+            </SettingsRow>
+          )}
           <SettingsRow
             label={t.mouseReporting}
             hint={

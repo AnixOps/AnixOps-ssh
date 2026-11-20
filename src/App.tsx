@@ -9,6 +9,7 @@ import { FilesPane } from "@/components/app/FilesPane";
 import { MonitorPane } from "@/components/app/MonitorPane";
 import { BroadcastBar } from "@/components/app/PaneOverlays";
 import { monitorOpenByDefault, rememberMonitorOpen, useMonitorLayout } from "@/lib/monitorPrefs";
+import { rememberSidebarHidden, sidebarHiddenByDefault } from "@/lib/sidebarPrefs";
 import { fitWorkspace, useElementWidth } from "@/lib/workspaceFit";
 import { ForwardsPanel } from "@/components/app/ForwardsPanel";
 import { HostEditor } from "@/components/app/HostEditor";
@@ -103,7 +104,26 @@ const focusShortcuts: Partial<Record<AppShortcut, Direction>> = {
 };
 
 export function App() {
-  const [nav, setNav] = useState<NavKey>("hosts");
+  const [nav, setNavKey] = useState<NavKey>("hosts");
+  // The sidebar can be hidden so the terminal gets the whole window; going to
+  // a section shows it again, and choosing the section that is open hides it.
+  const [sidebarHidden, setSidebarHidden] = useState(sidebarHiddenByDefault);
+  const hideSidebar = useCallback((hidden: boolean) => {
+    rememberSidebarHidden(hidden);
+    setSidebarHidden(hidden);
+  }, []);
+  const setNav = useCallback(
+    (key: NavKey) => {
+      setNavKey(key);
+      hideSidebar(false);
+    },
+    [hideSidebar],
+  );
+  const toggleSidebar = useCallback(() => hideSidebar(!sidebarHidden), [hideSidebar, sidebarHidden]);
+  const chooseNav = useCallback(
+    (key: NavKey) => (key === nav ? hideSidebar(!sidebarHidden) : setNav(key)),
+    [hideSidebar, nav, setNav, sidebarHidden],
+  );
   const [snapshot, setSnapshot] = useState<HostsSnapshot>({ hosts: [], groups: [], warnings: [] });
   const [loadError, setLoadError] = useState<string | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
@@ -216,6 +236,27 @@ export function App() {
   const [adhocTab, setAdhocTab] = useState<string | null>(null);
 
   const openLocal = useCallback(() => addTab(null, t.localTerminal, null), [addTab]);
+
+  // Another session like a tab's, in a new tab next to the others.
+  const duplicateTab = useCallback(
+    (key: string) => {
+      const tab = tabs.find((candidate) => candidate.key === key);
+      if (tab) addTab(tab.hostId, tab.title, tab.color);
+    },
+    [tabs, addTab],
+  );
+  const openHostInNewTab = useCallback((host: Host) => addTab(host.id, host.name, host.color), [addTab]);
+  const moveTab = useCallback((from: string, to: string) => {
+    setTabs((current) => {
+      const source = current.findIndex((tab) => tab.key === from);
+      const target = current.findIndex((tab) => tab.key === to);
+      if (source < 0 || target < 0) return current;
+      const next = [...current];
+      const [moved] = next.splice(source, 1);
+      next.splice(target, 0, moved);
+      return next;
+    });
+  }, []);
 
   const startSerialHost = useCallback(() => {
     setNav("hosts");
@@ -437,6 +478,11 @@ export function App() {
       // In a terminal "find" is the terminal's own; elsewhere it finds a host.
       else if (shortcut === "find" && !here) focusSearch();
       else if (shortcut === "find") return;
+      else if ((shortcut === "next-tab" || shortcut === "prev-tab") && tabs.length > 1 && activeKey) {
+        const index = tabs.findIndex((tab) => tab.key === activeKey);
+        const step = shortcut === "next-tab" ? 1 : -1;
+        setActiveKey(tabs[(index + step + tabs.length) % tabs.length].key);
+      } else if (shortcut === "toggle-sidebar") toggleSidebar();
       else if (shortcut === "new-local") openLocal();
       // Closing acts on the focused pane first; the last pane closes the tab.
       else if (shortcut === "close-tab" && activeTab) closePane(activeTab.key, activeTab.panes.focused);
@@ -453,7 +499,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeKey, activeTab, closePane, focusSearch, openLocal, paneAction, toggleFiles, updatePanes]);
+  }, [activeKey, activeTab, closePane, focusSearch, openLocal, paneAction, setNav, tabs, toggleFiles, toggleSidebar, updatePanes]);
 
   return (
     <MotionConfig reducedMotion="user">
@@ -461,15 +507,16 @@ export function App() {
     <ConfirmProvider>
       <div className="flex h-full">
         <FirstRunPrompt />
-        <IconRail active={nav} onChange={setNav} />
+        <IconRail active={nav} sidebarHidden={sidebarHidden} onChange={chooseNav} />
         {/* Switching sections is immediate in a desktop window (M9). */}
-        <div key={nav} className="flex shrink-0">
+        <div key={nav} className="flex shrink-0" hidden={sidebarHidden}>
         {nav === "hosts" ? (
           <HostList
             hosts={snapshot.hosts}
             groups={snapshot.groups}
             selectedId={activeTab?.hostId ?? null}
             onOpen={openHost}
+            onOpenNew={openHostInNewTab}
             onEdit={(host) => {
               setNewSerial(false);
               setEditing(host);
@@ -498,6 +545,8 @@ export function App() {
               onSelect={setActiveKey}
               onClose={closeTab}
               onCloseMany={closeTabs}
+              onDuplicate={duplicateTab}
+              onMove={moveTab}
               onNew={openLocal}
               serialHosts={serialHosts(snapshot.hosts)}
               onOpenHost={openHost}

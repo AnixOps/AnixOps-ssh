@@ -3,9 +3,12 @@ import { t } from "./i18n";
 /** Written before a reconnect, so whatever the old session left on is undone:
  *  leave the alternate screen, soft reset (DECSTR: cursor, scroll region,
  *  attributes, insert and origin modes), and turn off mouse reporting
- *  (1000/1002/1003/1006), bracketed paste (2004) and focus events (1004). */
+ *  (1000/1002/1003/1006), bracketed paste (2004) and focus events (1004).
+ *  It starts with DECSC: leaving the alternate screen restores the saved
+ *  cursor, which outside of it would be the top-left corner, and the new
+ *  session would then print over the old screen. */
 export const TERMINAL_RESET =
-  "\x1b[?1049l\x1b[!p\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1004l";
+  "\x1b7\x1b[?1049l\x1b[!p\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1004l";
 
 /** How long a view waits for resizing to settle before telling the session. */
 export const RESIZE_DEBOUNCE_MS = 50;

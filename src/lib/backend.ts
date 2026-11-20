@@ -362,6 +362,11 @@ export async function openExternal(hostId: string): Promise<void> {
   await invoke("open_external", { hostId });
 }
 
+/** Injected by the terminal end-to-end test only (never present in the app). */
+interface E2eSessionBridge {
+  open(hostId: string | null, cols: number, rows: number, onEvent: (event: SessionEvent) => void): Promise<SessionHandle>;
+}
+
 /** Starts `ssh` for `hostId` (or a local shell when null) in a PTY. */
 export async function openSession(
   hostId: string | null,
@@ -372,7 +377,13 @@ export async function openSession(
    *  SSH keepalive interval in seconds (0 turns it off). */
   options?: { attach?: "tmux" | "screen"; keepaliveSecs?: number },
 ): Promise<SessionHandle> {
-  if (!isTauri) return previewSession(hostId, onEvent, options?.attach);
+  if (!isTauri) {
+    // The terminal end-to-end test (scripts/terminal-e2e.mjs) puts a real
+    // session daemon behind the browser; everything else stays preview data.
+    const bridge = (window as { __anixopsE2eSession?: E2eSessionBridge }).__anixopsE2eSession;
+    if (bridge) return bridge.open(hostId, cols, rows, onEvent);
+    return previewSession(hostId, onEvent, options?.attach);
+  }
   const events = new Channel<SessionEvent>();
   events.onmessage = onEvent;
   const opened = await invoke<{ id: string; engine: SshEngine | null; engineReason: string | null }>(

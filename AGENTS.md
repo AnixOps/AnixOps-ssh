@@ -29,6 +29,17 @@ requests that change the version or packaging files. End-to-end and Android
 are skipped when a pull request only touches frontend or docs files. The
 required Rust checks always run.
 
+"Terminal end-to-end (Linux)" runs for every change but docs: the real
+frontend in Chromium (Windows key habits), a real OpenSSH server, and the real
+session daemon in between (`scripts/terminal-e2e.mjs`,
+`crates/easyssh-e2e/examples/web_bridge.rs`). Each check is something a person
+does every day in Windows Terminal, iTerm2 or Termius; the list and the
+findings are in `docs/terminal-parity.md`. A terminal change that breaks one
+fails CI; add a check when you add a terminal behaviour. Run it locally with
+the e2e containers up: `cargo build -p easyssh-e2e --example web_bridge`,
+`npm run build && npm run preview`, then
+`node scripts/terminal-e2e.mjs http://localhost:4173 out` (`ONLY=name,…`).
+
 Results (logs, screenshots, lockfiles) are force-pushed to the branch
 `ci-results/<branch>`; read them with
 `git fetch origin ci-results/<branch>` and `git show FETCH_HEAD:<path>`.
@@ -70,7 +81,11 @@ The audit and the button-level mapping are in `docs/design-audit.md`.
   selected text get `ui/editMenu.tsx` without extra work.
 - Shortcuts live once in `src/lib/shortcutTable.ts` and `src/lib/shortcuts.ts`;
   the list (Ctrl/⌘+/), tooltips and docs read it. Plain Ctrl keys belong to
-  the shell inside terminals; never use Ctrl+Alt.
+  the shell inside terminals; never use Ctrl+Alt. The only plain-Ctrl
+  exceptions are the ones every terminal shares: Ctrl+Tab / Ctrl+Shift+Tab
+  (tabs), Ctrl+= / Ctrl+- / Ctrl+0 and Ctrl+wheel (font zoom), and, behind a
+  setting that is on by default on Windows only, Windows Terminal's Ctrl+C
+  (with a selection) and Ctrl+V.
 - All user-facing strings live in `src/lib/i18n.ts` (Chinese and English). The
   product is "AnixOps SSH" everywhere the user sees a name.
 - The touch UI for phones and tablets is `src/components/mobile/` (shown when

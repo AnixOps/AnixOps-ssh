@@ -47,6 +47,9 @@ export function terminalOptions(current: TerminalSettings, input: TerminalOption
     macOptionIsMeta: current.terminalOptionAsMeta,
     // Option-click selects even when a full-screen app has the mouse.
     macOptionClickForcesSelection: true,
+    // Text a program colours too close to its background (black on dark
+    // grey, yellow on white) is nudged until it is readable, as VS Code does.
+    minimumContrastRatio: MINIMUM_CONTRAST,
     screenReaderMode: input.screenReaderMode ?? false,
     theme: input.theme,
   };
@@ -69,6 +72,9 @@ export function liveTerminalOptions(
     cursorBlink: current.terminalCursorBlink,
   };
 }
+
+/** WCAG AA for text; VS Code's terminal uses the same default. */
+export const MINIMUM_CONTRAST = 4.5;
 
 /** Wide characters (CJK, emoji) take two cells, as current terminals and `wcwidth` count them. */
 export const UNICODE_VERSION = "11";

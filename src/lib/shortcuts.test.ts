@@ -139,3 +139,39 @@ describe("reserved app shortcuts", () => {
     expect(mac({ key: "n" })).toBe("new-host");
   });
 });
+
+describe("tabs, zoom and the sidebar", () => {
+  it("switches tabs with Ctrl+Tab and Ctrl+Shift+Tab everywhere", () => {
+    for (const mac of [false, true]) {
+      expect(resolveShortcut(key({ key: "Tab", ctrlKey: true }), mac)).toBe("next-tab");
+      expect(resolveShortcut(key({ key: "Tab", ctrlKey: true, shiftKey: true }), mac)).toBe("prev-tab");
+    }
+    expect(resolveShortcut(key({ key: "}", code: "BracketRight", metaKey: true, shiftKey: true }), true)).toBe("next-tab");
+    expect(resolveShortcut(key({ key: "{", code: "BracketLeft", metaKey: true, shiftKey: true }), true)).toBe("prev-tab");
+    expect(resolveShortcut(key({ key: "Tab" }), false)).toBeNull();
+  });
+
+  it("zooms with Ctrl+= / Ctrl+- / Ctrl+0, and Cmd on macOS", () => {
+    expect(resolveShortcut(key({ key: "=", code: "Equal", ctrlKey: true }), false)).toBe("zoom-in");
+    expect(resolveShortcut(key({ key: "+", code: "Equal", ctrlKey: true, shiftKey: true }), false)).toBe("zoom-in");
+    expect(resolveShortcut(key({ key: "+", code: "NumpadAdd", ctrlKey: true }), false)).toBe("zoom-in");
+    expect(resolveShortcut(key({ key: "-", code: "Minus", ctrlKey: true }), false)).toBe("zoom-out");
+    expect(resolveShortcut(key({ key: "0", code: "Digit0", ctrlKey: true }), false)).toBe("zoom-reset");
+    expect(resolveShortcut(key({ key: "=", code: "Equal", metaKey: true }), true)).toBe("zoom-in");
+    expect(resolveShortcut(key({ key: "-", code: "Minus", metaKey: true }), true)).toBe("zoom-out");
+    expect(resolveShortcut(key({ key: "0", code: "Digit0", metaKey: true }), true)).toBe("zoom-reset");
+  });
+
+  it("leaves readline's Ctrl+_ (undo) and Ctrl+Alt to the shell", () => {
+    expect(resolveShortcut(key({ key: "_", code: "Minus", ctrlKey: true, shiftKey: true }), false)).toBeNull();
+    expect(resolveShortcut(key({ key: "=", code: "Equal", ctrlKey: true, altKey: true }), false)).toBeNull();
+    expect(resolveShortcut(key({ key: "=", code: "Equal", ctrlKey: true }), true)).toBeNull();
+  });
+
+  it("toggles the sidebar with Ctrl+B outside the terminal and ⌃⌘S on macOS", () => {
+    expect(resolveGlobalShortcut(key({ key: "b", ctrlKey: true }), false, false)).toBe("toggle-sidebar");
+    // In a terminal Ctrl+B is the shell's and tmux's.
+    expect(resolveGlobalShortcut(key({ key: "b", ctrlKey: true }), false, true)).toBeNull();
+    expect(resolveGlobalShortcut(key({ key: "s", code: "KeyS", ctrlKey: true, metaKey: true }), true, true)).toBe("toggle-sidebar");
+  });
+});
