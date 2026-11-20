@@ -193,7 +193,7 @@ describe("forward form", () => {
 
   it("names the first problem", () => {
     expect(checkDraft({ ...filled, hostId: "" })).toEqual({ ok: false, problem: "host" });
-    expect(checkDraft({ ...filled, bindPort: "0" })).toEqual({ ok: false, problem: "bindPort" });
+    expect(checkDraft({ ...filled, bindPort: "" })).toEqual({ ok: false, problem: "bindPort" });
     expect(checkDraft({ ...filled, bindPort: "70000" })).toEqual({ ok: false, problem: "bindPort" });
     expect(checkDraft({ ...filled, bindPort: "80a" })).toEqual({ ok: false, problem: "bindPort" });
     expect(checkDraft({ ...filled, targetHost: " " })).toEqual({ ok: false, problem: "targetHost" });
@@ -230,7 +230,18 @@ describe("forward form", () => {
     expect(checkDraft({ ...filled, bindPort: "80" })).toEqual({ ok: false, problem: "privilegedPort" });
     expect(checkDraft({ ...filled, kind: "dynamic", bindPort: "1023" })).toEqual({ ok: false, problem: "privilegedPort" });
     expect(checkDraft({ ...filled, kind: "dynamic", bindPort: "1024" }).ok).toBe(true);
-    expect(checkDraft({ ...filled, bindPort: "0" })).toEqual({ ok: false, problem: "bindPort" });
+  });
+
+  it("port 0 picks any free port, and the list shows the one it got", () => {
+    const any = checkDraft({ ...filled, bindPort: "0" });
+    expect(any.ok && any.input.bindPort).toBe(0);
+    expect(checkDraft({ ...filled, kind: "remote", bindPort: "0" }).ok).toBe(true);
+    const tunnel = { kind: "local" as const, bindPort: 0, targetHost: "db", targetPort: 5432 };
+    expect(describeForward({ ...tunnel, status: { state: "running", port: 40123 } })).toBe("40123 → db:5432");
+    expect(describeForward({ ...tunnel, status: { state: "stopped" } })).toBe("0 → db:5432");
+    expect(describeForward({ ...tunnel, bindPort: 8080, status: { state: "running", port: 8080 } })).toBe(
+      "8080 → db:5432",
+    );
   });
 
   it("round-trips a saved forward into a draft", () => {

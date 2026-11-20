@@ -33,7 +33,18 @@ pub struct Tunnel {
     pub target_port: Option<u16>,
 }
 
+/// A host or address without the brackets an IPv6 address is often written
+/// in (`[::1]` is `::1`); saved tunnels keep it bare.
+pub fn bare_host(value: &str) -> &str {
+    let value = value.trim();
+    value
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(value)
+}
+
 fn address(value: &str) -> Result<String, OpenSshError> {
+    let value = bare_host(value);
     validate_host(value)?;
     Ok(if value.contains(':') {
         format!("[{value}]")
@@ -58,7 +69,8 @@ impl Tunnel {
             spec.push_str(&address(bind)?);
             spec.push(':');
         }
-        spec.push_str(&port(Some(self.bind_port), "local port")?.to_string());
+        // Port 0: any free port (the server picks one for a remote forward).
+        spec.push_str(&self.bind_port.to_string());
         if self.kind != TunnelKind::Dynamic {
             let host = self
                 .target_host
@@ -174,9 +186,34 @@ mod tests {
         let mut missing = tunnel(TunnelKind::Remote);
         missing.target_port = None;
         assert!(missing.forward_spec().is_err());
-        let mut zero = tunnel(TunnelKind::Dynamic);
-        zero.bind_port = 0;
+        let mut zero = tunnel(TunnelKind::Local);
+        zero.target_port = Some(0);
         assert!(zero.forward_spec().is_err());
+    }
+
+    #[test]
+    fn port_zero_listens_on_any_free_port() {
+        let mut any = tunnel(TunnelKind::Dynamic);
+        any.bind_port = 0;
+        assert_eq!(any.forward_spec().unwrap(), "0");
+        let mut remote = tunnel(TunnelKind::Remote);
+        remote.bind_port = 0;
+        assert_eq!(remote.forward_spec().unwrap(), "0:db.internal:5432");
+    }
+
+    #[test]
+    fn ipv6_addresses_are_bracketed_once() {
+        assert_eq!(bare_host("[::1]"), "::1");
+        assert_eq!(bare_host(" ::1 "), "::1");
+        assert_eq!(bare_host("db.internal"), "db.internal");
+        assert_eq!(bare_host("[db"), "[db");
+        let mut both = tunnel(TunnelKind::Local);
+        both.bind_address = Some("[::1]".into());
+        both.target_host = Some("[fd00::5]".into());
+        assert_eq!(both.forward_spec().unwrap(), "[::1]:15432:[fd00::5]:5432");
+        both.bind_address = Some("::1".into());
+        both.target_host = Some("fd00::5".into());
+        assert_eq!(both.forward_spec().unwrap(), "[::1]:15432:[fd00::5]:5432");
     }
 
     #[test]

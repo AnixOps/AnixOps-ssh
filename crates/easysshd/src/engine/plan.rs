@@ -397,6 +397,8 @@ pub struct HostSpec {
     pub user: String,
     pub identity_files: Vec<PathBuf>,
     pub agent: bool,
+    /// `IdentitiesOnly`: the agent signs only for the configured keys.
+    pub identities_only: bool,
     /// The agent socket `IdentityAgent` names, instead of the environment's.
     pub agent_path: Option<PathBuf>,
     /// `StrictHostKeyChecking`.
@@ -426,9 +428,11 @@ impl HostSpec {
             host: facts.hostname.clone(),
             port: facts.port,
             user: facts.user.clone(),
-            // `IdentitiesOnly yes`: only the configured keys, never the
-            // agent's others, even when none of the files exists.
-            agent: facts.pubkey && !facts.identities_only && !matches!(identity_agent, Some(None)),
+            // With `IdentitiesOnly yes` the agent stays on for the configured
+            // keys it holds (signing without their passphrase); the engine
+            // leaves its other keys out. `IdentityAgent none` turns it off.
+            agent: facts.pubkey && !matches!(identity_agent, Some(None)),
+            identities_only: facts.identities_only,
             agent_path: identity_agent.flatten(),
             host_key_policy: facts.options.host_key_policy,
             user_known_hosts: facts.user_known_hosts(),
@@ -728,7 +732,7 @@ proxycommand none
     }
 
     #[test]
-    fn identities_only_keeps_the_agent_out() {
+    fn identities_only_limits_the_agent_to_the_configured_keys() {
         let dir = tempfile::tempdir().unwrap();
         let key = dir.path().join("id");
         std::fs::write(&key, "x").unwrap();
@@ -737,16 +741,17 @@ proxycommand none
             key.display()
         );
         let spec = HostSpec::from_facts(&parse_ssh_g(&text).unwrap(), "h".into());
-        assert!(!spec.agent);
+        assert!(spec.agent && spec.identities_only);
         assert_eq!(spec.identity_files, vec![key.clone()]);
-        // Not even when none of the configured files exists.
+        // None of the configured files exists: the agent stays limited to
+        // them, so the engine offers none of its keys.
         let text = "hostname h\nuser u\nidentityfile /nonexistent/id\nidentitiesonly yes\n";
         let spec = HostSpec::from_facts(&parse_ssh_g(text).unwrap(), "h".into());
-        assert!(!spec.agent);
+        assert!(spec.agent && spec.identities_only);
         assert!(spec.identity_files.is_empty());
         let text = format!("hostname h\nuser u\nidentityfile {}\n", key.display());
         let spec = HostSpec::from_facts(&parse_ssh_g(&text).unwrap(), "h".into());
-        assert!(spec.agent);
+        assert!(spec.agent && !spec.identities_only);
         assert_eq!(spec.address(), "u@h:22");
     }
 
