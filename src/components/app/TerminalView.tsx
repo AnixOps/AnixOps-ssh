@@ -920,7 +920,8 @@ export function TerminalView({
             className="pointer-events-auto flex max-w-xl flex-wrap items-center gap-3 rounded-md bg-bg-elevated px-4 py-3 shadow-3"
           >
             <Unplug className="size-5 shrink-0 text-label-2" strokeWidth={1.5} />
-            <div className="min-w-0 flex-1">
+            {/* The words keep 12rem; the buttons wrap under them in a narrow pane. */}
+            <div className="min-w-0 grow basis-48">
               <p className="text-callout font-medium text-label-1">
                 {status.error ? t.sessionFailed : exitTitle(status)}
               </p>

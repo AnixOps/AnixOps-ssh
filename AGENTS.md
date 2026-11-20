@@ -14,7 +14,9 @@
 
 Nothing is compiled locally. CI (`.github/workflows/ci.yml`) runs once per
 pull request push (as `pull_request`) and on main after each merge: frontend
-typecheck and build, Playwright screenshots in light and dark, then
+typecheck and build, Playwright screenshots in light and dark plus the
+layout checks at the smallest window in Chinese and English
+([docs/layout-checks.md](docs/layout-checks.md)), then
 `cargo fmt`, `clippy -D warnings` and `cargo test` on Windows, macOS and Linux.
 
 CI also builds the mobile prototype (`docs/mobile-prototype.md`): the
@@ -71,5 +73,10 @@ The audit and the button-level mapping are in `docs/design-audit.md`.
   `isMobileShell()` says so, or with `?mobile=1` in a browser). It reuses the
   same components and tokens; touch targets are at least 44 px and the
   screenshot script fails on any smaller one.
+- Layouts hold at the smallest window (860 × 520) and in English: no text
+  squeezed to a character per line, overlapping or cut off without an
+  ellipsis. `scripts/layout-audit.mjs` fails CI on any; new screens add a
+  scene to `scripts/screenshots.mjs`. The rules are in
+  `docs/layout-checks.md`.
 - `npm run dev` without Tauri uses `src/lib/preview.ts`; keep it in step with
   the backend types so screenshots stay meaningful.

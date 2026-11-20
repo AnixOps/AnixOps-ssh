@@ -107,11 +107,14 @@ function sortEntries(entries: RemoteFile[]): RemoteFile[] {
 export function FilesPane({
   hostId,
   visible,
+  overlay = false,
   active,
   onClose,
 }: {
   hostId: string;
   visible: boolean;
+  /** Float over the terminal instead of taking width (workspaceFit.ts). */
+  overlay?: boolean;
   active: boolean;
   onClose: () => void;
 }) {
@@ -599,7 +602,7 @@ export function FilesPane({
 
   if (connectError) {
     return (
-      <PaneFrame paneRef={paneRef} visible={visible} onClose={onClose}>
+      <PaneFrame paneRef={paneRef} visible={visible} overlay={overlay} onClose={onClose}>
         <div className="flex flex-1 flex-col items-center px-6 pt-16 text-center">
           <CircleAlert className="mb-3 size-12 text-label-3" strokeWidth={1.5} />
           <p className="text-callout font-medium text-label-1">{t.filesFailed}</p>
@@ -616,7 +619,7 @@ export function FilesPane({
 
   if (!handle) {
     return (
-      <PaneFrame paneRef={paneRef} visible={visible} onClose={onClose}>
+      <PaneFrame paneRef={paneRef} visible={visible} overlay={overlay} onClose={onClose}>
         <div className="flex flex-1 items-center justify-center gap-2 text-callout text-label-2">
           <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" strokeWidth={1.5} />
           {t.filesConnecting}
@@ -630,6 +633,7 @@ export function FilesPane({
   return (
     <PaneFrame
       paneRef={paneRef}
+      overlay={overlay}
       visible={visible}
       onClose={onClose}
       actions={
@@ -842,12 +846,14 @@ export function FilesPane({
 function PaneFrame({
   paneRef,
   visible,
+  overlay,
   onClose,
   actions,
   children,
 }: {
   paneRef: RefObject<HTMLElement | null>;
   visible: boolean;
+  overlay: boolean;
   onClose: () => void;
   actions?: ReactNode;
   children: ReactNode;
@@ -857,7 +863,10 @@ function PaneFrame({
       ref={paneRef}
       aria-label={t.files}
       aria-hidden={!visible}
-      className="material-sidebar flex w-100 shrink-0 flex-col border-l"
+      className={cn(
+        "material-sidebar flex w-100 max-w-full shrink-0 flex-col border-l",
+        overlay && "absolute inset-y-0 right-0 z-sticky shadow-3",
+      )}
       initial={{ opacity: 0 }}
       animate={
         visible

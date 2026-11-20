@@ -79,7 +79,9 @@ export function TabBar({
     event.preventDefault();
   };
   return (
-    <div className="material-bar flex h-11 shrink-0 items-center gap-1 border-b px-2">
+    // A container: in a narrow window the labelled buttons drop their words
+    // (icon, tooltip and accessible name stay) so the tabs keep their room.
+    <div className="@container material-bar flex h-11 shrink-0 items-center gap-1 border-b px-2">
       <div role="tablist" className="flex min-w-0 items-center gap-1 overflow-x-auto">
         <AnimatePresence initial={false}>
         {tabs.map((tab) => {
@@ -161,11 +163,12 @@ export function TabBar({
           <Button
             variant="quiet"
             aria-pressed={activeTab.monitorOpen}
+            aria-label={t.monitor}
             onClick={onToggleMonitor}
-            className={cn(activeTab.monitorOpen && "bg-accent-soft text-(--accent) hover:bg-accent-soft hover:text-(--accent)")}
+            className={cn(BAR_LABEL_PAD, activeTab.monitorOpen && "bg-accent-soft text-(--accent) hover:bg-accent-soft hover:text-(--accent)")}
           >
             <Activity />
-            {t.monitor}
+            <span className={BAR_LABEL}>{t.monitor}</span>
           </Button>
         </Tooltip>
       )}
@@ -174,17 +177,23 @@ export function TabBar({
           <Button
             variant="quiet"
             aria-pressed={activeTab.filesOpen}
+            aria-label={t.files}
             onClick={onToggleFiles}
-            className={cn(activeTab.filesOpen && "bg-accent-soft text-(--accent) hover:bg-accent-soft hover:text-(--accent)")}
+            className={cn(BAR_LABEL_PAD, activeTab.filesOpen && "bg-accent-soft text-(--accent) hover:bg-accent-soft hover:text-(--accent)")}
           >
             <FolderOpen />
-            {t.files}
+            <span className={BAR_LABEL}>{t.files}</span>
           </Button>
         </Tooltip>
       )}
     </div>
   );
 }
+
+/** Words on the bar's buttons show only when the bar is at least 42rem wide;
+ *  without them the button is as wide as an icon button. */
+const BAR_LABEL = "hidden @2xl:inline";
+const BAR_LABEL_PAD = "max-@2xl:w-9 max-@2xl:px-0";
 
 /** The plus button: a local terminal, a saved serial port or a new one. */
 function NewTabMenu({
@@ -295,11 +304,11 @@ function BroadcastMenu({ tabKey }: { tabKey: string }) {
       label={t.broadcastMenu}
       tooltip={total < 2 && scope === null ? t.broadcastNeedsTwo : t.broadcastMenu}
       icon={<Radio />}
-      text={scope ? t.broadcastOnShort : t.broadcast}
+      text={<span className={BAR_LABEL}>{scope ? t.broadcastOnShort : t.broadcast}</span>}
       variant="quiet"
       wide
       disabled={total < 2 && scope === null}
-      className={cn(scope && "bg-warning-soft text-warning hover:bg-warning-soft hover:text-warning")}
+      className={cn(BAR_LABEL_PAD, scope && "bg-warning-soft text-warning hover:bg-warning-soft hover:text-warning")}
       items={items}
     />
   );
