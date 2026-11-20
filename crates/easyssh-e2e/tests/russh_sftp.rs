@@ -180,3 +180,39 @@ async fn removing_a_folder_removes_everything_in_it_but_not_what_links_point_to(
     })
     .await;
 }
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn chmod_one_entry_and_a_whole_folder() {
+    let e2e = E2e::new();
+    let (_session, sftp) = open(&e2e).await;
+    within("whole flow", async {
+        let home = sftp.home().await.expect("home");
+        let dir = format!("{home}/{}", unique_name("e2e-chmod"));
+        sftp.mkdir(&dir).await.expect("mkdir");
+        let file = format!("{dir}/a.txt");
+        sftp.write_file(&file, b"x").await.expect("write");
+        let inner = format!("{dir}/inner");
+        sftp.mkdir(&inner).await.expect("mkdir inner");
+        let deep = format!("{inner}/b.txt");
+        sftp.write_file(&deep, b"y").await.expect("write deep");
+
+        sftp.set_permissions(&file, 0o600).await.expect("chmod one");
+        assert_eq!(sftp.stat(&file).await.unwrap().permissions, Some(0o600));
+        // The folder itself is not touched.
+        assert_ne!(sftp.stat(&dir).await.unwrap().permissions, Some(0o600));
+
+        sftp.set_permissions_all(&dir, 0o750)
+            .await
+            .expect("chmod all");
+        for path in [&dir, &file, &inner, &deep] {
+            assert_eq!(
+                sftp.stat(path).await.unwrap().permissions,
+                Some(0o750),
+                "{path}"
+            );
+        }
+        sftp.remove_dir_all(&dir).await.expect("clean up");
+    })
+    .await;
+}

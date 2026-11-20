@@ -1730,7 +1730,7 @@ export interface EngineConnectionsResult {
   connections: EngineConnection[];
 }
 /**
- * `modified` is Unix seconds.
+ * `modified` is Unix seconds. `uid` and `gid` are present when the server sent them.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "SftpEntry".
@@ -1741,6 +1741,8 @@ export interface SftpEntry {
   size: number;
   modified: number | null;
   permissions: number | null;
+  uid?: number;
+  gid?: number;
 }
 /**
  * Command `sftp.open` payload (russh engine). Reply: SftpOpenResult.
@@ -1807,6 +1809,18 @@ export interface SftpRenameParams {
   sftp_id: string;
   from: string;
   to: string;
+}
+/**
+ * Command `sftp.chmod` payload. `mode` holds the permission bits (`0o755` style, with setuid, setgid and sticky). `recursive` applies it to everything inside a folder too; links are skipped, never followed.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "SftpChmodParams".
+ */
+export interface SftpChmodParams {
+  sftp_id: string;
+  path: string;
+  mode: number;
+  recursive?: boolean;
 }
 /**
  * Command `sftp.close` payload.

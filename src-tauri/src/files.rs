@@ -105,10 +105,24 @@ fn mode_string(kind: RemoteFileKind, permissions: Option<u32>) -> String {
     });
     let bits = permissions.unwrap_or(0);
     for (index, symbol) in "rwxrwxrwx".chars().enumerate() {
-        text.push(if bits & (1 << (8 - index)) != 0 {
-            symbol
-        } else {
-            '-'
+        let set = bits & (1 << (8 - index)) != 0;
+        // Setuid, setgid and sticky replace the execute column, as in `ls -l`.
+        let special = match index {
+            2 => Some(('s', 'S', 0o4000)),
+            5 => Some(('s', 'S', 0o2000)),
+            8 => Some(('t', 'T', 0o1000)),
+            _ => None,
+        };
+        text.push(match special {
+            Some((on, off, bit)) if bits & bit != 0 => {
+                if set {
+                    on
+                } else {
+                    off
+                }
+            }
+            _ if set => symbol,
+            _ => '-',
         });
     }
     text
@@ -140,6 +154,8 @@ fn remote_file(entry: &serde_json::Value) -> RemoteFile {
         size: entry["size"].as_u64().unwrap_or(0),
         modified,
         permissions: mode_string(kind, entry["permissions"].as_u64().map(|p| p as u32)),
+        owner: entry["uid"].as_u64().map(|id| id.to_string()),
+        group: entry["gid"].as_u64().map(|id| id.to_string()),
     }
 }
 
@@ -310,6 +326,31 @@ pub async fn sftp_rename(
             .map_err(|error| error.message);
     }
     on_session(&files, &id, move |session| session.rename(&from, &to)).await
+}
+
+#[tauri::command]
+pub async fn sftp_chmod(
+    files: State<'_, Files>,
+    daemon: State<'_, DaemonState>,
+    id: String,
+    path: String,
+    mode: u32,
+    recursive: bool,
+) -> Result<(), String> {
+    if files.is_remote(&id) {
+        return daemon_link(&daemon)?
+            .request(
+                "sftp.chmod",
+                json!({ "sftp_id": id, "path": path, "mode": mode, "recursive": recursive }),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| error.message);
+    }
+    on_session(&files, &id, move |session| {
+        session.chmod(&path, mode, recursive)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -653,6 +694,20 @@ mod tests {
         assert_eq!(file.kind, RemoteFileKind::File);
         assert_eq!(file.size, 12);
         assert_eq!(file.permissions, "-rw-r--r--");
+        assert_eq!(
+            mode_string(RemoteFileKind::File, Some(0o4755)),
+            "-rwsr-xr-x"
+        );
+        assert_eq!(
+            mode_string(RemoteFileKind::Directory, Some(0o1777)),
+            "drwxrwxrwt"
+        );
+        let owned = remote_file(&serde_json::json!({
+            "name": "b", "kind": "file", "size": 1, "modified": null,
+            "permissions": 420, "uid": 1000, "gid": 100
+        }));
+        assert_eq!(owned.owner.as_deref(), Some("1000"));
+        assert_eq!(owned.group.as_deref(), Some("100"));
         assert!(!file.modified.is_empty());
     }
 

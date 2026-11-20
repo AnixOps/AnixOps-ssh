@@ -46,6 +46,10 @@ pub struct RemoteFile {
     /// As printed by the server, e.g. `Oct 14 09:12` or `Jan  3  2025`.
     pub modified: String,
     pub permissions: String,
+    /// The owner and group as the server printed them (a name or a number),
+    /// when it did.
+    pub owner: Option<String>,
+    pub group: Option<String>,
 }
 
 /// Arguments shared by browsing and transfer processes.
@@ -104,6 +108,11 @@ pub fn quote(path: &str) -> Result<String, OpenSshError> {
     }
     quoted.push('"');
     Ok(quoted)
+}
+
+/// The `sftp` command that sets `path` to `mode` (octal, up to `7777`).
+pub fn chmod_command(mode: u32, path: &str) -> Result<String, OpenSshError> {
+    Ok(format!("chmod {:o} {}", mode & 0o7777, quote(path)?))
 }
 
 /// Joins a remote directory and a name with `/`.
@@ -193,6 +202,8 @@ fn parse_listing_line(line: &str, prefix: &str) -> Option<RemoteFile> {
         size: fields[4].parse().unwrap_or(0),
         modified: format!("{} {} {}", fields[5], fields[6], fields[7]),
         permissions: permissions.to_owned(),
+        owner: Some(fields[2].to_owned()).filter(|owner| !owner.is_empty()),
+        group: Some(fields[3].to_owned()).filter(|group| !group.is_empty()),
     })
 }
 
@@ -324,6 +335,45 @@ impl SftpSession {
     pub fn rename(&mut self, from: &str, to: &str) -> Result<(), OpenSshError> {
         self.run(&format!("rename {} {}", quote(from)?, quote(to)?))
             .map(drop)
+    }
+
+    /// Sets the permission bits of `path`, and of everything in it when
+    /// `recursive` is set (`sftp` has no recursive `chmod`, so the folder is
+    /// walked). Links are skipped: `chmod` would change what they point to.
+    pub fn chmod(&mut self, path: &str, mode: u32, recursive: bool) -> Result<(), OpenSshError> {
+        self.run(&chmod_command(mode, path)?)?;
+        if !recursive {
+            return Ok(());
+        }
+        let mut pending = vec![path.to_owned()];
+        while let Some(dir) = pending.pop() {
+            let listing = match self.list(&dir) {
+                Ok(listing) => listing,
+                // `path` is a file, or a link to one: nothing is inside it.
+                Err(_) if dir == path => return Ok(()),
+                Err(error) => return Err(error),
+            };
+            for file in listing {
+                if file.name.contains('/') {
+                    return Err(OpenSshError::Failed(format!(
+                        "{dir} lists an entry that cannot be changed: {:?}",
+                        file.name
+                    )));
+                }
+                let child = join_remote(&dir, &file.name);
+                match file.kind {
+                    RemoteFileKind::Symlink => {}
+                    RemoteFileKind::Directory => {
+                        self.run(&chmod_command(mode, &child)?)?;
+                        pending.push(child);
+                    }
+                    _ => {
+                        self.run(&chmod_command(mode, &child)?)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Runs one command and returns its standard output. Anything the
@@ -494,6 +544,24 @@ mod tests {
             false
         });
         assert_eq!(first.len(), 1);
+    }
+
+    #[test]
+    fn chmod_uses_octal_and_quotes_the_path() {
+        assert_eq!(
+            chmod_command(0o755, "/srv/my app").unwrap(),
+            "chmod 755 \"/srv/my app\""
+        );
+        assert_eq!(chmod_command(0o4755, "/a").unwrap(), "chmod 4755 \"/a\"");
+        assert_eq!(chmod_command(0o10_0644, "/a").unwrap(), "chmod 644 \"/a\"");
+        assert!(chmod_command(0o644, "/a\nb").is_err());
+    }
+
+    #[test]
+    fn listings_report_owner_and_group() {
+        let files = parse_listing("-rw-r--r--    1 deploy   staff      12 Oct 13 18:40 a.txt\n");
+        assert_eq!(files[0].owner.as_deref(), Some("deploy"));
+        assert_eq!(files[0].group.as_deref(), Some("staff"));
     }
 
     #[test]

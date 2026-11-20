@@ -126,6 +126,41 @@ impl Sftp {
         Ok(self.session.set_metadata(path, metadata).await?)
     }
 
+    /// Sets the permission bits of `path` and, if it is a folder, of
+    /// everything in it. Links are skipped: changing one would change what it
+    /// points to, which may be outside the folder.
+    pub async fn set_permissions_all(&self, path: &str, mode: u32) -> Result<()> {
+        if self.lstat(path).await?.kind == EntryKind::Symlink {
+            return Ok(());
+        }
+        self.set_permissions(path, mode).await?;
+        let mut pending = vec![path.to_owned()];
+        while let Some(dir) = pending.pop() {
+            for entry in self.list(&dir).await? {
+                if entry.name.is_empty() || entry.name.contains('/') {
+                    return Err(Error::Sftp(format!(
+                        "{dir} lists an entry that cannot be changed: {:?}",
+                        entry.name
+                    )));
+                }
+                let child = if dir.ends_with('/') {
+                    format!("{dir}{}", entry.name)
+                } else {
+                    format!("{dir}/{}", entry.name)
+                };
+                match entry.stat.kind {
+                    EntryKind::Symlink => {}
+                    EntryKind::Dir => {
+                        self.set_permissions(&child, mode).await?;
+                        pending.push(child);
+                    }
+                    _ => self.set_permissions(&child, mode).await?,
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn remove_file(&self, path: &str) -> Result<()> {
         Ok(self.session.remove_file(path).await?)
     }

@@ -385,6 +385,9 @@ export interface RemoteFile {
   size: number;
   modified: string;
   permissions: string;
+  /** The owner and group as the server reported them (a name or a number), when it did. */
+  owner?: string | null;
+  group?: string | null;
 }
 
 export interface FilesHandle {
@@ -393,6 +396,8 @@ export interface FilesHandle {
   mkdir(path: string): Promise<void>;
   remove(path: string, directory: boolean): Promise<void>;
   rename(from: string, to: string): Promise<void>;
+  /** Sets the permission bits (`0o755` style); `recursive` applies them to everything inside a folder too. */
+  chmod(path: string, mode: number, recursive: boolean): Promise<void>;
   close(): void;
 }
 
@@ -427,6 +432,7 @@ export async function openFiles(hostId: string): Promise<FilesHandle> {
     mkdir: (path) => invoke("sftp_mkdir", { id, path }),
     remove: (path, directory) => invoke("sftp_remove", { id, path, directory }),
     rename: (from, to) => invoke("sftp_rename", { id, from, to }),
+    chmod: (path, mode, recursive) => invoke("sftp_chmod", { id, path, mode, recursive }),
     close: () => void invoke("sftp_close", { id }).catch(console.error),
   };
 }
