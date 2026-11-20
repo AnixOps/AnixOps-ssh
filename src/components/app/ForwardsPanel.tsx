@@ -87,6 +87,7 @@ export function ForwardsPanel({ hosts }: { hosts: Host[] }) {
             <motion.div
               key={tunnel.id}
               {...appear}
+              data-context-row
               className="group rounded-sm px-3 py-2.5 hover:bg-fill-1"
             >
               <div className="flex items-start gap-3">
@@ -112,6 +113,7 @@ export function ForwardsPanel({ hosts }: { hosts: Host[] }) {
                 <span className="ml-auto flex opacity-0 transition-opacity duration-micro group-focus-within:opacity-100 group-hover:opacity-100">
                   <Menu
                     label={t.more}
+                    contextRow
                     items={[
                       { key: "edit", label: t.edit, icon: <Pencil />, onSelect: () => setEditing(tunnel) },
                       "separator",

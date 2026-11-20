@@ -7,6 +7,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { t } from "@/lib/i18n";
 import { duration, ease } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import { nativeMenuAllowed } from "@/lib/webviewChrome";
 
 export type MenuEntry =
   | "separator"
@@ -43,6 +44,7 @@ export function Menu({
   className,
   wide = false,
   tooltip,
+  contextRow = false,
 }: {
   /** The accessible name and tooltip of the button, in the words of the labelled action. */
   label?: string;
@@ -63,8 +65,13 @@ export function Menu({
   wide?: boolean;
   /** The tooltip, when it should say more than the label (also shown while disabled). */
   tooltip?: string;
+  /** A right-click on the enclosing `[data-context-row]` opens the same list at
+   *  the pointer, as the row's context menu. */
+  contextRow?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  // Set while the list was opened by a right-click: where, and what had the focus.
+  const [pointer, setPointer] = useState<{ x: number; y: number; from: Element | null } | null>(null);
   const [place, setPlace] = useState<{ top: number; left: number; inModal: boolean } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -72,16 +79,39 @@ export function Menu({
 
   const close = (returnFocus: boolean) => {
     setOpen(false);
-    if (returnFocus) buttonRef.current?.focus();
+    if (!returnFocus) return;
+    // A right-click menu gives the focus back to where it was, not to the
+    // row's (hidden) menu button.
+    if (pointer) {
+      if (pointer.from instanceof HTMLElement && pointer.from.isConnected) pointer.from.focus();
+    } else buttonRef.current?.focus();
   };
 
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) return;
-    const box = buttonRef.current.getBoundingClientRect();
     // Inside a dialog the list must sit above the dialog's layer.
     const inModal = buttonRef.current.closest('[aria-modal="true"]') !== null;
+    if (pointer) return setPlace({ ...pointerPlace(pointer, listRef.current, items.length), inModal });
+    const box = buttonRef.current.getBoundingClientRect();
     setPlace({ top: box.bottom + 6, left: align === "end" ? box.right : box.left, inModal });
-  }, [open, align]);
+  }, [open, align, pointer, items.length]);
+
+  useEffect(() => {
+    if (!contextRow || disabled) return;
+    const row = buttonRef.current?.closest<HTMLElement>("[data-context-row]");
+    if (!row) return;
+    const onContext = (event: MouseEvent) => {
+      if (event.defaultPrevented || nativeMenuAllowed(event)) return;
+      // Text selected in the row (an address, a command) gets the Copy menu instead.
+      const selection = window.getSelection();
+      if (selection?.toString().trim() && row.contains(selection.anchorNode)) return;
+      event.preventDefault();
+      setPointer({ x: event.clientX, y: event.clientY, from: document.activeElement });
+      setOpen(true);
+    };
+    row.addEventListener("contextmenu", onContext);
+    return () => row.removeEventListener("contextmenu", onContext);
+  }, [contextRow, disabled]);
 
   useEffect(() => {
     if (!open) return;
@@ -114,10 +144,14 @@ export function Menu({
       aria-controls={open ? id : undefined}
       disabled={disabled}
       {...buttonProps}
-      onClick={() => setOpen((current) => !current)}
+      onClick={() => {
+        setPointer(null);
+        setOpen((current) => !current);
+      }}
       onKeyDown={(event: KeyboardEvent) => {
         if (event.key === "ArrowDown" && !open) {
           event.preventDefault();
+          setPointer(null);
           setOpen(true);
         }
       }}
@@ -146,7 +180,7 @@ export function Menu({
         listRef={listRef}
         label={label}
         place={open ? place : null}
-        align={align}
+        align={pointer ? "start" : align}
         touch={touch}
         wide={wide}
         items={items}
@@ -180,6 +214,18 @@ function MenuList({
   /** `returnFocus`: Escape or a chosen item, as opposed to Tab away. */
   onClose: (returnFocus: boolean) => void;
 }) {
+  // The list fits its longest item, so its size is known only once it is
+  // drawn: then move it back inside the window if it spills over an edge.
+  const [nudge, setNudge] = useState({ x: 0, y: 0 });
+  useLayoutEffect(() => {
+    const box = place ? listRef.current?.getBoundingClientRect() : undefined;
+    if (!box) return setNudge({ x: 0, y: 0 });
+    const margin = 4;
+    const x = box.right > window.innerWidth - margin ? window.innerWidth - margin - box.right : box.left < margin ? margin - box.left : 0;
+    const y = box.bottom > window.innerHeight - margin ? Math.max(margin - box.top, window.innerHeight - margin - box.bottom) : 0;
+    setNudge({ x, y });
+  }, [place, listRef]);
+
   useEffect(() => {
     if (place) listRef.current?.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')?.focus();
   }, [place, listRef]);
@@ -211,10 +257,10 @@ function MenuList({
           role="menu"
           aria-label={label}
           onKeyDown={keys}
-          style={{ top: place.top, left: place.left, zIndex: place.inModal ? "calc(var(--z-modal) + 1)" : undefined }}
+          style={{ top: place.top + nudge.y, left: place.left + nudge.x, zIndex: place.inModal ? "calc(var(--z-modal) + 1)" : undefined }}
           className={cn(
             "fixed z-dropdown rounded-sm bg-bg-elevated p-1 shadow-2 ring-1 ring-separator",
-            wide ? "w-80" : touch ? "w-64" : "w-52",
+            wide ? "w-80" : touch ? "w-64" : "w-max min-w-52 max-w-80",
             align === "end" ? "origin-top-right -translate-x-full" : "origin-top-left",
           )}
           initial={{ opacity: 0 }}
@@ -264,6 +310,17 @@ function MenuList({
   );
 }
 
+/** Where a list opened at the pointer goes: up or to the left near the
+ *  window's edges, so that it stays on screen (`w-52`, rows of 32 px). */
+function pointerPlace(at: { x: number; y: number }, list: HTMLElement | null, count: number) {
+  const width = list?.offsetWidth || 208;
+  const height = (list?.offsetHeight ?? 0) || count * 32 + 8;
+  return {
+    left: Math.max(4, Math.min(at.x, window.innerWidth - width - 4)),
+    top: at.y + height > window.innerHeight - 4 ? Math.max(4, at.y - height) : at.y,
+  };
+}
+
 /** The same list opened at the pointer by a right-click (`at`, in viewport
  *  pixels; null hides it). Clicking elsewhere, blurring the window or Escape
  *  closes it; `onClose` then gives focus back to where it came from. */
@@ -283,14 +340,7 @@ export function ContextMenu({
   const [place, setPlace] = useState<{ top: number; left: number } | null>(null);
 
   useLayoutEffect(() => {
-    if (!at) return setPlace(null);
-    // Keep the list on screen: open up or to the left near the edges.
-    const width = 208;
-    const height = (listRef.current?.offsetHeight ?? 0) || items.length * 32 + 8;
-    setPlace({
-      left: Math.max(4, Math.min(at.x, window.innerWidth - width - 4)),
-      top: at.y + height > window.innerHeight - 4 ? Math.max(4, at.y - height) : at.y,
-    });
+    setPlace(at ? pointerPlace(at, listRef.current, items.length) : null);
   }, [at, items.length]);
 
   useEffect(() => {

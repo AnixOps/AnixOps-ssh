@@ -66,6 +66,57 @@ export function sanitizeTitle(title: string): string {
   return chars.length > TITLE_MAX ? chars.slice(0, TITLE_MAX - 1).join("") + "…" : clean;
 }
 
+/** Capabilities answered to XTGETTCAP (`DCS + q <hex names> ST`). Programs
+ *  ask for these when the environment says little: `COLORTERM` rarely
+ *  survives SSH (servers accept only `LANG` and `LC_*`), so Neovim and others
+ *  query `Tc`/`RGB` to learn that 24-bit colour works. `true` is a boolean
+ *  capability; strings are terminfo values. */
+const TERMINAL_CAPABILITIES: Record<string, string | true> = {
+  Tc: true,
+  RGB: true,
+  setrgbf: "\\E[38;2;%p1%d;%p2%d;%p3%dm",
+  setrgbb: "\\E[48;2;%p1%d;%p2%d;%p3%dm",
+  // Underline styles (undercurl) and colours.
+  Smulx: "\\E[4:%p1%dm",
+  Setulc: "\\E[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%d%;m",
+  // OSC 52 clipboard writes (tmux's set-clipboard).
+  Ms: "\\E]52;%p1%s;%p2%s\\007",
+  // Cursor shape.
+  Ss: "\\E[%p1%d q",
+  Se: "\\E[2 q",
+  TN: "xterm-256color",
+  colors: "256",
+};
+
+function hexToText(hex: string): string | null {
+  if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) return null;
+  let out = "";
+  for (let i = 0; i < hex.length; i += 2) out += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16));
+  return out;
+}
+
+function textToHex(text: string): string {
+  return Array.from(text, (char) => char.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase()).join("");
+}
+
+/** The reply to an XTGETTCAP request (the DCS payload, hex-encoded names
+ *  separated by `;`), as xterm gives it: `DCS 1 + r name=value ST` for each
+ *  known name, `DCS 0 + r name ST` for an unknown one. */
+export function capabilityReply(payload: string): string {
+  return payload
+    .split(";")
+    .filter((hex) => hex !== "")
+    .slice(0, 16)
+    .map((hex) => {
+      const name = hexToText(hex);
+      const value = name === null ? undefined : TERMINAL_CAPABILITIES[name];
+      if (value === undefined) return `\x1bP0+r${hex}\x1b\\`;
+      const head = `\x1bP1+r${hex.toUpperCase()}`;
+      return value === true ? `${head}\x1b\\` : `${head}=${textToHex(value.replace(/\\E/g, "\x1b"))}\x1b\\`;
+    })
+    .join("");
+}
+
 /** DEC private modes that turn mouse tracking on (X10, normal, button-event,
  *  any-event). The encodings (1006 SGR and the like) only change the format. */
 export const MOUSE_TRACKING_MODES: readonly number[] = [9, 1000, 1002, 1003];

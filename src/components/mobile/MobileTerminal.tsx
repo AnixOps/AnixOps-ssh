@@ -27,6 +27,7 @@ import {
 } from "@/lib/mobileKeys";
 import { dynamicTypeScale, haptic, hostAttach, isCjkLanguage, updateMobilePrefs, useMobilePrefs } from "@/lib/mobilePrefs";
 import { onSettings, settings } from "@/lib/settings";
+import { capabilityReply } from "@/lib/terminalInput";
 import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { terminalFont, terminalTheme } from "@/lib/terminalTheme";
 
@@ -180,6 +181,14 @@ export function MobileTerminal({
     terminal.onData(typed);
     // Mouse reports in the original encoding come as binary, not as typed text.
     terminal.onBinary((data) => send(binaryInput(data)));
+    // XTGETTCAP: Neovim and others ask whether 24-bit colour and undercurl work.
+    const capabilities = terminal.parser.registerDcsHandler({ intermediates: "+", final: "q" }, (data) => {
+      sendRaw(capabilityReply(data));
+      return true;
+    });
+    // OSC 8 hyperlinks are not opened from a tap; without this xterm.js would
+    // ask with a browser dialog.
+    terminal.options.linkHandler = { activate: () => {} };
     terminal.onResize(({ cols, rows }) => sessionRef.current?.resize(cols, rows));
     const rerender = () => redraw((count) => count + 1);
     terminal.onScroll(rerender);
@@ -346,6 +355,7 @@ export function MobileTerminal({
       observer.disconnect();
       if (noticeTimer !== null) window.clearTimeout(noticeTimer);
       touch.dispose();
+      capabilities.dispose();
       touchRef.current = null;
       imeRef.current?.dispose();
       imeRef.current = null;
