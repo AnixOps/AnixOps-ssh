@@ -423,6 +423,7 @@ pub enum TransferEvent {
     Started,
     Progress {
         bytes: u64,
+        total: Option<u64>,
     },
     Done,
     Failed {
@@ -652,7 +653,7 @@ fn watch(
                 let bytes = metadata.len();
                 if metadata.is_file() && reported != Some(bytes) {
                     reported = Some(bytes);
-                    let _ = events.send(TransferEvent::Progress { bytes });
+                    let _ = events.send(TransferEvent::Progress { bytes, total: None });
                 }
             }
         }

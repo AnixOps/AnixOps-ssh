@@ -3711,6 +3711,11 @@
         "bytes": {
           "type": "integer",
           "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bytes the whole transfer will move (a folder: the sum of its files), when known."
         }
       },
       "required": [
@@ -3718,7 +3723,7 @@
         "bytes"
       ],
       "additionalProperties": false,
-      "description": "Event `transfer.progress` payload: bytes moved so far."
+      "description": "Event `transfer.progress` payload: bytes moved so far, and the total when known."
     },
     "TransferStartedEvent": {
       "type": "object",

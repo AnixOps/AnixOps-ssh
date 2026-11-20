@@ -428,7 +428,7 @@ export interface FilesHandle {
 
 export type TransferEvent =
   | { kind: "started" }
-  | { kind: "progress"; bytes: number }
+  | { kind: "progress"; bytes: number; total?: number | null }
   | { kind: "done" }
   | { kind: "failed"; message: string }
   | { kind: "cancelled" };

@@ -421,7 +421,7 @@ async fn sftp_close(state: State<'_, Mobile>, id: String) -> Result<(), String> 
 #[serde(rename_all = "snake_case", tag = "kind")]
 enum TransferEvent {
     Started,
-    Progress { bytes: u64 },
+    Progress { bytes: u64, total: Option<u64> },
     Done,
     Failed { message: String },
     Cancelled,
@@ -488,7 +488,8 @@ async fn transfer_start(
             }
             "transfer.progress" => {
                 let bytes = payload["bytes"].as_u64().unwrap_or(0);
-                let _ = events.send(TransferEvent::Progress { bytes });
+                let total = payload["total"].as_u64();
+                let _ = events.send(TransferEvent::Progress { bytes, total });
             }
             "transfer.done" => {
                 let event = match payload["status"].as_str() {

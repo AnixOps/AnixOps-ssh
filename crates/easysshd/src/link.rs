@@ -204,7 +204,7 @@ pub trait LinkHandler: Send + Sync + 'static {
     fn hostkey_resolved(&self, _id: u64) {}
     /// A queued transfer left the queue and runs.
     fn transfer_started(&self, _transfer_id: &str) {}
-    fn transfer_progress(&self, _transfer_id: &str, _bytes: u64) {}
+    fn transfer_progress(&self, _transfer_id: &str, _bytes: u64, _total: Option<u64>) {}
     /// `status` is `completed`, `failed` or `cancelled`.
     fn transfer_done(&self, _transfer_id: &str, _status: &str, _error: Option<&str>) {}
     fn tunnel_status(&self, _status: TunnelStatus) {}
@@ -361,6 +361,7 @@ impl Inner {
             Some("transfer.progress") => self.handler.transfer_progress(
                 payload["transfer_id"].as_str().unwrap_or_default(),
                 payload["bytes"].as_u64().unwrap_or(0),
+                payload["total"].as_u64(),
             ),
             Some("transfer.done") => self.handler.transfer_done(
                 payload["transfer_id"].as_str().unwrap_or_default(),
