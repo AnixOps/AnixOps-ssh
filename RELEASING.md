@@ -23,7 +23,8 @@ Semantic versioning:
    `package.json`, `src-tauri/tauri.conf.json`, and the two lockfiles.
 2. When CI is green, run the smoke test below on one real machine against a
    real server, using the installers the pull request's CI uploaded
-   (`AnixOps-SSH-<OS>` artifacts). Merging is the release, so test first.
+   (`AnixOps-SSH-<OS>` artifacts; CI builds them because the version
+   changed, `scripts/ci-changes.sh`). Merging is the release, so test first.
    For a patch release, the checks touching the fix are enough.
 3. Merge. `tag.yml` sees the new version on `main`, checks that the three
    files agree, tags the merge commit `vX.Y.Z` and runs `release.yml`, which

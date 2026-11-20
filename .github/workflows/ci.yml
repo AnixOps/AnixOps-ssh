@@ -1,18 +1,52 @@
 name: CI
 
+# Pull requests run once, as `pull_request` (a branch push no longer starts a
+# second, identical run). main runs everything after each merge. A manual run
+# (Actions, "Run workflow" on a branch) also runs everything, installers
+# included.
 on:
   push:
-    branches-ignore: ["ci-results/**"]
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
+# A new push to a pull request cancels its older run. Runs on main are never
+# cancelled half-way, so main always ends with a full result and saves the
+# Rust caches the pull requests start from; a newer push only replaces a run
+# that is still waiting.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
+env:
+  # Line tables keep file:line in panics and backtraces but skip the full
+  # debug info: smaller objects, faster links and smaller caches.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
 jobs:
+  # What the change needs: scripts/ci-changes.sh. Frontend- and docs-only pull
+  # requests skip the end-to-end and Android jobs (not required checks; the
+  # Rust jobs always run). Installers are built on main, manual runs, and pull
+  # requests that change the version or packaging.
+  changes:
+    name: Decide what to build
+    runs-on: ubuntu-latest
+    outputs:
+      native: ${{ steps.decide.outputs.native }}
+      installers: ${{ steps.decide.outputs.installers }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+        run: scripts/ci-changes.sh | tee -a "$GITHUB_OUTPUT"
+
   frontend:
     name: Frontend and screenshots
     runs-on: ubuntu-latest
@@ -21,6 +55,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: npm
       - name: Install fonts for CJK screenshots
         run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
       - name: Install
@@ -59,8 +94,10 @@ jobs:
             package-lock.json
           if-no-files-found: ignore
 
+  # Required checks: runs on every pull request, whatever it changes.
   rust:
     name: Rust (${{ matrix.os }})
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +106,8 @@ jobs:
     defaults:
       run:
         shell: bash -o pipefail {0}
+    env:
+      INSTALLERS: ${{ needs.changes.outputs.installers }}
     steps:
       - uses: actions/checkout@v5
       - name: Linux system libraries for Tauri
@@ -81,10 +120,17 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          # The macOS job also builds the iOS app library (below).
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-ios,aarch64-apple-ios-sim' || '' }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Pull requests start from main's cache and do not save their own:
+          # many branch caches would push main's out of the 10 GB limit.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install frontend
         run: mkdir -p logs && npm install > logs/npm-install.log 2>&1
       - name: Build frontend
@@ -106,8 +152,39 @@ jobs:
       - name: test
         if: ${{ !cancelled() && steps.frontend.outcome == 'success' }}
         run: cargo test --workspace 2>&1 | tee logs/test.log
+      # iOS runs inside the macOS job instead of a job of its own, so a CI run
+      # needs one macOS runner, not two (macOS runners are what CI waits for).
+      # No signing; docs/mobile-prototype.md.
+      - name: Engine crates build for iOS
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.frontend.outcome == 'success' }}
+        run: |
+          cargo check --target aarch64-apple-ios \
+            -p easyssh-core -p easyssh-crypto -p easyssh-ssh -p easyssh-store -p easyssh-vault -p easyssh-engine -p easyssh-mobile-keys \
+            2>&1 | tee logs/ios-engine-check.log
+      - name: App library for the iOS simulator
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.frontend.outcome == 'success' }}
+        run: |
+          start=$(date +%s)
+          cargo build --release --target aarch64-apple-ios-sim -p anixops-ssh --lib 2>&1 | tee logs/ios-lib-build.log
+          {
+            echo "# iOS simulator library"
+            echo
+            echo "- libanixops_ssh_lib.a: $(stat -f %z target/aarch64-apple-ios-sim/release/libanixops_ssh_lib.a) bytes"
+            echo "- build seconds: $(( $(date +%s) - start ))"
+          } | tee logs/ios-metrics.md
+      - name: Xcode project and simulator app (informational)
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.frontend.outcome == 'success' && env.INSTALLERS == 'true' }}
+        continue-on-error: true
+        run: |
+          brew install xcodegen > /dev/null 2>&1 || true
+          # The Xcode project is checked in; generate it only when it is missing.
+          [ -d src-tauri/gen/apple ] || npx tauri ios init --ci 2>&1 | tee logs/ios-init.log
+          npx tauri ios build --debug --target aarch64-sim --ci 2>&1 | tee logs/ios-build.log
+      # Installers: main, manual runs, and pull requests that change the
+      # version or packaging (scripts/ci-changes.sh). A pull request without
+      # them is still compiled, linted and tested on every platform above.
       - name: Bundle
-        if: ${{ !cancelled() && steps.frontend.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.frontend.outcome == 'success' && env.INSTALLERS == 'true' }}
         env:
           # Public keys only (RELEASING.md, "Update feed"); empty means no update check.
           EASYSSH_UPDATE_PUBLIC_KEYS: ${{ vars.EASYSSH_UPDATE_PUBLIC_KEYS }}
@@ -120,7 +197,18 @@ jobs:
             logs/
             Cargo.lock
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
+      - if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-iOS
+          path: |
+            src-tauri/gen/apple/
+            !src-tauri/gen/apple/build/
+            !src-tauri/gen/apple/Externals/
+            !src-tauri/gen/apple/assets/
+          if-no-files-found: ignore
+      - if: env.INSTALLERS == 'true'
+        uses: actions/upload-artifact@v4
         with:
           name: AnixOps-SSH-${{ runner.os }}
           path: |
@@ -132,6 +220,8 @@ jobs:
 
   e2e:
     name: End-to-end (Linux)
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-22.04
     defaults:
       run:
@@ -142,6 +232,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Generate test key
         run: mkdir -p logs && e2e/prepare.sh
       - name: Start OpenSSH containers
@@ -176,6 +268,8 @@ jobs:
   # Nothing is signed or published; the APK is an artifact for trying on a phone.
   android:
     name: Android (debug APK)
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-22.04
     defaults:
       run:
@@ -193,6 +287,8 @@ jobs:
         with:
           targets: aarch64-linux-android
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Android SDK and NDK
         run: |
           mkdir -p logs
@@ -237,6 +333,7 @@ jobs:
       # The debug APK carries debug symbols; the release build is what a user
       # would download. Unsigned, informational: it must not fail the job.
       - name: Build release APK (size only)
+        if: needs.changes.outputs.installers == 'true'
         continue-on-error: true
         run: |
           start=$(date +%s)
@@ -262,68 +359,15 @@ jobs:
           path: apk/*.apk
           if-no-files-found: error
 
-  # Bonus: the engine crates and the app library build for iOS, with no
-  # signing. The generated Xcode project is informational for now.
-  ios:
-    name: iOS (simulator)
-    runs-on: macos-latest
-    defaults:
-      run:
-        shell: bash -o pipefail {0}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim
-      - uses: Swatinem/rust-cache@v2
-      - name: Install and build frontend
-        run: |
-          mkdir -p logs
-          npm install > logs/npm-install.log 2>&1
-          npm run build 2>&1 | tee logs/frontend-build.log
-      - name: Engine crates build for iOS
-        run: |
-          cargo check --target aarch64-apple-ios \
-            -p easyssh-core -p easyssh-crypto -p easyssh-ssh -p easyssh-store -p easyssh-vault -p easyssh-engine -p easyssh-mobile-keys \
-            2>&1 | tee logs/ios-engine-check.log
-      - name: App library for the iOS simulator
-        run: |
-          start=$(date +%s)
-          cargo build --release --target aarch64-apple-ios-sim -p anixops-ssh --lib 2>&1 | tee logs/ios-lib-build.log
-          {
-            echo "# iOS simulator library"
-            echo
-            echo "- libanixops_ssh_lib.a: $(stat -f %z target/aarch64-apple-ios-sim/release/libanixops_ssh_lib.a) bytes"
-            echo "- build seconds: $(( $(date +%s) - start ))"
-          } | tee logs/ios-metrics.md
-      - name: Xcode project and simulator app (informational)
-        continue-on-error: true
-        run: |
-          brew install xcodegen > /dev/null 2>&1 || true
-          # The Xcode project is checked in; generate it only when it is missing.
-          [ -d src-tauri/gen/apple ] || npx tauri ios init --ci 2>&1 | tee logs/ios-init.log
-          npx tauri ios build --debug --target aarch64-sim --ci 2>&1 | tee logs/ios-build.log
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-iOS
-          path: |
-            logs/
-            src-tauri/gen/apple/
-            !src-tauri/gen/apple/build/
-            !src-tauri/gen/apple/Externals/
-            !src-tauri/gen/apple/assets/
-          if-no-files-found: ignore
-
   # Publishes logs and screenshots to the `ci-results/<branch>` branch so they
-  # can be read with plain git (no API token or log download needed).
+  # can be read with plain git (no API token or log download needed). Pull
+  # requests from forks cannot push and are left out.
   report:
     name: Publish results
-    if: always() && github.event_name == 'push'
-    needs: [frontend, rust, e2e, android, ios]
+    if: >-
+      always() && (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
+    needs: [changes, frontend, rust, e2e, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -334,27 +378,29 @@ jobs:
           pattern: "{frontend,logs-*}"
       - name: Push to ci-results branch
         env:
+          NATIVE: ${{ needs.changes.outputs.native }}
+          INSTALLERS: ${{ needs.changes.outputs.installers }}
           FRONTEND: ${{ needs.frontend.result }}
           RUST: ${{ needs.rust.result }}
           E2E: ${{ needs.e2e.result }}
           ANDROID: ${{ needs.android.result }}
-          IOS: ${{ needs.ios.result }}
-          BRANCH: ${{ github.ref_name }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          cd results
+          mkdir -p results && cd results
           {
-            echo "# CI results for ${BRANCH} @ ${GITHUB_SHA::7}"
+            echo "# CI results for ${BRANCH} @ ${SHA::7}"
             echo
             echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "- Native jobs needed: ${NATIVE}; installers built: ${INSTALLERS}"
             echo "- Frontend and screenshots: ${FRONTEND}"
-            echo "- Rust (all platforms): ${RUST}"
+            echo "- Rust (all platforms; iOS runs in the macOS job): ${RUST}"
             echo "- End-to-end (Linux): ${E2E}"
             echo "- Android (debug APK): ${ANDROID}"
-            echo "- iOS (simulator): ${IOS}"
           } > SUMMARY.md
           git init -q -b results
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -q -m "CI results for ${GITHUB_SHA::7}"
+          git commit -q -m "CI results for ${SHA::7}"
           git push -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" "results:refs/heads/ci-results/${BRANCH}"
