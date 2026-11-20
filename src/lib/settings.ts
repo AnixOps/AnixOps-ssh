@@ -19,6 +19,8 @@ export interface Settings {
   terminalCopyOnSelect: boolean;
   /** Remote programs may write the clipboard with OSC 52 (never read it). */
   terminalOsc52: boolean;
+  /** Reconnect by itself, with backoff, when a connection drops. */
+  terminalAutoReconnect: boolean;
   /** The SSH engine for hosts that follow the global setting: the built-in
    * engine unless OpenSSH was chosen (an advanced option kept for compatibility). */
   sshEngine: SshEngine;
@@ -37,6 +39,7 @@ let current: Settings = {
   terminalRightClick: "menu",
   terminalCopyOnSelect: false,
   terminalOsc52: true,
+  terminalAutoReconnect: true,
   sshEngine: "russh",
   crashReports: null,
   usageStats: false,

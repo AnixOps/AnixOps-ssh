@@ -171,6 +171,13 @@ export function SettingsPanel({
               onClick={() => update({ terminalOsc52: !current.terminalOsc52 })}
             />
           </SettingsRow>
+          <SettingsRow label={t.autoReconnect} hint={t.autoReconnectHint}>
+            <Switch
+              on={current.terminalAutoReconnect}
+              label={t.autoReconnect}
+              onClick={() => update({ terminalAutoReconnect: !current.terminalAutoReconnect })}
+            />
+          </SettingsRow>
           {isMac && (
             <SettingsRow label={t.optionAsMeta} hint={t.optionAsMetaHint}>
               <Switch
