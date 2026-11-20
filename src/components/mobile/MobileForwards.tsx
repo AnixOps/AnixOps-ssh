@@ -18,14 +18,17 @@ import {
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { describe } from "@/lib/mobileForwards";
+import { isTunnelActive, tunnelWarning } from "@/lib/tunnels";
 import { cn } from "@/lib/utils";
 
 function statusText(status: TunnelStatus): string {
   switch (status.state) {
     case "running":
-      return t.tunnelRunning;
+      return tunnelWarning(status) ?? t.tunnelRunning;
     case "starting":
       return t.tunnelStarting;
+    case "reconnecting":
+      return t.tunnelReconnecting;
     case "failed":
       return status.message;
     default:
@@ -64,8 +67,7 @@ export function MobileForwards({ hosts }: { hosts: Host[] }) {
   const usable = hosts.some((host) => host.fields.serial == null);
 
   const toggle = (tunnel: Tunnel) => {
-    const running = tunnel.status.state === "running" || tunnel.status.state === "starting";
-    (running ? stopTunnel(tunnel.id) : startTunnel(tunnel.id))
+    (isTunnelActive(tunnel.status) ? stopTunnel(tunnel.id) : startTunnel(tunnel.id))
       .then(() => setError(null))
       .catch((reason) => setError(String(reason)));
   };
@@ -117,7 +119,8 @@ export function MobileForwards({ hosts }: { hosts: Host[] }) {
       ) : (
         <ul className="min-h-0 flex-1 overflow-y-auto pb-2">
           {tunnels.map((tunnel) => {
-            const on = tunnel.status.state === "running" || tunnel.status.state === "starting";
+            const on = isTunnelActive(tunnel.status);
+            const warned = tunnelWarning(tunnel.status) !== null;
             return (
               <li key={tunnel.id} className="flex items-center border-b pr-2">
                 <div className="px-safe min-w-0 flex-1 py-2">
@@ -127,7 +130,10 @@ export function MobileForwards({ hosts }: { hosts: Host[] }) {
                   </p>
                   <p
                     role="status"
-                    className={cn("truncate text-caption", tunnel.status.state === "failed" ? "text-danger" : "text-label-3")}
+                    className={cn(
+                      "truncate text-caption",
+                      tunnel.status.state === "failed" ? "text-danger" : warned ? "text-warning" : "text-label-3",
+                    )}
                   >
                     {statusText(tunnel.status)}
                   </p>

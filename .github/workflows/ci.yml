@@ -108,6 +108,9 @@ jobs:
         run: cargo test --workspace 2>&1 | tee logs/test.log
       - name: Bundle
         if: ${{ !cancelled() && steps.frontend.outcome == 'success' }}
+        env:
+          # Public keys only (RELEASING.md, "Update feed"); empty means no update check.
+          EASYSSH_UPDATE_PUBLIC_KEYS: ${{ vars.EASYSSH_UPDATE_PUBLIC_KEYS }}
         run: npx tauri build 2>&1 | tee logs/bundle.log
       - if: always()
         uses: actions/upload-artifact@v4

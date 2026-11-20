@@ -10,7 +10,7 @@
 
 use crate::mobile::{Mobile, Shared};
 use easyssh_mobile_keys::{mark_setup_done, setup_done, status_json};
-use easyssh_vault::{secrets_update, Vault, VaultError};
+use easyssh_vault::{proxy_password_change, secrets_update, Vault, VaultError};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -230,6 +230,7 @@ pub struct SecretsView {
     password: bool,
     private_key: bool,
     passphrase: bool,
+    proxy_password: bool,
 }
 
 fn secrets_view(flags: easyssh_store::SecretFlags) -> SecretsView {
@@ -237,6 +238,7 @@ fn secrets_view(flags: easyssh_store::SecretFlags) -> SecretsView {
         password: flags.password,
         private_key: flags.private_key,
         passphrase: flags.passphrase,
+        proxy_password: flags.proxy_password,
     }
 }
 
@@ -265,10 +267,12 @@ pub async fn secrets_set(
     password: Option<String>,
     private_key: Option<String>,
     passphrase: Option<String>,
+    proxy_password: Option<String>,
 ) -> Result<SecretsView, String> {
     let mobile = state.share();
     blocking(move || {
-        let update = secrets_update(password, private_key, passphrase)?;
+        let mut update = secrets_update(password, private_key, passphrase)?;
+        update.proxy_password = proxy_password_change(proxy_password)?;
         // Open the vault first, outside the database lock: a biometric prompt
         // can take as long as the person does.
         if !update.is_empty() {

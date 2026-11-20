@@ -9,6 +9,7 @@
 
 pub mod choice;
 pub mod interact;
+pub mod options;
 /// Host keys in the store, the connection registry, the file sessions and the
 /// tunnels live in `easyssh-engine`: the in-process engine of the mobile app
 /// runs the same code.
@@ -63,6 +64,15 @@ fn vault_error(error: easyssh_vault::VaultError) -> SshError {
             SshError::Locked("the vault is locked; unlock it to use the saved key".into())
         }
         other => SshError::Protocol(format!("cannot read the saved key: {other}")),
+    }
+}
+
+fn proxy_vault_error(error: easyssh_vault::VaultError) -> SshError {
+    match error {
+        easyssh_vault::VaultError::Locked => SshError::Locked(
+            "the vault is locked; unlock it to use the saved proxy password".into(),
+        ),
+        other => SshError::Protocol(format!("cannot read the saved proxy password: {other}")),
     }
 }
 
@@ -160,16 +170,22 @@ impl Engine {
 
     fn params(&self, spec: &HostSpec, agent: Option<&PathBuf>) -> ConnectParams {
         let paths = lock(&self.paths).clone();
-        let fallbacks = known_hosts::openssh_files(paths.user.as_deref(), &paths.system);
+        // `UserKnownHostsFile` of the ssh config (else the default file),
+        // `known_hosts2` beside it and the system-wide files.
+        let user = spec.user_known_hosts.clone().unwrap_or(paths.user);
+        let fallbacks = known_hosts::openssh_files(user.as_deref(), &paths.system);
         let primary: Arc<dyn easyssh_ssh::KnownHosts> = match lock(&self.store).clone() {
             Some(store) => Arc::new(StoreKnownHosts::new(store)),
             None => Arc::new(easyssh_ssh::KnownHostsFile::new(paths.app)),
         };
         let known: Arc<dyn easyssh_ssh::KnownHosts> =
             Arc::new(LayeredKnownHosts::with_fallbacks(primary, fallbacks));
+        let known = options::with_policy(known, spec.host_key_policy);
         let mut params =
             ConnectParams::new(spec.host.clone(), spec.port, spec.user.clone()).known_hosts(known);
-        params.agent = match (spec.agent, agent) {
+        // `IdentityAgent` in the ssh config wins over the client's agent, as
+        // it does over `SSH_AUTH_SOCK` for OpenSSH.
+        params.agent = match (spec.agent, spec.agent_path.as_ref().or(agent)) {
             (false, _) => AgentSource::Disabled,
             (true, Some(path)) => AgentSource::Path(path.clone()),
             (true, None) => AgentSource::Environment,
@@ -205,8 +221,21 @@ impl Engine {
         plan: &RusshPlan,
         agent: Option<&PathBuf>,
     ) -> Result<Session, SharedError> {
-        let hops: Vec<ConnectParams> = plan.hops.iter().map(|h| self.params(h, agent)).collect();
+        let mut hops: Vec<ConnectParams> =
+            plan.hops.iter().map(|h| self.params(h, agent)).collect();
         let mut target = self.params(&plan.target, agent);
+        // The host's outbound proxy reaches the first hop: the first jump
+        // host, or the target when there is none.
+        if let Some(settings) = &plan.proxy {
+            let secrets = lock(&self.secrets).clone();
+            let proxy =
+                easyssh_engine::saved_proxy(settings, secrets.as_deref(), &plan.key.host_id)
+                    .map_err(|error| Arc::new(proxy_vault_error(error)))?;
+            match hops.first_mut() {
+                Some(first) => first.proxy = Some(proxy),
+                None => target.proxy = Some(proxy),
+            }
+        }
         // A private key (and its passphrase) saved for the host goes to the
         // engine from memory; it is never written to a file.
         if let Some(identity) = self.saved_identity(plan).map_err(Arc::new)? {
@@ -253,8 +282,16 @@ impl Engine {
             .await
     }
 
+    /// A lease on the shared connection for `plan` only when it is up now.
+    /// Never connects (the monitor must not start a login on its own).
+    pub fn existing(&self, plan: &RusshPlan) -> Option<Lease> {
+        self.registry.existing(&plan.key)
+    }
+
     /// A shell on the host's shared connection. The lease keeps the
-    /// connection up for as long as the shell lives.
+    /// connection up for as long as the shell lives. `language` is the app's
+    /// (`zh`, `en`; `None` to follow the system), for `LANG` when this
+    /// process has no UTF-8 locale; see [`easyssh_ssh::shell_env`].
     ///
     /// When the server refuses the session (OpenSSH's `MaxSessions`, 10 by
     /// default), the shell opens on another connection to the same host.
@@ -266,11 +303,14 @@ impl Engine {
         agent: Option<PathBuf>,
         cols: u16,
         rows: u16,
+        language: Option<&str>,
     ) -> Result<(ShellHandle, Lease), SharedError> {
         let options = ShellOptions {
             term: "xterm-256color".into(),
             cols: u32::from(cols.max(1)),
             rows: u32::from(rows.max(1)),
+            env: easyssh_ssh::local_shell_env(language, &plan.target.set_env),
+            ..ShellOptions::default()
         };
         let mut shard = 0;
         let mut retried_timeout = false;
@@ -332,6 +372,7 @@ mod tests {
                 private_key: self.key.is_some(),
                 passphrase: self.passphrase.is_some(),
                 password: false,
+                ..Default::default()
             })
         }
     }

@@ -195,6 +195,7 @@ fn nothing_readable_reaches_the_database_file() {
                 password: set("hunter2-very-unique"),
                 private_key: set("-----BEGIN OPENSSH PRIVATE KEY-----unique-body"),
                 passphrase: set("passphrase-very-unique"),
+                proxy_password: set("proxy-pass-very-unique"),
             },
         )
         .unwrap();
@@ -206,6 +207,7 @@ fn nothing_readable_reaches_the_database_file() {
             "hunter2-very-unique",
             "unique-body",
             "passphrase-very-unique",
+            "proxy-pass-very-unique",
         ] {
             assert!(!text.contains(needle), "{needle} found on disk");
         }
@@ -247,4 +249,84 @@ fn debug_never_shows_values() {
         ..StoredSecrets::default()
     };
     assert!(!format!("{stored:?}").contains("hunter2"));
+}
+
+#[test]
+fn the_proxy_password_is_a_sealed_secret_like_the_others() {
+    let cipher = unlocked();
+    let store = open(cipher.clone());
+    let id = host(&store, "web");
+    store
+        .set_host_secrets(&id, &only_password("login"))
+        .unwrap();
+    store
+        .set_host_secrets(
+            &id,
+            &SecretsUpdate {
+                proxy_password: set("proxy-secret"),
+                ..SecretsUpdate::default()
+            },
+        )
+        .unwrap();
+    let flags = store.host_secret_flags(&id).unwrap();
+    assert!(flags.password && flags.proxy_password && !flags.private_key);
+    let got = store.host_secrets(&id).unwrap();
+    assert_eq!(got.password.unwrap().expose(), "login");
+    assert_eq!(got.proxy_password.unwrap().expose(), "proxy-secret");
+    assert_eq!(store.hosts_with_secrets().unwrap(), vec![id.clone()]);
+
+    // Clearing the login keeps the proxy password; clearing both removes the row.
+    store
+        .set_host_secrets(
+            &id,
+            &SecretsUpdate {
+                password: SecretChange::Clear,
+                ..SecretsUpdate::default()
+            },
+        )
+        .unwrap();
+    assert!(store.host_secret_flags(&id).unwrap().proxy_password);
+    cipher.lock();
+    assert!(matches!(
+        store.host_secrets(&id),
+        Err(StoreError::Cipher(CryptoError::Locked))
+    ));
+    assert!(store.host_secret_flags(&id).unwrap().proxy_password);
+    cipher.unlock(&DeviceKey::from_bytes([9; 32])).unwrap();
+    store
+        .set_host_secrets(
+            &id,
+            &SecretsUpdate {
+                proxy_password: SecretChange::Clear,
+                ..SecretsUpdate::default()
+            },
+        )
+        .unwrap();
+    assert!(store.hosts_with_secrets().unwrap().is_empty());
+}
+
+#[test]
+fn the_proxy_settings_of_a_host_round_trip_and_stay_out_of_the_secrets() {
+    use easyssh_core::{ProxyKind, ProxySettings};
+    let store = open(unlocked());
+    let mut connection = Connection::alias("web", "example");
+    connection.proxy = Some(ProxySettings {
+        kind: ProxyKind::Http,
+        host: "proxy.example.org".into(),
+        port: 3128,
+        username: Some("me".into()),
+    });
+    let id = connection.id.clone();
+    store.save_host(&connection, None).unwrap();
+    let loaded = store.get_host(&id).unwrap().unwrap();
+    assert_eq!(loaded.item.connection.proxy, connection.proxy);
+    // Without a saved password the flag is off.
+    assert!(!store.host_secret_flags(&id).unwrap().proxy_password);
+    // Editing the host without a proxy removes it.
+    connection.proxy = None;
+    store.save_host(&connection, None).unwrap();
+    assert_eq!(
+        store.get_host(&id).unwrap().unwrap().item.connection.proxy,
+        None
+    );
 }

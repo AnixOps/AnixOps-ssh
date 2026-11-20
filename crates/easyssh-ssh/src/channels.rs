@@ -78,6 +78,13 @@ pub struct ShellOptions {
     pub term: String,
     pub cols: u32,
     pub rows: u32,
+    /// Sent with the pseudo-terminal request; see
+    /// [`default_terminal_modes`](crate::default_terminal_modes).
+    pub modes: Vec<(russh::Pty, u32)>,
+    /// Sent as `env` requests before the shell starts, without asking for a
+    /// reply: servers drop what their `AcceptEnv` does not list. See
+    /// [`shell_env`](crate::shell_env).
+    pub env: Vec<(String, String)>,
 }
 
 impl Default for ShellOptions {
@@ -86,6 +93,8 @@ impl Default for ShellOptions {
             term: "xterm-256color".into(),
             cols: 80,
             rows: 24,
+            modes: crate::env::default_terminal_modes(),
+            env: Vec::new(),
         }
     }
 }
@@ -148,9 +157,22 @@ impl Session {
     pub async fn shell(&self, options: ShellOptions) -> Result<ShellHandle> {
         let mut channel = self.open_session_channel().await?;
         channel
-            .request_pty(true, &options.term, options.cols, options.rows, 0, 0, &[])
+            .request_pty(
+                true,
+                &options.term,
+                options.cols,
+                options.rows,
+                0,
+                0,
+                &options.modes,
+            )
             .await?;
         expect_reply(&mut channel, "the terminal").await?;
+        for (name, value) in &options.env {
+            channel
+                .set_env(false, name.as_str(), value.as_str())
+                .await?;
+        }
         channel.request_shell(true).await?;
         expect_reply(&mut channel, "the shell").await?;
 
