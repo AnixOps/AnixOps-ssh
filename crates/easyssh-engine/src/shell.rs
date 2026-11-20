@@ -259,6 +259,13 @@ impl Engine {
             .map_err(|error| fail(&error))
     }
 
+    /// A lease on the host's connection only when it is up now and a
+    /// terminal, files or a forward hold it. Never connects, so it asks the
+    /// user nothing (the server monitor reads through it).
+    pub fn existing(&self, target: &Target) -> Option<Lease> {
+        self.registry.existing(&target.key())
+    }
+
     /// Like [`Engine::open_shell`], with the host's saved password to offer at
     /// the password prompt (a saved key travels in `target.identity`; see
     /// [`crate::saved_login`]). The login only matters for the connection that

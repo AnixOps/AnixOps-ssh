@@ -6,6 +6,7 @@ use crate::askpass::{Hub, Prompt};
 use crate::engine::interact::Broadcast;
 use crate::engine::{self, plan, Engine, KnownHostsPaths};
 use crate::log::Logger;
+use crate::monitor_ssh;
 use crate::server::{BoxFuture, Outbox, Service};
 use crate::syncsvc::{SyncFailure, SyncOptions, SyncService};
 use crate::terminal::{SpawnOptions, TermSession, DEFAULT_SCROLLBACK};
@@ -1130,8 +1131,17 @@ impl Daemon {
                 let p: proto::MonitorSampleParams = parse(payload)?;
                 let me = self.upgrade()?;
                 self.background(outbox, req_id, async move {
-                    let lease = me.monitor_lease(&p.host_id).await?;
-                    let sample = easyssh_engine::monitor::sample(&lease, p.detail.unwrap_or(false))
+                    let detail = p.detail.unwrap_or(false);
+                    let (connection, resolution) = me.resolution(&p.host_id).await?;
+                    let Some(plan) = resolution.plan else {
+                        let command = easyssh_engine::monitor::command(detail);
+                        let output = me
+                            .openssh_monitor(&p.host_id, &connection, &command)
+                            .await?;
+                        return Ok(json!({"output": output, "latency_ms": Value::Null}));
+                    };
+                    let lease = me.existing_lease(&plan)?;
+                    let sample = easyssh_engine::monitor::sample(&lease, detail)
                         .await
                         .map_err(ssh_fail)?;
                     Ok(json!({"output": sample.output, "latency_ms": sample.latency_ms}))
@@ -1144,7 +1154,20 @@ impl Daemon {
                     .map_err(|_| fail("invalid_command", "pid out of range"))?;
                 let me = self.upgrade()?;
                 self.background(outbox, req_id, async move {
-                    let lease = me.monitor_lease(&p.host_id).await?;
+                    let (connection, resolution) = me.resolution(&p.host_id).await?;
+                    let Some(plan) = resolution.plan else {
+                        let name = easyssh_engine::monitor::signal_name(&signal)
+                            .ok_or_else(|| fail("invalid_command", "unknown signal"))?;
+                        let command = format!("kill -s {name} {pid}");
+                        me.openssh_monitor(&p.host_id, &connection, &command)
+                            .await
+                            .map_err(|failure| match failure.code {
+                                "not_connected" | "wrong_engine" => failure,
+                                _ => fail("signal_failed", failure.message),
+                            })?;
+                        return Ok(Value::Null);
+                    };
+                    let lease = me.existing_lease(&plan)?;
                     easyssh_engine::monitor::signal(&lease, pid, &signal)
                         .await
                         .map_err(|error| fail("signal_failed", error.to_string()))?;
@@ -1357,12 +1380,49 @@ impl Daemon {
         })
     }
 
-    /// The connection the host's terminal already has, for the monitor.
-    async fn monitor_lease(&self, host_id: &str) -> Result<engine::Lease, Failure> {
-        let plan = self.russh_plan(host_id).await?;
+    /// The connection the host's terminal already has, for the monitor. Never
+    /// connects.
+    fn existing_lease(&self, plan: &plan::RusshPlan) -> Result<engine::Lease, Failure> {
         self.engine
-            .existing(&plan)
+            .existing(plan)
             .ok_or_else(|| fail("not_connected", "the host is not connected"))
+    }
+
+    /// Runs `command` for the monitor over the control socket of a running
+    /// OpenSSH terminal of the host. Where OpenSSH cannot multiplex
+    /// (Windows) the host stays `wrong_engine`; with no terminal open it is
+    /// `not_connected`.
+    async fn openssh_monitor(
+        &self,
+        host_id: &str,
+        connection: &Connection,
+        command: &str,
+    ) -> Result<String, Failure> {
+        if !cfg!(unix) {
+            return Err(fail(
+                "wrong_engine",
+                "this host runs on OpenSSH, which cannot share a connection on this system",
+            ));
+        }
+        let controls: Vec<PathBuf> = lock(&self.sessions)
+            .values()
+            .filter(|s| {
+                s.is_running()
+                    && s.host_id() == Some(host_id)
+                    && s.engine().is_some_and(|(engine, _)| engine == "openssh")
+            })
+            .filter_map(|s| monitor_ssh::control_path(&self.key_dir_root, s.id()))
+            .collect();
+        for control in controls {
+            match monitor_ssh::run(connection, &control, command).await {
+                Err(monitor_ssh::Failed::NotConnected) => continue,
+                Err(monitor_ssh::Failed::Error(message)) => {
+                    return Err(fail("sample_failed", message))
+                }
+                Ok(output) => return Ok(output),
+            }
+        }
+        Err(fail("not_connected", "the host is not connected"))
     }
 
     async fn start_tunnel(&self, tunnel: easyssh_core::Tunnel) -> Result<u16, Failure> {
@@ -1590,6 +1650,11 @@ impl Daemon {
         let scrollback = self.cfg.scrollback_bytes;
         let (cols, rows) = (p.cols, p.rows);
         let spawn_id = id.clone();
+        let control = connection
+            .as_ref()
+            .and_then(|_| monitor_ssh::control_path(&self.key_dir_root, &id))
+            // ssh cannot create the socket's directory; without it, skip -M.
+            .filter(|path| monitor_ssh::prepare_dir(path));
         let exit_log = self.log.clone();
         let exit_hub = self.askpass.clone();
         let (askpass_env, askpass_context) = match askpass {
@@ -1616,6 +1681,7 @@ impl Daemon {
                 connection,
                 agent_sock.as_deref(),
                 identity.as_deref(),
+                control.as_deref(),
             )?;
             for (name, value) in &askpass_env {
                 command.env(name, value);
@@ -2070,6 +2136,7 @@ fn command_for(
     connection: Option<Connection>,
     agent_sock: Option<&Path>,
     identity: Option<&Path>,
+    control: Option<&Path>,
 ) -> Result<(CommandBuilder, bool), Failure> {
     let mut shell_integration = false;
     let mut command = match connection {
@@ -2084,6 +2151,11 @@ fn command_for(
                 command.args(["-i"]);
                 command.arg(identity);
                 command.args(["-o", "IdentitiesOnly=yes"]);
+            }
+            if let Some(control) = control {
+                // Master of a control socket, so the monitor can use this
+                // connection (see `monitor_ssh`).
+                command.args(SshInvocation::master_args(control));
             }
             command.args(invocation.args);
             command

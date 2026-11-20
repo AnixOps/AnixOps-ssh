@@ -297,6 +297,57 @@ export function defaultInterface(nets: NetCounters[]): string | null {
   return best?.name ?? null;
 }
 
+/** The numbers the phone's monitor card shows. */
+export interface MonitorSummary {
+  /** 0 to 100; null until two samples exist. */
+  cpu: number | null;
+  /** 0 to 100. */
+  mem: number | null;
+  memTotal: number;
+  /** The root file system (or the biggest one when there is no `/`). */
+  disk: Disk | null;
+  /** 0 to 100. */
+  diskPercent: number | null;
+  /** Bytes per second over all real interfaces; null until two samples exist. */
+  rx: number | null;
+  tx: number | null;
+  load: [number, number, number];
+  uptime: number;
+}
+
+/** The root disk: `/` when listed, otherwise the largest. */
+export function rootDisk(disks: Disk[]): Disk | null {
+  const root = disks.find((disk) => disk.mount === "/");
+  if (root) return root;
+  let best: Disk | null = null;
+  for (const disk of disks) if (!best || disk.size > best.size) best = disk;
+  return best;
+}
+
+/** Reduces a view to the few numbers of the phone card. */
+export function summarize(v: MonitorView): MonitorSummary {
+  const disk = rootDisk(v.disks);
+  const real = v.nets.filter((net) => net.name !== "lo");
+  const pool = real.length > 0 ? real : v.nets;
+  return {
+    cpu: v.cpu,
+    mem: v.mem && v.mem.total > 0 ? clamp((100 * v.mem.used) / v.mem.total, 0, 100) : null,
+    memTotal: v.mem?.total ?? 0,
+    disk,
+    diskPercent: disk && disk.size > 0 ? clamp((100 * disk.used) / disk.size, 0, 100) : null,
+    rx: pool.length > 0 ? pool.reduce((sum, net) => sum + net.rx, 0) : null,
+    tx: pool.length > 0 ? pool.reduce((sum, net) => sum + net.tx, 0) : null,
+    load: v.load,
+    uptime: v.uptime,
+  };
+}
+
+/** Whether the card should read the server now: it is open, the app is in
+ *  front, and the terminal holds a connection to read through. */
+export function shouldSample(open: boolean, foreground: boolean, connected: boolean): boolean {
+  return open && foreground && connected;
+}
+
 export type ProcessSort = "cpu" | "rss" | "pid" | "user" | "name";
 
 export function sortProcesses(processes: Process[], key: ProcessSort, descending: boolean): Process[] {
