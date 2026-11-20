@@ -336,7 +336,7 @@ pub fn sftp_close(
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum TransferEvent {
-    Progress { bytes: u64 },
+    Progress { bytes: u64, total: Option<u64> },
     Done,
     Failed { message: String },
     Cancelled,
@@ -514,7 +514,7 @@ fn watch(
                 let bytes = metadata.len();
                 if metadata.is_file() && reported != Some(bytes) {
                     reported = Some(bytes);
-                    let _ = events.send(TransferEvent::Progress { bytes });
+                    let _ = events.send(TransferEvent::Progress { bytes, total: None });
                 }
             }
         }

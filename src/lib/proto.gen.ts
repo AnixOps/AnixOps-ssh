@@ -1847,7 +1847,7 @@ export interface TransferCancelParams {
   transfer_id: string;
 }
 /**
- * Event `transfer.progress` payload: bytes moved so far.
+ * Event `transfer.progress` payload: bytes moved so far, and the total when known.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "TransferProgressEvent".
@@ -1855,6 +1855,10 @@ export interface TransferCancelParams {
 export interface TransferProgressEvent {
   transfer_id: string;
   bytes: number;
+  /**
+   * Bytes the whole transfer will move (a folder: the sum of its files), when known.
+   */
+  total?: number;
 }
 /**
  * Event `transfer.done` payload.

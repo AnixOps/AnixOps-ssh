@@ -2252,11 +2252,14 @@ impl ::std::convert::TryFrom<::std::string::String> for TransferDoneEventStatus 
         value.parse()
     }
 }
-///Event `transfer.progress` payload: bytes moved so far.
+///Event `transfer.progress` payload: bytes moved so far, and the total when known.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TransferProgressEvent {
     pub bytes: u64,
+    ///Bytes the whole transfer will move (a folder: the sum of its files), when known.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub total: ::std::option::Option<u64>,
     pub transfer_id: ::std::string::String,
 }
 ///Command `transfer.start` payload. Both paths are final (an upload names the remote file, not its directory). Progress and the end arrive as events. Reply: TransferStartResult.
