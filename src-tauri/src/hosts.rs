@@ -106,6 +106,9 @@ pub struct HostFields {
     /// Opt-in shell integration for terminals on this host.
     #[serde(default)]
     pub shell_integration: bool,
+    /// X11 forwarding (`ssh -X`); the host then runs on OpenSSH.
+    #[serde(default)]
+    pub forward_x11: bool,
     /// The outbound proxy of the first hop; `None` connects directly. Its
     /// password is a saved secret (`secrets_set`), not part of the host.
     #[serde(default)]
@@ -176,6 +179,7 @@ fn fields_of(connection: &Connection) -> HostFields {
         notes: connection.notes.clone(),
         engine: connection.engine,
         shell_integration: connection.shell_integration,
+        forward_x11: connection.forward_x11,
         proxy: connection.proxy.clone(),
         port: 22,
         ..HostFields::default()
@@ -270,6 +274,7 @@ fn apply(
         .engine
         .filter(|engine| *engine != EnginePreference::Auto);
     connection.shell_integration = fields.shell_integration;
+    connection.forward_x11 = fields.forward_x11;
     // A serial port has no network connection to proxy.
     connection.proxy = match (&fields.serial, &fields.proxy) {
         (None, Some(proxy)) => Some(ProxySettings {

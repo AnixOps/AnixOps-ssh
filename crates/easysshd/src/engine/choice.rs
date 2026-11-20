@@ -22,7 +22,8 @@ pub enum Unsupported {
     InlineForward,
     /// `ForwardAgent`.
     AgentForwarding,
-    /// `ForwardX11`.
+    /// X11 forwarding: `ForwardX11 yes` in the ssh config or the host's
+    /// own toggle (`ssh -X`).
     X11Forwarding,
     /// `SendEnv` (beyond the locale) or `SetEnv`.
     Environment,
@@ -155,7 +156,27 @@ pub fn unsupported_by_connection(connection: &Connection) -> Vec<Unsupported> {
     {
         found.push(Unsupported::InlineForward);
     }
+    if connection.forward_x11 {
+        found.push(Unsupported::X11Forwarding);
+    }
     found
+}
+
+/// A hint for a host that forwards X11 when this computer has no X server
+/// to show the windows on (`DISPLAY` is not set), or `None` when all is well.
+/// `os` is `std::env::consts::OS`.
+pub fn x11_display_hint(display: Option<&str>, os: &str) -> Option<String> {
+    if display.is_some_and(|value| !value.trim().is_empty()) {
+        return None;
+    }
+    let advice = match os {
+        "macos" => "Install XQuartz (https://www.xquartz.org), log out and in again, then open the host again.",
+        "windows" => "Start an X server such as VcXsrv or X410 and set DISPLAY (for example localhost:0.0), then open the host again.",
+        _ => "Start an X server (a Wayland desktop needs XWayland) so that DISPLAY is set, then open the host again.",
+    };
+    Some(format!(
+        "X11 forwarding is on for this host, but DISPLAY is not set on this computer, so remote programs cannot open windows. {advice}"
+    ))
 }
 
 #[cfg(test)]
@@ -250,6 +271,33 @@ mod tests {
             unsupported_by_connection(&c),
             vec![Unsupported::RemoteCommand, Unsupported::InlineForward]
         );
+    }
+
+    #[test]
+    fn the_x11_toggle_sends_a_host_to_openssh_and_says_so() {
+        let mut c = Connection::alias("x", "x");
+        c.forward_x11 = true;
+        let found = unsupported_by_connection(&c);
+        assert_eq!(found, vec![Unsupported::X11Forwarding]);
+        let choice = choose_engine(G::Russh, P::Russh, &found);
+        assert_eq!(choice.engine, G::Openssh);
+        assert!(
+            choice.reason.contains("X11 forwarding"),
+            "{}",
+            choice.reason
+        );
+    }
+
+    #[test]
+    fn a_missing_display_gets_a_hint_for_the_platform() {
+        assert_eq!(x11_display_hint(Some(":0"), "linux"), None);
+        let linux = x11_display_hint(None, "linux").unwrap();
+        assert!(linux.contains("DISPLAY") && linux.contains("XWayland"));
+        assert!(x11_display_hint(Some(" "), "macos")
+            .unwrap()
+            .contains("XQuartz"));
+        let windows = x11_display_hint(None, "windows").unwrap();
+        assert!(windows.contains("VcXsrv") && windows.contains("X410"));
     }
 
     #[test]

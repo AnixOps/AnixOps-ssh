@@ -252,6 +252,10 @@
           "$ref": "#/$defs/EnginePreference",
           "description": "Absent means auto."
         },
+        "forward_x11": {
+          "type": "boolean",
+          "description": "X11 forwarding (ssh -X); the host runs on the OpenSSH engine. Absent means off."
+        },
         "proxy": {
           "$ref": "#/$defs/ProxySettings",
           "description": "An outbound proxy for the first hop. Absent means a direct connection. The proxy password is a saved secret, not part of the record."

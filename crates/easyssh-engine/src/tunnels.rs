@@ -16,9 +16,9 @@
 use crate::events::Events;
 use crate::supervisor::ReconnectPolicy;
 use crate::Lease;
-use easyssh_core::tunnel::bare_host;
+use easyssh_core::tunnel::{bare_host, is_socket_path};
 use easyssh_core::{Tunnel, TunnelKind};
-use easyssh_ssh::{Error as SshError, Forward, ForwardFailures};
+use easyssh_ssh::{Endpoint, Error as SshError, Forward, ForwardFailures};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::future::Future;
@@ -71,7 +71,8 @@ impl Status {
     }
 
     fn port(mut self, port: u16) -> Status {
-        self.bind_port = Some(port);
+        // Port 0 means no port to show (a socket forward).
+        self.bind_port = Some(port).filter(|p| *p != 0);
         self
     }
 
@@ -120,6 +121,30 @@ fn bind_host(tunnel: &Tunnel) -> &str {
     match tunnel.bind_address.as_deref().map(bare_host) {
         None | Some("") | Some("localhost") => "localhost",
         Some(other) => other,
+    }
+}
+
+/// Where a local forward listens: a Unix socket path in the bind address,
+/// or the TCP bind address and `bind_port`.
+fn local_listen(tunnel: &Tunnel, bind_port: u16) -> Endpoint {
+    match tunnel.bind_address.as_deref().map(str::trim) {
+        Some(path) if is_socket_path(path) => Endpoint::Unix(path.to_owned()),
+        _ => Endpoint::tcp(bind_host(tunnel), bind_port),
+    }
+}
+
+/// What the server listens on for a remote forward.
+fn remote_bind(tunnel: &Tunnel, bind_port: u16) -> Endpoint {
+    let bind = tunnel
+        .bind_address
+        .as_deref()
+        .map(bare_host)
+        .filter(|b| !b.is_empty())
+        .unwrap_or("localhost");
+    if is_socket_path(bind) {
+        Endpoint::Unix(bind.to_owned())
+    } else {
+        Endpoint::tcp(bind, bind_port)
     }
 }
 
@@ -172,35 +197,34 @@ async fn open_forward(
     session: &easyssh_ssh::Session,
     bind_port: u16,
 ) -> Result<(Forward, u16), SshError> {
-    let target = || -> Result<(&str, u16), SshError> {
+    let target = || -> Result<Endpoint, SshError> {
         let host = tunnel
             .target_host
             .as_deref()
             .map(bare_host)
             .filter(|h| !h.is_empty())
             .ok_or_else(|| SshError::Forward("the target host is required".into()))?;
+        if is_socket_path(host) {
+            return Ok(Endpoint::Unix(host.to_owned()));
+        }
         let port = tunnel
             .target_port
             .filter(|p| *p > 0)
             .ok_or_else(|| SshError::Forward("the target port is required".into()))?;
-        Ok((host, port))
+        Ok(Endpoint::tcp(host, port))
     };
     let forward = match tunnel.kind {
         TunnelKind::Local => {
-            let (host, port) = target()?;
+            let target = target()?;
             session
-                .forward_local(bind_host(tunnel), bind_port, host, port)
+                .forward_local_to(local_listen(tunnel, bind_port), target)
                 .await
         }
         TunnelKind::Remote => {
-            let (host, port) = target()?;
-            let bind = tunnel
-                .bind_address
-                .as_deref()
-                .map(bare_host)
-                .filter(|b| !b.is_empty())
-                .unwrap_or("localhost");
-            session.forward_remote(bind, bind_port, host, port).await
+            let target = target()?;
+            session
+                .forward_remote_to(remote_bind(tunnel, bind_port), target)
+                .await
         }
         TunnelKind::Dynamic => session.forward_dynamic(bind_host(tunnel), bind_port).await,
     }?;
@@ -485,6 +509,18 @@ mod tests {
         assert_eq!(bind_host(&tunnel(Some("*"))), "*");
         assert_eq!(bind_host(&tunnel(Some("10.0.0.2"))), "10.0.0.2");
         assert_eq!(bind_host(&tunnel(Some("[::1]"))), "::1");
+    }
+
+    #[test]
+    fn socket_paths_pick_the_unix_ends() {
+        let mut t = tunnel(Some("/tmp/l.sock"));
+        assert_eq!(local_listen(&t, 8080), Endpoint::Unix("/tmp/l.sock".into()));
+        t.bind_address = None;
+        assert_eq!(local_listen(&t, 8080), Endpoint::tcp("localhost", 8080));
+        t.kind = TunnelKind::Remote;
+        assert_eq!(remote_bind(&t, 8080), Endpoint::tcp("localhost", 8080));
+        t.bind_address = Some("/run/r.sock".into());
+        assert_eq!(remote_bind(&t, 8080), Endpoint::Unix("/run/r.sock".into()));
     }
 
     #[test]

@@ -600,13 +600,26 @@ async fn proxy_command_falls_back_to_openssh() {
         .await
         .expect("engine.resolve");
     assert_eq!(resolved["engine"], "openssh");
-    // The monitor has no built-in connection to read through here.
-    let error = rig
-        .link
-        .request("monitor.sample", json!({"host_id": hosts[0].id}))
-        .await
-        .expect_err("OpenSSH hosts have no monitor");
-    assert_eq!(error.code, "wrong_engine", "{error}");
+    if cfg!(unix) {
+        // The OpenSSH terminal is the master of a control socket; the monitor
+        // runs its script through it without a login of its own.
+        let sample = rig
+            .link
+            .request("monitor.sample", json!({"host_id": hosts[0].id}))
+            .await
+            .expect("monitor.sample through the OpenSSH master");
+        let output = sample["output"].as_str().unwrap_or_default();
+        assert!(output.contains("@os"), "{output}");
+        assert!(output.contains("@end"), "{output}");
+    } else {
+        // Windows OpenSSH cannot share a connection.
+        let error = rig
+            .link
+            .request("monitor.sample", json!({"host_id": hosts[0].id}))
+            .await
+            .expect_err("no monitor for OpenSSH on Windows");
+        assert_eq!(error.code, "wrong_engine", "{error}");
+    }
     rig.link.close_session(&opened.session_id);
     rig.finish().await;
 }

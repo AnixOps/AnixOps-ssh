@@ -72,7 +72,7 @@ impl Recorder {
     pub fn write(&self, text: &str) {
         let mut guard = lock(&self.writer);
         if let Some(writer) = guard.as_mut() {
-            if let Err(error) = writer.write(text.as_bytes()) {
+            if let Err(error) = writer.write(&easyssh_engine::text_to_bytes(text)) {
                 *guard = None;
                 (self.on_error)(&error.to_string());
             }

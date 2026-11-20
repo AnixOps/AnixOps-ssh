@@ -127,6 +127,7 @@ impl Syncable for Host {
         take(fields, "terminal", &mut c.terminal)?;
         take(fields, "shell_integration", &mut c.shell_integration)?;
         take(fields, "engine", &mut c.engine)?;
+        take(fields, "forward_x11", &mut c.forward_x11)?;
         take(fields, "proxy", &mut c.proxy)?;
         take(fields, "tags", &mut c.tags)?;
         take(fields, "notes_secret", &mut host.notes_secret)?;

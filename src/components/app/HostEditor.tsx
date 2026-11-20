@@ -376,18 +376,31 @@ export function HostEditor({
           </div>
 
           {!serialOn && (
-            <ProxySection
-              proxy={fields.proxy ?? null}
-              onChange={(proxy) => set("proxy", proxy)}
-              openssh={fields.engine === "openssh"}
-              password={{
-                saved: savedSecrets.proxyPassword,
-                value: drafts.proxyPassword.value,
-                cleared: drafts.proxyPassword.cleared,
-                onValue: (value) => draft("proxyPassword", { value, cleared: false }),
-                onCleared: (cleared) => draft("proxyPassword", { cleared }),
-              }}
-            />
+            <>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-callout text-label-1">{t.hostForwardX11}</p>
+                  <p className="mt-0.5 text-callout text-label-3">{t.hostForwardX11Hint}</p>
+                </div>
+                <Switch
+                  on={fields.forwardX11 ?? false}
+                  label={t.hostForwardX11}
+                  onClick={() => set("forwardX11", !fields.forwardX11)}
+                />
+              </div>
+              <ProxySection
+                proxy={fields.proxy ?? null}
+                onChange={(proxy) => set("proxy", proxy)}
+                openssh={fields.engine === "openssh"}
+                password={{
+                  saved: savedSecrets.proxyPassword,
+                  value: drafts.proxyPassword.value,
+                  cleared: drafts.proxyPassword.cleared,
+                  onValue: (value) => draft("proxyPassword", { value, cleared: false }),
+                  onCleared: (cleared) => draft("proxyPassword", { cleared }),
+                }}
+              />
+            </>
           )}
 
           {!serialOn && (

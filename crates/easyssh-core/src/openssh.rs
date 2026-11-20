@@ -4,7 +4,7 @@ use crate::security::{validate_alias, validate_connection, validate_host, Valida
 use std::env;
 #[cfg(windows)]
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use thiserror::Error;
 
@@ -82,6 +82,11 @@ impl SshInvocation {
             validate_alias(jump)?;
             args.splice(0..0, ["-J".into(), jump.clone()]);
         }
+        if connection.forward_x11 {
+            // `ForwardX11Trusted yes` in the ssh config makes this trusted
+            // forwarding (`-Y`); `ssh` applies it by itself.
+            args.splice(0..0, ["-X".into()]);
+        }
         for forward in &connection.local_forwards {
             args.splice(0..0, ["-L".into(), validate_forward(forward)?]);
         }
@@ -99,6 +104,61 @@ impl SshInvocation {
             }
             args.push(command.clone());
         }
+        Ok(Self {
+            executable: openssh.ssh_path()?,
+            args,
+        })
+    }
+
+    /// The options that make an interactive `ssh` the master of a control
+    /// socket at `control` (`-M -S`), so the monitor can run commands on its
+    /// connection. No `ControlPersist`: the connection ends with the session.
+    pub fn master_args(control: &Path) -> Vec<String> {
+        vec!["-M".into(), "-S".into(), control.display().to_string()]
+    }
+
+    /// Builds an invocation that runs `command` over the connection whose
+    /// master listens on `control`, never prompting (`BatchMode`). The
+    /// command is core-owned (the monitor script); it is sent as one argument.
+    pub fn for_control_command(
+        openssh: &OpenSsh,
+        connection: &Connection,
+        control: &Path,
+        command: &str,
+    ) -> Result<Self, OpenSshError> {
+        validate_connection(connection)?;
+        if command.is_empty() || command.chars().any(|c| c == '\0') {
+            return Err(OpenSshError::Validation(ValidationError::Unsafe {
+                field: "remote command",
+            }));
+        }
+        let mut args: Vec<String> = vec![
+            "-S".into(),
+            control.display().to_string(),
+            "-o".into(),
+            "ControlMaster=no".into(),
+            "-o".into(),
+            "BatchMode=yes".into(),
+            "-o".into(),
+            "ConnectTimeout=5".into(),
+            "-T".into(),
+        ];
+        match &connection.target {
+            ConnectionTarget::Alias { alias } => args.push(alias.clone()),
+            ConnectionTarget::Endpoint {
+                hostname,
+                username,
+                port,
+            } => {
+                args.extend(["-p".into(), port.to_string()]);
+                if let Some(username) = username {
+                    args.extend(["-l".into(), username.clone()]);
+                }
+                args.push(hostname.clone());
+            }
+            ConnectionTarget::Serial(_) => return Err(ValidationError::NotSsh.into()),
+        }
+        args.push(command.to_owned());
         Ok(Self {
             executable: openssh.ssh_path()?,
             args,
@@ -358,6 +418,76 @@ mod tests {
         let c = Connection::alias("Prod", "production");
         let invocation = SshInvocation::for_connection(&OpenSsh, &c);
         assert!(invocation.is_err() || invocation.unwrap().args == vec!["production"]);
+    }
+
+    fn endpoint() -> Connection {
+        let mut c = Connection::alias("Prod", "production");
+        c.target = ConnectionTarget::Endpoint {
+            hostname: "example.com".into(),
+            username: Some("deploy".into()),
+            port: 2222,
+        };
+        c
+    }
+
+    fn invocation(connection: &Connection, command: &str) -> Option<SshInvocation> {
+        // `ssh` may be missing on the machine running the tests.
+        SshInvocation::for_control_command(&OpenSsh, connection, Path::new("/run/cm-ab"), command)
+            .ok()
+    }
+
+    #[test]
+    fn control_command_reuses_the_master_and_never_prompts() {
+        let Some(i) = invocation(&endpoint(), "sh -c 'echo hi'") else {
+            return;
+        };
+        assert_eq!(
+            i.args,
+            [
+                "-S",
+                "/run/cm-ab",
+                "-o",
+                "ControlMaster=no",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=5",
+                "-T",
+                "-p",
+                "2222",
+                "-l",
+                "deploy",
+                "example.com",
+                "sh -c 'echo hi'"
+            ]
+        );
+    }
+
+    #[test]
+    fn control_command_for_an_alias_and_a_rejected_command() {
+        let alias = Connection::alias("Prod", "production");
+        if let Some(i) = invocation(&alias, "uptime") {
+            assert_eq!(&i.args[i.args.len() - 2..], ["production", "uptime"]);
+        }
+        let rejected =
+            SshInvocation::for_control_command(&OpenSsh, &alias, Path::new("/run/cm-ab"), "a\0b");
+        assert!(rejected.is_err());
+    }
+
+    #[test]
+    fn master_args_name_the_socket() {
+        assert_eq!(
+            SshInvocation::master_args(Path::new("/run/cm-ab")),
+            ["-M", "-S", "/run/cm-ab"]
+        );
+    }
+
+    #[test]
+    fn x11_forwarding_adds_x_before_the_destination() {
+        let mut c = Connection::alias("Prod", "production");
+        c.forward_x11 = true;
+        let invocation = SshInvocation::for_connection(&OpenSsh, &c);
+        assert!(invocation.is_err() || invocation.unwrap().args == vec!["-X", "production"]);
     }
 
     #[test]
