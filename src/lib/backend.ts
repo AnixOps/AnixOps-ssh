@@ -19,6 +19,7 @@ import {
   previewSetFavorite,
   previewSnapshot,
 } from "./preview";
+import { previewMonitorSample, previewMonitorSignal } from "./previewMonitor";
 import { previewSession } from "./previewSession";
 import type { ExitReason } from "./terminalSession";
 import {
@@ -429,6 +430,44 @@ export async function openFiles(hostId: string): Promise<FilesHandle> {
     rename: (from, to) => invoke("sftp_rename", { id, from, to }),
     close: () => void invoke("sftp_close", { id }).catch(console.error),
   };
+}
+
+/** One raw monitor sample (see `src/lib/monitor.ts`). */
+export interface MonitorSample {
+  output: string;
+  /** Keepalive round trip; null when the server did not answer it. */
+  latency_ms: number | null;
+}
+
+/** Why a sample failed: `wrong_engine` (the host runs on OpenSSH),
+ *  `not_connected` (no terminal connection to read through), others. */
+export interface MonitorFailure {
+  code: string;
+  message: string;
+}
+
+export function monitorFailure(reason: unknown): MonitorFailure {
+  if (reason && typeof reason === "object" && "code" in reason) {
+    const { code, message } = reason as { code: unknown; message?: unknown };
+    return { code: String(code), message: String(message ?? "") };
+  }
+  return { code: "failed", message: String(reason) };
+}
+
+/** Reads the server's load, memory, network, disks and processes on the
+ *  connection the terminal already has. `detail` adds owners, command lines
+ *  and executables. */
+export async function monitorSample(hostId: string, detail: boolean): Promise<MonitorSample> {
+  if (!isTauri) return previewMonitorSample(detail);
+  return invoke<MonitorSample>("monitor_sample", { hostId, detail });
+}
+
+export type MonitorSignal = "TERM" | "KILL";
+
+/** Sends a signal to a process on the server, as the login user. */
+export async function monitorSignal(hostId: string, pid: number, signal: MonitorSignal): Promise<void> {
+  if (!isTauri) return previewMonitorSignal(pid);
+  await invoke("monitor_signal", { hostId, pid, signal });
 }
 
 export async function startTransfer(
