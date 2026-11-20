@@ -260,6 +260,8 @@ pub struct SshStatus {
     sftp_found: bool,
     agent: AgentState,
     agent_keys: Vec<String>,
+    /// Which agent the built-in engine found: `openssh`, `pageant`, `environment`.
+    agent_kind: Option<&'static str>,
     agent_error: Option<String>,
     ssh_config_hosts: usize,
 }
@@ -274,10 +276,12 @@ fn agent_state(available: bool, error: Option<&str>) -> AgentState {
     }
 }
 
-/// Runs `ssh -V` and `ssh-add -l`; slow enough to keep off the main thread.
+/// Runs `ssh -V` and `ssh-add -l`, then asks the agent the way the built-in
+/// engine does (so Pageant on Windows shows up); slow enough to keep off the
+/// main thread.
 #[tauri::command]
 pub async fn ssh_status() -> Result<SshStatus, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    let mut status = tauri::async_runtime::spawn_blocking(|| {
         let diagnostics = OpenSsh.diagnostics(None);
         let (available, agent_keys, agent_error) = match diagnostics.agent_keys {
             Some(keys) => (keys.available, keys.fingerprints, keys.raw_error),
@@ -288,12 +292,27 @@ pub async fn ssh_status() -> Result<SshStatus, String> {
             sftp_found: OpenSsh.sftp_path().is_ok(),
             agent: agent_state(available, agent_error.as_deref()),
             agent_keys,
+            agent_kind: None,
             agent_error,
             ssh_config_hosts: scan_default_ssh_config().aliases.len(),
         }
     })
     .await
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    let probe = easyssh_ssh::probe_agent(&easyssh_ssh::AgentSource::Environment).await;
+    if let Some(kind) = probe.kind {
+        if probe.error.is_none() {
+            status.agent = if probe.keys.is_empty() {
+                AgentState::Empty
+            } else {
+                AgentState::Ready
+            };
+            status.agent_keys = probe.keys;
+            status.agent_kind = Some(kind.id());
+            status.agent_error = None;
+        }
+    }
+    Ok(status)
 }
 
 #[cfg(test)]

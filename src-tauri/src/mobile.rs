@@ -420,7 +420,8 @@ async fn sftp_close(state: State<'_, Mobile>, id: String) -> Result<(), String> 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 enum TransferEvent {
-    Progress { bytes: u64 },
+    Started,
+    Progress { bytes: u64, total: Option<u64> },
     Done,
     Failed { message: String },
     Cancelled,
@@ -432,6 +433,7 @@ struct StartedTransfer {
     id: String,
     local: String,
     remote: String,
+    queued: bool,
 }
 
 fn remote_join(dir: &str, name: &str) -> String {
@@ -477,29 +479,17 @@ async fn transfer_start(
     };
 
     let target = state.target(&host_id).await?;
-    // A file session of its own on the shared connection, closed when the
-    // transfer ends.
-    let (sftp_id, _) = state
-        .engine
-        .open_files(&target)
-        .await
-        .map_err(files_error)?;
-    let entry = match sftp_entry(&state, &sftp_id) {
-        Ok(entry) => entry,
-        Err(error) => {
-            state.engine.files().close(&sftp_id).await;
-            return Err(error);
-        }
-    };
-
-    let engine = state.engine.clone();
     let staging = state.staging.clone();
     let staged = upload.then(|| local.clone());
     let sink: Events = Arc::new(move |name: &str, payload: Value| {
         match name {
+            "transfer.started" => {
+                let _ = events.send(TransferEvent::Started);
+            }
             "transfer.progress" => {
                 let bytes = payload["bytes"].as_u64().unwrap_or(0);
-                let _ = events.send(TransferEvent::Progress { bytes });
+                let total = payload["total"].as_u64();
+                let _ = events.send(TransferEvent::Progress { bytes, total });
             }
             "transfer.done" => {
                 let event = match payload["status"].as_str() {
@@ -513,22 +503,20 @@ async fn transfer_start(
                     },
                 };
                 let _ = events.send(event);
-                // The staged copy and the file session are not needed any more.
+                // The staged copy is not needed any more.
                 if let Some(id) = staged.as_ref().and_then(|path| staging.id_of(path)) {
                     staging.discard(&id);
                 }
-                let engine = engine.clone();
-                let sftp_id = sftp_id.clone();
-                tauri::async_runtime::spawn(async move {
-                    engine.files().close(&sftp_id).await;
-                });
             }
             _ => {}
         }
         1usize
     });
-    let id = state.engine.files().start_transfer(
-        entry,
+    // Joins the host's transfer queue: a few run at once on shared file
+    // sessions, the rest wait.
+    let (id, queued) = state.engine.queue_transfer(
+        &host_id,
+        target,
         upload,
         local.clone(),
         remote.clone(),
@@ -539,6 +527,7 @@ async fn transfer_start(
         id,
         local: local.to_string_lossy().into_owned(),
         remote,
+        queued,
     })
 }
 
