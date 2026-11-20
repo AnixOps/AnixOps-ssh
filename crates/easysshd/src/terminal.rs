@@ -9,6 +9,7 @@
 use crate::integration::{self, Action, Integration};
 use crate::recorder::Recorder;
 use crate::server::Outbox;
+use easyssh_ssh::ExitStatus;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
@@ -171,6 +172,20 @@ pub fn pty_size(cols: u16, rows: u16) -> PtySize {
     }
 }
 
+/// The `session.exit` payload: the code (if any), and why the session ended
+/// (`exit`, `signal` with the signal's name, or `disconnected`).
+fn exit_payload(session_id: &str, status: &ExitStatus) -> Value {
+    let mut payload = json!({
+        "session_id": session_id,
+        "code": status.code(),
+        "reason": status.reason(),
+    });
+    if let Some(signal) = status.signal() {
+        payload["signal"] = json!(signal);
+    }
+    payload
+}
+
 struct Subscriber {
     conn: u64,
     outbox: Outbox,
@@ -179,8 +194,8 @@ struct Subscriber {
 struct State {
     scrollback: Scrollback,
     subscribers: Vec<Subscriber>,
-    /// `Some(code)` once the process has ended.
-    exit: Option<Option<u32>>,
+    /// How the process ended, once it has.
+    exit: Option<ExitStatus>,
     cols: u16,
     rows: u16,
     /// Present while the opt-in shell integration is being delivered.
@@ -402,9 +417,9 @@ impl TermSession {
         });
         let owner = session.clone();
         tokio::spawn(async move {
-            let code = owner.run_remote(shell, receiver).await;
+            let status = owner.run_remote(shell, receiver).await;
             drop(keep);
-            owner.finish(code);
+            owner.finish(status);
         });
         if shell_integration {
             let delivery = session.clone();
@@ -417,7 +432,7 @@ impl TermSession {
         &self,
         mut shell: easyssh_ssh::ShellHandle,
         mut commands: async_mpsc::UnboundedReceiver<RemoteCmd>,
-    ) -> Option<u32> {
+    ) -> ExitStatus {
         let mut decoder = Utf8Stream::default();
         loop {
             tokio::select! {
@@ -441,15 +456,16 @@ impl TermSession {
                     }
                     Some(RemoteCmd::Close) | None => {
                         let _ = shell.close().await;
-                        return None;
+                        return ExitStatus::Unknown;
                     }
                 },
             }
         }
-        match tokio::time::timeout(Duration::from_secs(3), shell.wait_exit()).await {
-            Ok(status) => status.code(),
-            Err(_) => None,
-        }
+        // A status (exit code or signal) when the server sent one; none
+        // means the connection dropped.
+        tokio::time::timeout(Duration::from_secs(3), shell.wait_exit())
+            .await
+            .unwrap_or(ExitStatus::Unknown)
     }
 
     pub fn id(&self) -> &str {
@@ -480,7 +496,7 @@ impl TermSession {
             }
         }
         let code = exit.recv_timeout(Duration::from_secs(3)).ok().flatten();
-        self.finish(code);
+        self.finish(code.map_or(ExitStatus::Unknown, ExitStatus::Code));
     }
 
     /// Reads the serial port until it fails (unplugged), reaches its end or
@@ -509,7 +525,7 @@ impl TermSession {
             }
         }
         // A serial line has no exit status.
-        self.finish(None);
+        self.finish(ExitStatus::Unknown);
     }
 
     fn output(&self, text: &str) {
@@ -582,17 +598,18 @@ impl TermSession {
         }
     }
 
-    fn finish(&self, code: Option<u32>) {
+    fn finish(&self, status: ExitStatus) {
         let mut state = lock(&self.state);
         if state.exit.is_some() {
             return;
         }
-        state.exit = Some(code);
+        let code = status.code();
+        let payload = exit_payload(&self.id, &status);
+        state.exit = Some(status);
         if let Some(recorder) = &self.recorder {
             recorder.finish();
         }
         (self.on_exit)(&self.id, code);
-        let payload = json!({"session_id": self.id, "code": code});
         for s in state.subscribers.drain(..) {
             s.outbox.event("session.exit", payload.clone());
         }
@@ -682,7 +699,7 @@ impl TermSession {
             "cols": state.cols,
             "rows": state.rows,
             "running": state.exit.is_none(),
-            "exit_code": state.exit.flatten(),
+            "exit_code": state.exit.as_ref().and_then(ExitStatus::code),
             "first_seq": state.scrollback.first(),
             "next_seq": state.scrollback.next(),
         });
@@ -724,9 +741,9 @@ impl TermSession {
                 json!({"session_id": self.id, "data": data, "seq": seq}),
             );
         }
-        match state.exit {
-            Some(code) => {
-                ok &= outbox.event("session.exit", json!({"session_id": self.id, "code": code}));
+        match &state.exit {
+            Some(status) => {
+                ok &= outbox.event("session.exit", exit_payload(&self.id, status));
             }
             None if ok => state.subscribers.push(Subscriber {
                 conn,
@@ -770,6 +787,22 @@ fn write_serial(port: &mut dyn serialport::SerialPort, mut data: &[u8]) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_exit_payload_says_why_the_session_ended() {
+        assert_eq!(
+            exit_payload("s", &ExitStatus::Code(2)),
+            json!({"session_id": "s", "code": 2, "reason": "exit"})
+        );
+        assert_eq!(
+            exit_payload("s", &ExitStatus::Signal("KILL".into())),
+            json!({"session_id": "s", "code": null, "reason": "signal", "signal": "KILL"})
+        );
+        assert_eq!(
+            exit_payload("s", &ExitStatus::Unknown),
+            json!({"session_id": "s", "code": null, "reason": "disconnected"})
+        );
+    }
 
     #[test]
     fn push_offsets_and_replay() {

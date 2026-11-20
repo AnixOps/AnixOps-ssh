@@ -10,6 +10,8 @@ export interface Settings {
   locale: LocaleSetting;
   terminalFontSize: number;
   terminalScrollback: number;
+  /** macOS: Option sends Meta (Esc prefix) instead of typing layout characters. */
+  terminalOptionAsMeta: boolean;
   /** Ask before a multi-line paste into a shell without bracketed paste. */
   terminalWarnMultilinePaste: boolean;
   terminalRightClick: TerminalRightClick;
@@ -30,6 +32,7 @@ let current: Settings = {
   ...mirror,
   terminalFontSize: 13,
   terminalScrollback: 10000,
+  terminalOptionAsMeta: false,
   terminalWarnMultilinePaste: true,
   terminalRightClick: "menu",
   terminalCopyOnSelect: false,

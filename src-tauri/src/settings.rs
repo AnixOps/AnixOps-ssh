@@ -21,6 +21,9 @@ pub struct Settings {
     crash_reports: Option<bool>,
     #[serde(default)]
     usage_stats: bool,
+    /// macOS: Option sends Meta instead of layout characters. Off by default.
+    #[serde(default)]
+    terminal_option_as_meta: bool,
     /// Ask before a multi-line paste into a shell without bracketed paste.
     #[serde(default = "yes")]
     terminal_warn_multiline_paste: bool,
@@ -54,6 +57,7 @@ enum RightClick {
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(default)]
 struct TerminalBehaviour {
+    option_as_meta: bool,
     warn_multiline_paste: bool,
     right_click: RightClick,
     copy_on_select: bool,
@@ -63,6 +67,7 @@ struct TerminalBehaviour {
 impl Default for TerminalBehaviour {
     fn default() -> Self {
         Self {
+            option_as_meta: false,
             warn_multiline_paste: true,
             right_click: RightClick::Menu,
             copy_on_select: false,
@@ -92,6 +97,7 @@ pub fn settings_get() -> Result<Settings, String> {
         ssh_engine: config.ssh_engine.unwrap_or_default(),
         crash_reports: config.telemetry.crash_reports,
         usage_stats: config.telemetry.usage_stats,
+        terminal_option_as_meta: behaviour.option_as_meta,
         terminal_warn_multiline_paste: behaviour.warn_multiline_paste,
         terminal_right_click: behaviour.right_click,
         terminal_copy_on_select: behaviour.copy_on_select,
@@ -128,6 +134,7 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
         .set_setting_as("terminal", &terminal)
         .map_err(stored)?;
     let behaviour = TerminalBehaviour {
+        option_as_meta: settings.terminal_option_as_meta,
         warn_multiline_paste: settings.terminal_warn_multiline_paste,
         right_click: settings.terminal_right_click,
         copy_on_select: settings.terminal_copy_on_select,
@@ -223,6 +230,9 @@ mod tests {
             serde_json::from_str(r#"{"right_click":"paste"}"#).unwrap();
         assert_eq!(partial.right_click, RightClick::Paste);
         assert!(partial.osc52);
+        assert!(!empty.option_as_meta);
+        let on: TerminalBehaviour = serde_json::from_str(r#"{"option_as_meta":true}"#).unwrap();
+        assert!(on.option_as_meta);
     }
 
     #[test]

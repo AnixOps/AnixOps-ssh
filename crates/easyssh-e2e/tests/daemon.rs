@@ -8,7 +8,7 @@ mod support;
 
 use easyssh_core::{ConfigStore, Connection};
 use easyssh_e2e::E2e;
-use easysshd::link::{SessionMsg, SessionSink};
+use easysshd::link::{ExitReason, SessionMsg, SessionSink};
 use easysshd::{Daemon, DaemonConfig, Server};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -167,10 +167,10 @@ async fn daemon_session_survives_a_client_and_replays(engine: EngineKind) {
     .await;
     second_link.write_session(&id, "exit\r").unwrap();
     eventually("the exit status", || {
-        second
-            .lock()
-            .unwrap()
-            .contains(&SessionMsg::Exit { code: Some(0) })
+        second.lock().unwrap().contains(&SessionMsg::Exit {
+            code: Some(0),
+            reason: ExitReason::Exit,
+        })
     })
     .await;
     second_link.close_session(&id);
@@ -208,9 +208,10 @@ async fn terminal_through_a_jump_host(engine: EngineKind) {
     .await;
     link.write_session(&id, "exit\r").unwrap();
     eventually("the exit status", || {
-        seen.lock()
-            .unwrap()
-            .contains(&SessionMsg::Exit { code: Some(0) })
+        seen.lock().unwrap().contains(&SessionMsg::Exit {
+            code: Some(0),
+            reason: ExitReason::Exit,
+        })
     })
     .await;
     link.close_session(&id);

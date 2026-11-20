@@ -13,10 +13,14 @@ import {
   previewRemoveKnownHost,
   previewSaveHost,
   previewSerialPorts,
+  previewServiceRemembered,
+  previewServiceTest,
+  previewServicePreview,
   previewSetFavorite,
   previewSnapshot,
 } from "./preview";
 import { previewSession } from "./previewSession";
+import type { ExitReason } from "./terminalSession";
 import {
   previewForgetAll,
   previewSecretsSet,
@@ -117,7 +121,8 @@ export interface HostsSnapshot {
 
 export type SessionEvent =
   | { kind: "data"; data: string }
-  | { kind: "exit"; code: number | null }
+  /** `reason` and `signal` are missing from older backends; see terminalSession.ts. */
+  | { kind: "exit"; code: number | null; reason?: ExitReason; signal?: string }
   /** The connection to the background daemon dropped; output resumes after "resumed". */
   | { kind: "reconnecting"; attempt?: number; delay_ms?: number }
   | { kind: "resumed" };
@@ -192,7 +197,42 @@ export type {
 } from "./proto.gen";
 
 /** What an import reads: a file the user picked, or `~/.ssh/config` on their command. */
-export type ImportSource = { kind: "file"; path: string } | { kind: "ssh_config" };
+export type ImportSource = { kind: "file"; path: string } | { kind: "ssh_config" } | { kind: "service"; request: ServiceRequest };
+
+/** The services hosts can be imported from. */
+export type ServiceId = "control";
+
+/** The plain settings of a service import (what the form remembers). */
+export interface ServiceForm {
+  url: string;
+  default_user: string;
+  identity_file: string | null;
+}
+
+/** What the form opens with: the saved settings, and whether a credential is saved in the vault. */
+export interface ServiceRemembered {
+  form: ServiceForm;
+  has_secret: boolean;
+}
+
+/** `secret` is only set when the user typed a new credential; the saved one is used otherwise. */
+export interface ServiceRequest {
+  service: ServiceId;
+  form: ServiceForm;
+  secret: string | null;
+  clear_secret: boolean;
+}
+
+export async function serviceRemembered(service: ServiceId): Promise<ServiceRemembered> {
+  if (!isTauri) return previewServiceRemembered(service);
+  return invoke<ServiceRemembered>("service_remembered", { service });
+}
+
+/** Tests the address and credential; resolves to the number of hosts the service lists. */
+export async function testService(request: ServiceRequest): Promise<number> {
+  if (!isTauri) return previewServiceTest(request);
+  return invoke<number>("service_test", { request });
+}
 
 /** Asks for a host list file. Returns null if cancelled. */
 export async function pickImportFile(): Promise<string | null> {
@@ -207,6 +247,10 @@ export async function previewImportHosts(
   source: ImportSource,
   format: ImportFormat | null,
 ): Promise<HostsImportPreviewResult> {
+  if (source.kind === "service") {
+    if (!isTauri) return previewServicePreview(source.request);
+    return invoke<HostsImportPreviewResult>("service_preview", { request: source.request });
+  }
   if (!isTauri) return previewImport(source.kind, format);
   return source.kind === "ssh_config"
     ? invoke<HostsImportPreviewResult>("import_preview_ssh_config", { format })
@@ -444,7 +488,8 @@ export interface HostKeyPrompt {
   fingerprint: string;
   /** "changed" means the server presents another key than the recorded one. */
   status: "unknown" | "changed";
-  /** Fingerprints on record when the key changed. */
+  /** Fingerprints on record when the key changed; for an "unknown" key of a
+   *  new type, the host's recorded keys of other types. */
   expected: string[];
 }
 
@@ -715,7 +760,9 @@ export type TunnelKind = "local" | "remote" | "dynamic";
 export type TunnelStatus =
   | { state: "stopped" }
   | { state: "starting" }
-  | { state: "running" }
+  /** `port`: the port that listens (it differs from the saved one for a
+   *  tunnel saved with port 0, any free port). */
+  | { state: "running"; port?: number }
   | { state: "failed"; message: string };
 
 export interface Tunnel {
@@ -799,7 +846,7 @@ const previewTunnels: Tunnel[] = [
     bindPort: 15432,
     targetHost: "127.0.0.1",
     targetPort: 5432,
-    status: { state: "running" },
+    status: { state: "running", port: 15432 },
   },
   {
     id: "tunnel-2",

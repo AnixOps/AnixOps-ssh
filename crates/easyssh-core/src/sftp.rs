@@ -287,9 +287,38 @@ impl SftpSession {
         self.run(&format!("mkdir {}", quote(path)?)).map(drop)
     }
 
+    /// Removes a file, or a folder with everything in it, deepest first.
+    /// Links inside are removed themselves and never followed.
     pub fn remove(&mut self, path: &str, directory: bool) -> Result<(), OpenSshError> {
-        let command = if directory { "rmdir" } else { "rm" };
-        self.run(&format!("{command} {}", quote(path)?)).map(drop)
+        if !directory {
+            return self.run(&format!("rm {}", quote(path)?)).map(drop);
+        }
+        // (folder, emptied): a folder is removed when it comes up again
+        // after everything in it.
+        let mut pending = vec![(path.to_owned(), false)];
+        while let Some((dir, emptied)) = pending.pop() {
+            if emptied {
+                self.run(&format!("rmdir {}", quote(&dir)?))?;
+                continue;
+            }
+            pending.push((dir.clone(), true));
+            for file in self.list(&dir)? {
+                if file.name.contains('/') {
+                    return Err(OpenSshError::Failed(format!(
+                        "{dir} lists an entry that cannot be removed: {:?}",
+                        file.name
+                    )));
+                }
+                let child = join_remote(&dir, &file.name);
+                // `ls -l` shows a link as a link, not what it points to.
+                if file.kind == RemoteFileKind::Directory {
+                    pending.push((child, false));
+                } else {
+                    self.run(&format!("rm {}", quote(&child)?))?;
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn rename(&mut self, from: &str, to: &str) -> Result<(), OpenSshError> {
@@ -382,14 +411,29 @@ fn forward_lines(
     wrap: fn(String) -> Line,
 ) {
     std::thread::spawn(move || {
-        for line in BufReader::new(stream).lines() {
-            let Ok(line) = line else { break };
-            let line = wrap(line.trim_end_matches('\r').to_owned());
-            if sender.send(line).is_err() {
-                break;
-            }
-        }
+        each_line(stream, |line| sender.send(wrap(line)).is_ok());
     });
+}
+
+/// Calls `line` for every line of `stream`, without the line break, until the
+/// stream ends or `line` returns false. Bytes that are not UTF-8 (a name in
+/// Latin-1, say) are replaced rather than ending the stream, which would
+/// leave the session without replies.
+fn each_line(stream: impl Read, mut line: impl FnMut(String) -> bool) {
+    let mut reader = BufReader::new(stream);
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        match reader.read_until(b'\n', &mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let text = String::from_utf8_lossy(&buffer);
+        let text = text.trim_end_matches('\n').trim_end_matches('\r');
+        if !line(text.to_owned()) {
+            break;
+        }
+    }
 }
 
 /// Starts a transfer in its own `sftp -oBatchMode=no -b -` process. The caller waits on or
@@ -426,6 +470,31 @@ pub fn spawn_transfer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lines_that_are_not_utf8_do_not_end_the_stream() {
+        // "caf\xe9.txt" is Latin-1; the marker after it must still arrive.
+        let input: &[u8] = b"-rw-r--r-- 1 a a 1 Oct 13 18:40 caf\xe9.txt\r\nsftp> lpwd\nlast";
+        let mut lines = Vec::new();
+        each_line(input, |line| {
+            lines.push(line);
+            true
+        });
+        assert_eq!(
+            lines,
+            [
+                "-rw-r--r-- 1 a a 1 Oct 13 18:40 caf\u{fffd}.txt",
+                "sftp> lpwd",
+                "last"
+            ]
+        );
+        let mut first = Vec::new();
+        each_line(input, |line| {
+            first.push(line);
+            false
+        });
+        assert_eq!(first.len(), 1);
+    }
 
     #[test]
     fn quotes_paths_as_single_arguments() {

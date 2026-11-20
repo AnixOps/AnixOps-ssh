@@ -176,3 +176,34 @@ fn upload_and_download_through_scp_invocation() {
     let mut session = connect(&e2e, "e2e-target");
     session.remove(&remote, false).expect("cleanup");
 }
+
+#[test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+fn removing_a_folder_removes_everything_in_it_but_not_what_links_point_to() {
+    let e2e = E2e::new();
+    let connection = e2e.alias("e2e-target");
+    let dir = format!("/home/keyuser/{}", unique_name("e2e-tree"));
+    let outside = format!("/home/keyuser/{}", unique_name("e2e-outside"));
+    let setup: &'static str = Box::leak(
+        format!(
+            "set -e; mkdir -p '{dir}/a/b' '{outside}'; printf keep > '{outside}/keep.txt'; \
+             printf x > '{dir}/.hidden'; printf y > '{dir}/a/b/deep.txt'; \
+             mkdir '{dir}/a/empty'; ln -s '{outside}' '{dir}/a/link'; \
+             ln -s '{outside}/keep.txt' '{dir}/file-link'"
+        )
+        .into_boxed_str(),
+    );
+    let output = e2e.exec(&connection, setup);
+    assert!(output.status.success(), "setup: {}", text(&output.stderr));
+
+    let mut session = connect(&e2e, "e2e-target");
+    session.remove(&dir, true).expect("remove the folder");
+    assert!(session.list(&dir).is_err());
+    let kept = session
+        .list(&outside)
+        .expect("the link target is still there");
+    let names: Vec<_> = kept.iter().map(|file| file.name.as_str()).collect();
+    assert_eq!(names, ["keep.txt"]);
+
+    session.remove(&outside, true).expect("cleanup");
+}
