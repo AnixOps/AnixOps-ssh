@@ -9,6 +9,7 @@
 
 pub mod choice;
 pub mod interact;
+pub mod options;
 /// Host keys in the store, the connection registry, the file sessions and the
 /// tunnels live in `easyssh-engine`: the in-process engine of the mobile app
 /// runs the same code.
@@ -160,16 +161,22 @@ impl Engine {
 
     fn params(&self, spec: &HostSpec, agent: Option<&PathBuf>) -> ConnectParams {
         let paths = lock(&self.paths).clone();
-        let fallbacks = known_hosts::openssh_files(paths.user.as_deref(), &paths.system);
+        // `UserKnownHostsFile` of the ssh config (else the default file),
+        // `known_hosts2` beside it and the system-wide files.
+        let user = spec.user_known_hosts.clone().unwrap_or(paths.user);
+        let fallbacks = known_hosts::openssh_files(user.as_deref(), &paths.system);
         let primary: Arc<dyn easyssh_ssh::KnownHosts> = match lock(&self.store).clone() {
             Some(store) => Arc::new(StoreKnownHosts::new(store)),
             None => Arc::new(easyssh_ssh::KnownHostsFile::new(paths.app)),
         };
         let known: Arc<dyn easyssh_ssh::KnownHosts> =
             Arc::new(LayeredKnownHosts::with_fallbacks(primary, fallbacks));
+        let known = options::with_policy(known, spec.host_key_policy);
         let mut params =
             ConnectParams::new(spec.host.clone(), spec.port, spec.user.clone()).known_hosts(known);
-        params.agent = match (spec.agent, agent) {
+        // `IdentityAgent` in the ssh config wins over the client's agent, as
+        // it does over `SSH_AUTH_SOCK` for OpenSSH.
+        params.agent = match (spec.agent, spec.agent_path.as_ref().or(agent)) {
             (false, _) => AgentSource::Disabled,
             (true, Some(path)) => AgentSource::Path(path.clone()),
             (true, None) => AgentSource::Environment,
