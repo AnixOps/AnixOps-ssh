@@ -282,7 +282,9 @@ impl Engine {
     }
 
     /// A shell on the host's shared connection. The lease keeps the
-    /// connection up for as long as the shell lives.
+    /// connection up for as long as the shell lives. `language` is the app's
+    /// (`zh`, `en`; `None` to follow the system), for `LANG` when this
+    /// process has no UTF-8 locale; see [`easyssh_ssh::shell_env`].
     ///
     /// When the server refuses the session (OpenSSH's `MaxSessions`, 10 by
     /// default), the shell opens on another connection to the same host.
@@ -294,11 +296,14 @@ impl Engine {
         agent: Option<PathBuf>,
         cols: u16,
         rows: u16,
+        language: Option<&str>,
     ) -> Result<(ShellHandle, Lease), SharedError> {
         let options = ShellOptions {
             term: "xterm-256color".into(),
             cols: u32::from(cols.max(1)),
             rows: u32::from(rows.max(1)),
+            env: easyssh_ssh::local_shell_env(language, &plan.target.set_env),
+            ..ShellOptions::default()
         };
         let mut shard = 0;
         let mut retried_timeout = false;

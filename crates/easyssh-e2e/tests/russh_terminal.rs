@@ -41,6 +41,7 @@ async fn interactive_shell_on_a_pty() {
             term: "xterm".into(),
             cols: 100,
             rows: 30,
+            ..ShellOptions::default()
         }),
     )
     .await
