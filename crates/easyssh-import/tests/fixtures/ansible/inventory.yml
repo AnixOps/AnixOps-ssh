@@ -1,0 +1,43 @@
+---
+# Synthetic inventory (example.com, 192.0.2.x).
+all:
+  vars:
+    ansible_user: ops
+    ansible_port: 2200
+  children:
+    prod:
+      vars:
+        ansible_user: deploy
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -J jump@bastion.example.com:2222"
+      children:
+        web:
+          vars:
+            ansible_port: 2222
+          hosts:
+            web[01:03].example.com:
+            web-odd:
+              ansible_host: 192.0.2.50
+              ansible_user: alice
+              ansible_ssh_private_key_file: ~/.ssh/web_ed25519
+              ansible_password: not-a-real-secret
+        db:
+          hosts:
+            db1:
+              ansible_host: 192.0.2.20
+              ansible_ssh_extra_args: "-o ProxyJump=hop1,hop2"
+    monitoring:
+      hosts:
+        db1:
+        mon1:
+          ansible_host: "{{ lookup('env', 'MON_IP') }}"
+    ungrouped:
+      hosts:
+        loner:
+          ansible_host: 192.0.2.99
+          ansible_ssh_common_args: "-o ProxyCommand='ssh -W %h:%p gw'"
+        localbox:
+          ansible_connection: local
+        win1:
+          ansible_connection: winrm
+        ctr:
+          ansible_connection: community.docker.docker

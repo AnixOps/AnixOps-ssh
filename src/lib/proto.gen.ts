@@ -38,6 +38,13 @@ export type ConnectionTarget =
       flow_control: "none" | "software" | "hardware";
     };
 /**
+ * Rust: domain::ProxyKind. SOCKS5 (RFC 1928, with RFC 1929 username/password) or HTTP CONNECT (with basic authentication).
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "ProxyKind".
+ */
+export type ProxyKind = "socks5" | "http";
+/**
  * Rust: tunnel::TunnelKind (-L, -R, -D).
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -114,7 +121,7 @@ export type Reply =
  * via the `definition` "ImportFormat".
  */
 export type ImportFormat =
-  "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "csv" | "openssh";
+  "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "ansible" | "csv" | "openssh";
 /**
  * What to do with an imported host that matches a stored one (same hostname, port and user).
  *
@@ -175,10 +182,12 @@ export type HostKeyDecision = "reject" | "accept_once" | "accept_and_save" | "re
  */
 export type SftpEntryKind = "file" | "dir" | "symlink" | "other";
 /**
+ * `reconnecting`: the connection dropped; the forward is closed while a new connection is made (the reason is in `error`).
+ *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "TunnelStateName".
  */
-export type TunnelStateName = "starting" | "running" | "stopped" | "failed";
+export type TunnelStateName = "starting" | "running" | "reconnecting" | "stopped" | "failed";
 
 /**
  * Entities (v1 shapes), envelopes and the starting command/event set.
@@ -230,6 +239,23 @@ export interface Connection {
    * Absent means auto.
    */
   engine?: "auto" | "russh" | "openssh";
+  /**
+   * X11 forwarding (ssh -X); the host runs on the OpenSSH engine. Absent means off.
+   */
+  forward_x11?: boolean;
+  proxy?: ProxySettings;
+}
+/**
+ * An outbound proxy for the first hop. Absent means a direct connection. The proxy password is a saved secret, not part of the record.
+ */
+export interface ProxySettings {
+  kind: ProxyKind;
+  host: string;
+  port: number;
+  /**
+   * The proxy login; absent means no authentication. Its password is the saved secret `proxy_password`.
+   */
+  username?: string;
 }
 /**
  * Rust: domain::Group. `parent_id` has serde(default), so it is optional.
@@ -580,7 +606,7 @@ export interface HostsImportPreviewParams {
   /**
    * Overrides detection.
    */
-  format?: "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "csv" | "openssh";
+  format?: "putty" | "securecrt" | "mobaxterm" | "xshell" | "finalshell" | "termius" | "ansible" | "csv" | "openssh";
   /**
    * Directory OpenSSH `Include` paths resolve in and may not leave. Only for the user's own `~/.ssh`, on their explicit action.
    */
@@ -1231,6 +1257,10 @@ export interface SecretsStatusResult {
   password: boolean;
   private_key: boolean;
   passphrase: boolean;
+  /**
+   * The password of the host's outbound proxy. Absent from older daemons.
+   */
+  proxy_password?: boolean;
 }
 /**
  * Command `secrets.set` payload. Reply: SecretsStatusResult. Fails with `vault_locked` when a passphrase vault is locked.
@@ -1252,6 +1282,10 @@ export interface SecretsSetParams {
    * Key passphrase. Absent keeps; empty clears.
    */
   passphrase?: string;
+  /**
+   * Password of the host's outbound proxy. Absent keeps; empty clears.
+   */
+  proxy_password?: string;
 }
 /**
  * Command `askpass.unlock` payload: unlock the vault and answer prompt `id` from it. Reply: null. Fails with `wrong_passphrase`.
@@ -1648,6 +1682,21 @@ export interface HostsVaultsResult {
   };
 }
 /**
+ * Rust: domain::ProxySettings. Where the outbound proxy of a host is.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "ProxySettings".
+ */
+export interface ProxySettings1 {
+  kind: ProxyKind;
+  host: string;
+  port: number;
+  /**
+   * The proxy login; absent means no authentication. Its password is the saved secret `proxy_password`.
+   */
+  username?: string;
+}
+/**
  * Event `hostkey.prompt` payload: the engine needs a decision about a host key. Answer with `hostkey.reply`.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -1760,6 +1809,44 @@ export interface SftpOpenResult {
   home: string;
 }
 /**
+ * Command `monitor.sample` payload (russh engine): reads the server's load, memory, network, disks and processes on the connection the terminal already has. Never connects. Reply: MonitorSampleResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "MonitorSampleParams".
+ */
+export interface MonitorSampleParams {
+  host_id: string;
+  /**
+   * Also list every process's owner, command line and executable.
+   */
+  detail?: boolean;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "MonitorSampleResult".
+ */
+export interface MonitorSampleResult {
+  /**
+   * What the read-only sample script printed (`@section` markers, raw /proc and df text).
+   */
+  output: string;
+  /**
+   * Keepalive round trip; null when the server did not answer it.
+   */
+  latency_ms: number | null;
+}
+/**
+ * Command `monitor.signal` payload (russh engine): sends a signal to a process as the login user, on the existing connection.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "MonitorSignalParams".
+ */
+export interface MonitorSignalParams {
+  host_id: string;
+  pid: number;
+  signal: "TERM" | "KILL" | "HUP" | "INT";
+}
+/**
  * Command `sftp.list` payload. Reply: SftpListResult.
  *
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -1866,6 +1953,10 @@ export interface TransferDoneEvent {
   transfer_id: string;
   status: "completed" | "failed" | "cancelled";
   error?: string | null;
+  /**
+   * Links a folder transfer left out: broken, or leading back up into a folder that holds them. Absent when none.
+   */
+  skipped?: number;
 }
 /**
  * Command `tunnel.start` payload (russh engine). Reply: TunnelStartResult; later changes arrive as `tunnel.status`.
@@ -1910,6 +2001,14 @@ export interface TunnelState {
   state: TunnelStateName;
   bind_port?: number | null;
   error?: string | null;
+  /**
+   * Connections the running forward accepted but could not pass on (the server refused the channel, the target is down). Optional; absent means none.
+   */
+  channel_errors?: number;
+  /**
+   * Why the last of `channel_errors` failed, e.g. `127.0.0.1:1: connect failed`.
+   */
+  last_channel_error?: string | null;
 }
 /**
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -1929,4 +2028,12 @@ export interface TunnelStatusEvent {
   state: TunnelStateName;
   bind_port?: number | null;
   error?: string | null;
+  /**
+   * Connections the running forward accepted but could not pass on (the server refused the channel, the target is down). Optional; absent means none.
+   */
+  channel_errors?: number;
+  /**
+   * Why the last of `channel_errors` failed, e.g. `127.0.0.1:1: connect failed`.
+   */
+  last_channel_error?: string | null;
 }

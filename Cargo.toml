@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/easyssh-core", "crates/easyssh-crypto", "crates/easyssh-e2e", "crates/easyssh-engine", "crates/easyssh-mobile-keys", "crates/easyssh-import", "crates/easyssh-services","crates/easyssh-proto", "crates/easyssh-sessionlog", "crates/easyssh-ai", "crates/easyssh-ssh", "crates/easyssh-store", "crates/easyssh-vault", "crates/easysshd", "crates/easyssh-server", "crates/easyssh-sync", "crates/easyssh-telemetry", "crates/easyssh-unlock", "src-tauri"]
+members = ["crates/easyssh-core", "crates/easyssh-crypto", "crates/easyssh-e2e", "crates/easyssh-engine", "crates/easyssh-mobile-keys", "crates/easyssh-import", "crates/easyssh-services", "crates/easyssh-proto", "crates/easyssh-sessionlog", "crates/easyssh-ai", "crates/easyssh-ssh", "crates/easyssh-store", "crates/easyssh-vault", "crates/easysshd", "crates/easyssh-server", "crates/easyssh-sync", "crates/easyssh-telemetry", "crates/easyssh-update", "crates/easyssh-unlock", "src-tauri"]
 exclude = ["src-tauri/plugins/device-key"]
 
 [workspace.package]

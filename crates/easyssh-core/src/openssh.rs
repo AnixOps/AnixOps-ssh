@@ -18,6 +18,22 @@ pub enum OpenSshError {
     Process(#[from] std::io::Error),
     #[error("OpenSSH command failed: {0}")]
     Failed(String),
+    /// The host has an outbound proxy, which only the built-in engine can
+    /// use. There is no safe `ProxyCommand` for it (`nc`/`ncat` differ by
+    /// system and a proxy password cannot go on a command line), and running
+    /// `ssh` without the proxy would connect directly without a word.
+    #[error(
+        "this host connects through the proxy {0}, which only the built-in engine supports; \
+         OpenSSH would connect directly. Use the built-in engine for this host, or remove the proxy"
+    )]
+    ProxyUnsupported(String),
+}
+
+fn refuse_proxy(connection: &Connection) -> Result<(), OpenSshError> {
+    match &connection.proxy {
+        Some(proxy) => Err(OpenSshError::ProxyUnsupported(proxy.display())),
+        None => Ok(()),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +58,7 @@ impl SshInvocation {
         verbose: bool,
     ) -> Result<Self, OpenSshError> {
         validate_connection(connection)?;
+        refuse_proxy(connection)?;
         let mut args = Vec::new();
         if verbose {
             args.push("-vvv".to_owned());
@@ -101,6 +118,7 @@ impl SshInvocation {
         command: &'static str,
     ) -> Result<Self, OpenSshError> {
         validate_connection(connection)?;
+        refuse_proxy(connection)?;
         let mut args = Vec::new();
         match &connection.target {
             ConnectionTarget::Alias { alias } => args.push(alias.clone()),
@@ -353,6 +371,33 @@ mod tests {
         c.forward_x11 = true;
         let invocation = SshInvocation::for_connection(&OpenSsh, &c);
         assert!(invocation.is_err() || invocation.unwrap().args == vec!["-X", "production"]);
+    }
+
+    #[test]
+    fn a_host_with_a_proxy_is_never_started_without_it() {
+        use crate::domain::{ProxyKind, ProxySettings};
+        let mut c = Connection::alias("Prod", "production");
+        c.proxy = Some(ProxySettings {
+            kind: ProxyKind::Socks5,
+            host: "127.0.0.1".into(),
+            port: 7890,
+            username: None,
+        });
+        // Whether or not `ssh` is installed, the answer is the proxy error,
+        // never an invocation that would connect directly.
+        let all = [
+            SshInvocation::for_connection(&OpenSsh, &c),
+            SshInvocation::for_connection_with_verbosity(&OpenSsh, &c, true),
+            SshInvocation::for_fixed_remote_command(&OpenSsh, &c, "true"),
+        ];
+        for result in all {
+            match result {
+                Err(OpenSshError::ProxyUnsupported(proxy)) => {
+                    assert_eq!(proxy, "socks5://127.0.0.1:7890");
+                }
+                other => panic!("expected the proxy error, got {other:?}"),
+            }
+        }
     }
 
     #[test]

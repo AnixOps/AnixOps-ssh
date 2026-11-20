@@ -527,6 +527,13 @@ fn refusal(reason: ChannelOpenFailure) -> String {
 }
 
 async fn open_tcp(params: &ConnectParams) -> Result<TcpStream> {
+    if let Some(proxy) = &params.proxy {
+        // The host name goes to the proxy as it is; the proxy resolves it.
+        let stream =
+            crate::proxy::connect_through(proxy, &params.host, params.port, params.connect_timeout)
+                .await?;
+        return Ok(stream);
+    }
     let address = (params.host.as_str(), params.port);
     let stream = tokio::time::timeout(params.connect_timeout, TcpStream::connect(address))
         .await

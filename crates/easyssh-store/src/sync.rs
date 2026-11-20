@@ -128,6 +128,7 @@ impl Syncable for Host {
         take(fields, "shell_integration", &mut c.shell_integration)?;
         take(fields, "engine", &mut c.engine)?;
         take(fields, "forward_x11", &mut c.forward_x11)?;
+        take(fields, "proxy", &mut c.proxy)?;
         take(fields, "tags", &mut c.tags)?;
         take(fields, "notes_secret", &mut host.notes_secret)?;
         Ok(host)
@@ -958,6 +959,7 @@ impl Store {
                         password: set(secrets.password),
                         private_key: set(secrets.private_key),
                         passphrase: set(secrets.passphrase),
+                        proxy_password: set(secrets.proxy_password),
                     },
                 )?;
             }
@@ -1105,5 +1107,32 @@ mod engine_field_tests {
             .collect();
         let received = Host::from_fields(None, &connection.id, &fields).unwrap();
         assert_eq!(received.connection.engine, connection.engine);
+    }
+
+    #[test]
+    fn a_hosts_proxy_travels_with_it_but_its_password_does_not() {
+        use easyssh_core::{ProxyKind, ProxySettings};
+        let mut connection = Connection::alias("proxy", "proxy");
+        connection.id = uuid::Uuid::new_v4().to_string();
+        connection.proxy = Some(ProxySettings {
+            kind: ProxyKind::Socks5,
+            host: "127.0.0.1".into(),
+            port: 7890,
+            username: Some("u".into()),
+        });
+        let sent = Host::new(connection.clone());
+        let fields = sent.fields();
+        assert!(fields.keys().all(|name| !name.contains("proxy_password")));
+        let fields: std::collections::BTreeMap<String, serde_json::Value> = fields
+            .into_iter()
+            .map(|(name, field)| (name.to_owned(), field.value))
+            .collect();
+        let received = Host::from_fields(None, &connection.id, &fields).unwrap();
+        assert_eq!(received.connection.proxy, connection.proxy);
+        // A record from a build that has no proxy field leaves the host as it is.
+        let mut older = fields.clone();
+        older.remove("proxy");
+        let kept = Host::from_fields(Some(&received), &connection.id, &older).unwrap();
+        assert_eq!(kept.connection.proxy, connection.proxy);
     }
 }

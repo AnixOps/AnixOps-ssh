@@ -8,7 +8,7 @@
 //! `vault_locked`, so the UI can ask for the unlock and retry.
 
 use crate::{OpenError, Target};
-use easyssh_ssh::MemoryIdentity;
+use easyssh_ssh::{MemoryIdentity, Proxy, ProxyKind};
 use easyssh_vault::{SecretSource, VaultError};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -68,13 +68,49 @@ fn vault_error(error: VaultError) -> OpenError {
     match error {
         VaultError::Locked => OpenError {
             code: "vault_locked",
-            message: "the vault is locked; unlock it to use the saved key".into(),
+            message: "the vault is locked; unlock it to use the saved key or proxy password".into(),
         },
         other => OpenError {
             code: "ssh_error",
             message: format!("cannot read the saved key: {other}"),
         },
     }
+}
+
+/// The saved proxy password of `host_id`, empty when none is saved. The vault
+/// is only opened when one is; a locked vault then is [`VaultError::Locked`].
+fn proxy_password(secrets: &dyn SecretSource, host_id: &str) -> Result<String, VaultError> {
+    if !secrets.secret_flags(host_id)?.proxy_password {
+        return Ok(String::new());
+    }
+    Ok(secrets
+        .host_secrets(host_id)?
+        .proxy_password
+        .map(|password| password.expose().to_owned())
+        .unwrap_or_default())
+}
+
+/// The outbound proxy of `host_id` as the engine connects through it: the
+/// settings of the host plus, when it has a proxy user, the saved proxy
+/// password (empty when none is saved).
+pub fn saved_proxy(
+    settings: &easyssh_core::ProxySettings,
+    secrets: Option<&dyn SecretSource>,
+    host_id: &str,
+) -> Result<Proxy, VaultError> {
+    let kind = match settings.kind {
+        easyssh_core::ProxyKind::Socks5 => ProxyKind::Socks5,
+        easyssh_core::ProxyKind::Http => ProxyKind::Http,
+    };
+    let proxy = Proxy::new(kind, settings.host.clone(), settings.port);
+    let Some(user) = settings.username.as_deref() else {
+        return Ok(proxy);
+    };
+    let password = match secrets {
+        Some(secrets) => proxy_password(secrets, host_id)?,
+        None => String::new(),
+    };
+    Ok(proxy.login(user, password))
 }
 
 /// The login saved for `host_id` and how to use it for `target`. Nothing
@@ -126,6 +162,14 @@ pub fn with_saved_login(
     let login = saved_login(secrets, &target.host_id, &target)?;
     target.identity = login.identity;
     target.saved_password = login.password;
+    // `target_for` set the proxy without its password; add the saved one.
+    if let Some(user) = target.proxy.as_ref().and_then(Proxy::username) {
+        let user = user.to_owned();
+        let password = proxy_password(&**secrets, &target.host_id).map_err(vault_error)?;
+        if let Some(proxy) = target.proxy.take() {
+            target.proxy = Some(proxy.login(user, password));
+        }
+    }
     Ok(target)
 }
 
@@ -151,6 +195,7 @@ mod tests {
                 password: self.password.map(SecretText::new),
                 private_key: self.key.map(SecretText::new),
                 passphrase: self.passphrase.map(SecretText::new),
+                ..Default::default()
             })
         }
 
@@ -159,6 +204,7 @@ mod tests {
                 password: self.password.is_some(),
                 private_key: self.key.is_some(),
                 passphrase: self.passphrase.is_some(),
+                ..Default::default()
             })
         }
     }
@@ -173,6 +219,7 @@ mod tests {
             identity: None,
             jump: Vec::new(),
             saved_password: None,
+            proxy: None,
         }
     }
 
@@ -311,5 +358,134 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, "vault_locked");
+    }
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+    use base64::Engine as _;
+    use easyssh_core::{ProxyKind as CoreKind, ProxySettings};
+    use easyssh_crypto::SecretText;
+    use easyssh_store::{SecretFlags, StoredSecrets};
+    use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
+
+    struct Saved {
+        proxy_password: Option<&'static str>,
+        locked: bool,
+    }
+
+    impl SecretSource for Saved {
+        fn host_secrets(&self, _: &str) -> Result<StoredSecrets, VaultError> {
+            if self.locked {
+                return Err(VaultError::Locked);
+            }
+            Ok(StoredSecrets {
+                proxy_password: self.proxy_password.map(SecretText::new),
+                ..Default::default()
+            })
+        }
+
+        fn secret_flags(&self, _: &str) -> Result<SecretFlags, VaultError> {
+            Ok(SecretFlags {
+                proxy_password: self.proxy_password.is_some(),
+                ..Default::default()
+            })
+        }
+    }
+
+    fn settings(username: Option<&str>) -> ProxySettings {
+        ProxySettings {
+            kind: CoreKind::Http,
+            host: "127.0.0.1".into(),
+            port: 7890,
+            username: username.map(str::to_owned),
+        }
+    }
+
+    /// What the proxy would see as `Proxy-Authorization`, if anything.
+    async fn authorization(proxy: &Proxy) -> Option<String> {
+        let (mut client, mut server) = duplex(4096);
+        let peer = tokio::spawn(async move {
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                server.read_exact(&mut byte).await.unwrap();
+                head.push(byte[0]);
+            }
+            server.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.unwrap();
+            String::from_utf8(head).unwrap()
+        });
+        easyssh_ssh::proxy::handshake(&mut client, proxy, "h", 22)
+            .await
+            .unwrap();
+        peer.await
+            .unwrap()
+            .lines()
+            .find_map(|line| line.strip_prefix("Proxy-Authorization: Basic "))
+            .map(|token| {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(token)
+                    .unwrap();
+                String::from_utf8(bytes).unwrap()
+            })
+    }
+
+    #[tokio::test]
+    async fn the_saved_proxy_password_goes_with_the_proxy_user() {
+        let secrets = Saved {
+            proxy_password: Some("s3cret"),
+            locked: false,
+        };
+        let proxy = saved_proxy(&settings(Some("me")), Some(&secrets), "h").unwrap();
+        assert_eq!(proxy.display(), "http://127.0.0.1:7890");
+        assert_eq!(authorization(&proxy).await.as_deref(), Some("me:s3cret"));
+        // A user without a saved password logs in with an empty one.
+        let none = Saved {
+            proxy_password: None,
+            locked: true, // never opened: nothing is saved
+        };
+        let proxy = saved_proxy(&settings(Some("me")), Some(&none), "h").unwrap();
+        assert_eq!(authorization(&proxy).await.as_deref(), Some("me:"));
+        // No proxy user: no authentication, and the vault is not touched.
+        let proxy = saved_proxy(&settings(None), Some(&secrets), "h").unwrap();
+        assert_eq!(authorization(&proxy).await, None);
+    }
+
+    #[test]
+    fn a_locked_vault_with_a_saved_proxy_password_asks_for_the_unlock() {
+        let locked = Saved {
+            proxy_password: Some("s3cret"),
+            locked: true,
+        };
+        assert!(matches!(
+            saved_proxy(&settings(Some("me")), Some(&locked), "h"),
+            Err(VaultError::Locked)
+        ));
+    }
+
+    #[tokio::test]
+    async fn with_saved_login_adds_the_proxy_password_to_the_target() {
+        let secrets: Arc<dyn SecretSource> = Arc::new(Saved {
+            proxy_password: Some("s3cret"),
+            locked: false,
+        });
+        let target = Target {
+            host_id: "h1".into(),
+            label: "web".into(),
+            host: "example.com".into(),
+            port: 22,
+            user: "me".into(),
+            identity: None,
+            jump: Vec::new(),
+            saved_password: None,
+            // As `target_for` builds it: the user, not the password.
+            proxy: Some(saved_proxy(&settings(Some("me")), None, "h1").unwrap()),
+        };
+        let target = with_saved_login(&secrets, target).unwrap();
+        let proxy = target.proxy.as_ref().unwrap();
+        assert_eq!(authorization(proxy).await.as_deref(), Some("me:s3cret"));
+        // The proxy is part of what names the shared connection.
+        assert_eq!(target.key().via.as_deref(), Some("http://127.0.0.1:7890"));
     }
 }

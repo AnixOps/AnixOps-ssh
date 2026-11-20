@@ -10,7 +10,7 @@
 
 use crate::daemon::DaemonState;
 use crate::hosts::{daemon_down, open_store};
-use easyssh_vault::{secrets_update, StoreAccess, Vault, VaultSecrets};
+use easyssh_vault::{proxy_password_change, secrets_update, StoreAccess, Vault, VaultSecrets};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::{Arc, OnceLock};
@@ -91,6 +91,7 @@ pub struct SecretsView {
     password: bool,
     private_key: bool,
     passphrase: bool,
+    proxy_password: bool,
 }
 
 fn status_view(value: &Value) -> VaultStatusView {
@@ -133,6 +134,7 @@ fn secrets_view(value: &Value) -> SecretsView {
         password: value["password"].as_bool().unwrap_or(false),
         private_key: value["private_key"].as_bool().unwrap_or(false),
         passphrase: value["passphrase"].as_bool().unwrap_or(false),
+        proxy_password: value["proxy_password"].as_bool().unwrap_or(false),
     }
 }
 
@@ -448,6 +450,7 @@ pub async fn secrets_status(
             password: flags.password,
             private_key: flags.private_key,
             passphrase: flags.passphrase,
+            proxy_password: flags.proxy_password,
         })
     })
     .await
@@ -462,12 +465,14 @@ pub async fn secrets_set(
     password: Option<String>,
     private_key: Option<String>,
     passphrase: Option<String>,
+    proxy_password: Option<String>,
 ) -> Result<SecretsView, String> {
     let mut payload = json!({"host_id": host_id});
     for (name, value) in [
         ("password", &password),
         ("private_key", &private_key),
         ("passphrase", &passphrase),
+        ("proxy_password", &proxy_password),
     ] {
         if let Some(value) = value {
             payload[name] = json!(value);
@@ -477,7 +482,8 @@ pub async fn secrets_set(
         return Ok(secrets_view(&value));
     }
     blocking(move || {
-        let update = secrets_update(password, private_key, passphrase)?;
+        let mut update = secrets_update(password, private_key, passphrase)?;
+        update.proxy_password = proxy_password_change(proxy_password)?;
         let store = open_store().map_err(easyssh_vault::VaultError::Store)?;
         let vault = app_vault();
         vault.set_host_secrets(&store, &host_id, &update)?;
@@ -486,6 +492,7 @@ pub async fn secrets_set(
             password: flags.password,
             private_key: flags.private_key,
             passphrase: flags.passphrase,
+            proxy_password: flags.proxy_password,
         })
     })
     .await

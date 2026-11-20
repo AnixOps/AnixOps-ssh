@@ -78,6 +78,9 @@ pub struct SyncConnection {
     pub local_forwards: Vec<String>,
     pub remote_forwards: Vec<String>,
     pub dynamic_forwards: Vec<String>,
+    /// Absent in files written before outbound proxies existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<crate::domain::ProxySettings>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind")]
@@ -222,6 +225,7 @@ impl From<&Connection> for SyncConnection {
             local_forwards: c.local_forwards.clone(),
             remote_forwards: c.remote_forwards.clone(),
             dynamic_forwards: c.dynamic_forwards.clone(),
+            proxy: c.proxy.clone(),
         }
     }
 }
@@ -263,6 +267,7 @@ impl SyncConnection {
             updated_at: now,
             engine: None,
             forward_x11: false,
+            proxy: self.proxy.clone(),
         }
     }
 }

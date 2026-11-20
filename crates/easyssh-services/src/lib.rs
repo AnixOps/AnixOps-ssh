@@ -1,7 +1,7 @@
 //! Import hosts from services the user already runs.
 //!
 //! AnixOps Control (`control`) lists its nodes through the admin API;
-//! JumpServer (`jumpserver`) lists its assets. Each importer fetches over
+//! JumpServer (`jumpserver`) lists its assets with a signed request. Each importer fetches over
 //! HTTPS with the user's API credential, maps what it finds to
 //! [`easyssh_store::import::ImportHost`] and stops there: the preview with
 //! "already stored" marks and the merge are the store's
@@ -15,6 +15,7 @@
 pub mod control;
 mod error;
 pub mod http;
+pub mod jumpserver;
 pub mod settings;
 
 pub use error::{Result, ServiceError};
@@ -55,6 +56,7 @@ pub fn credential(
     settings::read_secret(store, vault, service)?.ok_or_else(|| {
         ServiceError::Invalid(match service {
             Service::Control => "Enter an admin API token.".to_owned(),
+            Service::JumpServer => "Enter the access key secret.".to_owned(),
         })
     })
 }
@@ -64,6 +66,7 @@ pub fn credential(
 pub fn test(service: Service, form: &ServiceForm, credential: &str) -> Result<usize> {
     match service {
         Service::Control => control::test(form, credential),
+        Service::JumpServer => jumpserver::test(form, credential),
     }
 }
 
@@ -71,5 +74,6 @@ pub fn test(service: Service, form: &ServiceForm, credential: &str) -> Result<us
 pub fn fetch(service: Service, form: &ServiceForm, credential: &str) -> Result<Fetched> {
     match service {
         Service::Control => control::fetch(form, credential),
+        Service::JumpServer => jumpserver::fetch(form, credential),
     }
 }

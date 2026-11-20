@@ -1,4 +1,4 @@
-import { ArrowLeftRight, CircleAlert, LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeftRight, CircleAlert, LoaderCircle, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import { TunnelEditor } from "@/components/app/TunnelEditor";
@@ -19,7 +19,7 @@ import {
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { appear } from "@/lib/motion";
-import { describeTunnel } from "@/lib/tunnels";
+import { describeTunnel, isTunnelActive, tunnelWarning } from "@/lib/tunnels";
 import { cn } from "@/lib/utils";
 
 export function ForwardsPanel({ hosts }: { hosts: Host[] }) {
@@ -43,8 +43,7 @@ export function ForwardsPanel({ hosts }: { hosts: Host[] }) {
   );
 
   const toggle = (tunnel: Tunnel) => {
-    const active = tunnel.status.state === "running" || tunnel.status.state === "starting";
-    (active ? stopTunnel(tunnel.id) : startTunnel(tunnel.id)).catch((reason) => setError(String(reason)));
+    (isTunnelActive(tunnel.status) ? stopTunnel(tunnel.id) : startTunnel(tunnel.id)).catch((reason) => setError(String(reason)));
   };
 
   const remove = async (tunnel: Tunnel) => {
@@ -82,7 +81,8 @@ export function ForwardsPanel({ hosts }: { hosts: Host[] }) {
         )}
         <AnimatePresence initial={false}>
         {tunnels.map((tunnel) => {
-          const on = tunnel.status.state === "running" || tunnel.status.state === "starting";
+          const on = isTunnelActive(tunnel.status);
+          const warning = tunnelWarning(tunnel.status);
           return (
             <motion.div
               key={tunnel.id}
@@ -99,6 +99,14 @@ export function ForwardsPanel({ hosts }: { hosts: Host[] }) {
                 </div>
                 <Switch on={on} label={tunnel.name} onClick={() => toggle(tunnel)} />
               </div>
+              {warning && (
+                <Tooltip label={<span className="selectable block max-w-72 break-words">{warning}</span>}>
+                  <p role="status" className="mt-1 flex min-w-0 items-center gap-1.5 text-callout text-warning">
+                    <TriangleAlert className="size-4 shrink-0" strokeWidth={1.5} />
+                    <span className="truncate">{warning}</span>
+                  </p>
+                </Tooltip>
+              )}
               <div className="mt-1.5 flex items-center gap-1">
                 <TunnelState tunnel={tunnel} />
                 <span className="ml-auto flex opacity-0 transition-opacity duration-micro group-focus-within:opacity-100 group-hover:opacity-100">
@@ -146,12 +154,21 @@ function TunnelState({ tunnel }: { tunnel: Tunnel }) {
         </span>
       );
     case "starting":
-      return (
+    case "reconnecting": {
+      const label = tunnel.status.state === "starting" ? t.tunnelStarting : t.tunnelReconnecting;
+      const reason = tunnel.status.state === "reconnecting" ? tunnel.status.message : undefined;
+      const state = (
         <span className={cn(text, "text-label-2")}>
-          <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" strokeWidth={1.5} />
-          {t.tunnelStarting}
+          <LoaderCircle className="size-4 shrink-0 animate-spin motion-reduce:animate-none" strokeWidth={1.5} />
+          <span className="truncate">{label}</span>
         </span>
       );
+      return reason ? (
+        <Tooltip label={<span className="selectable block max-w-72 break-words">{reason}</span>}>{state}</Tooltip>
+      ) : (
+        state
+      );
+    }
     case "failed":
       return (
         <Tooltip label={<span className="selectable block max-w-72 break-words">{tunnel.status.message}</span>}>

@@ -113,6 +113,7 @@ async fn sessions_past_max_sessions_are_refused_with_their_own_error() {
                 term: "xterm".into(),
                 cols: 80,
                 rows: 24,
+                ..easyssh_ssh::ShellOptions::default()
             }),
         )
         .await
