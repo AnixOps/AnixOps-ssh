@@ -5,7 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { CaseSensitive, ChevronDown, ChevronUp, ClipboardPaste, Copy, Eraser, LoaderCircle, Regex, RotateCw, Search, Sparkles, SquareArrowOutUpRight, Unplug, WholeWord, X } from "lucide-react";
+import { CaseSensitive, ChevronDown, ChevronUp, ClipboardPaste, Copy, Eraser, LoaderCircle, Regex, RotateCw, Search, Sparkles, SquareArrowOutUpRight, TextSelect, Unplug, WholeWord, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CompletionPopup, type PopupPlacement } from "@/components/app/CompletionPopup";
@@ -61,7 +61,7 @@ import { animationFrameSchedule, OutputBuffer } from "@/lib/outputBuffer";
 import { onSettings, settings } from "@/lib/settings";
 import { appShortcut, isMac } from "@/lib/shortcuts";
 import { shortcutHint } from "@/lib/shortcutTable";
-import { parseOsc52, sanitizeTitle, shouldOpenLink } from "@/lib/terminalInput";
+import { capabilityReply, parseOsc52, sanitizeTitle, shouldOpenLink } from "@/lib/terminalInput";
 import { registerTerminal, terminalFor } from "@/lib/terminals";
 import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { exitTitle, RESIZE_DEBOUNCE_MS, TERMINAL_RESET, trailingDebounce, type SessionEnd } from "@/lib/terminalSession";
@@ -184,27 +184,17 @@ export function TerminalView({
     terminal.loadAddon(fit);
     terminal.loadAddon(search);
     // Links open with Ctrl-click (⌘-click), so a plain click still selects.
-    terminal.loadAddon(
-      new WebLinksAddon(
-        (event, uri) => {
-          if (shouldOpenLink(uri, event, isMac)) void openUrl(uri).catch(console.error);
-        },
-        {
-          hover: () => (container.title = t.openLinkHint.replace("{key}", isMac ? "⌘" : "Ctrl")),
-          leave: () => container.removeAttribute("title"),
-        },
-      ),
-    );
-    // OSC 8 hyperlinks (ls --hyperlink, gcc, systemctl): the same rule as
-    // plain URLs. Without a handler xterm.js asks with window.confirm and
-    // opens a window inside the app.
-    terminal.options.linkHandler = {
-      activate: (event, uri) => {
-        if (shouldOpenLink(uri, event, isMac)) void openUrl(uri).catch(console.error);
-      },
+    const openLink = (event: MouseEvent, uri: string) => {
+      if (shouldOpenLink(uri, event, isMac)) void openUrl(uri).catch(console.error);
+    };
+    const linkHover = {
       hover: () => (container.title = t.openLinkHint.replace("{key}", isMac ? "⌘" : "Ctrl")),
       leave: () => container.removeAttribute("title"),
     };
+    terminal.loadAddon(new WebLinksAddon(openLink, linkHover));
+    // OSC 8 hyperlinks (ls --hyperlink, gcc, systemd, delta, lazygit) follow
+    // the same rule; xterm.js's default would ask with a browser dialog.
+    terminal.options.linkHandler = { activate: openLink, ...linkHover };
     terminal.loadAddon(new Unicode11Addon());
     terminal.unicode.activeVersion = UNICODE_VERSION;
     terminal.open(container);
@@ -471,6 +461,11 @@ export function TerminalView({
     };
     container.addEventListener("contextmenu", onContextMenu);
 
+    // XTGETTCAP: Neovim and others ask whether 24-bit colour and undercurl work.
+    const capabilities = terminal.parser.registerDcsHandler({ intermediates: "+", final: "q" }, (data) => {
+      terminal.input(capabilityReply(data), false);
+      return true;
+    });
     // OSC 52: remote programs (tmux, Vim) may write the clipboard, never read it.
     const osc52 = terminal.parser.registerOscHandler(52, (data) => {
       if (settings().terminalOsc52) {
@@ -710,6 +705,7 @@ export function TerminalView({
       container.removeEventListener("contextmenu", onContextMenu);
       container.removeEventListener("wheel", onZoomWheel, { capture: true });
       osc52.dispose();
+      capabilities.dispose();
       titleChange.dispose();
       bell.dispose();
       window.clearTimeout(typingTimer);
@@ -830,6 +826,12 @@ export function TerminalView({
       icon: <ClipboardPaste />,
       shortcut: shortcutHint("paste"),
       onSelect: () => actionsRef.current.paste(),
+    },
+    {
+      key: "select-all",
+      label: t.selectAll,
+      icon: <TextSelect />,
+      onSelect: () => terminalRef.current?.selectAll(),
     },
     {
       key: "find",

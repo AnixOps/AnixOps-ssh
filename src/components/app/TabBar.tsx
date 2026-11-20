@@ -1,7 +1,7 @@
 import { Activity, Bell, Cable, Columns2, FolderOpen, LoaderCircle, Plus, Radio, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
-import type { KeyboardEvent } from "react";
+import { useCallback, useState, type KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Menu, type MenuEntry } from "@/components/ui/menu";
+import { ContextMenu, Menu, type MenuEntry } from "@/components/ui/menu";
 import type { SessionStatus } from "@/components/app/TerminalView";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -39,6 +39,7 @@ export function TabBar({
   activeKey,
   onSelect,
   onClose,
+  onCloseMany,
   onNew,
   serialHosts,
   onOpenHost,
@@ -52,6 +53,8 @@ export function TabBar({
   activeKey: string | null;
   onSelect: (key: string) => void;
   onClose: (key: string) => void;
+  /** Close several tabs at once; `keep` stays open and becomes active if the active one closes. */
+  onCloseMany: (keys: string[], keep: string) => void;
   onNew: () => void;
   /** Saved serial ports, offered in the new-tab menu. */
   serialHosts: Host[];
@@ -65,6 +68,27 @@ export function TabBar({
 }) {
   const activeTab = tabs.find((tab) => tab.key === activeKey);
   const broadcast = useBroadcast();
+  // The right-click menu of a tab: which tab, and where.
+  const [menu, setMenu] = useState<{ key: string; at: { x: number; y: number } } | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  const menuIndex = menu ? tabs.findIndex((tab) => tab.key === menu.key) : -1;
+  const menuItems: MenuEntry[] = menu
+    ? [
+        { key: "close", label: t.closeTab, shortcut: shortcutHint("close-tab"), onSelect: () => onClose(menu.key) },
+        {
+          key: "close-others",
+          label: t.closeOtherTabs,
+          disabled: tabs.length < 2,
+          onSelect: () => onCloseMany(tabs.filter((tab) => tab.key !== menu.key).map((tab) => tab.key), menu.key),
+        },
+        {
+          key: "close-right",
+          label: t.closeTabsToRight,
+          disabled: menuIndex < 0 || menuIndex === tabs.length - 1,
+          onSelect: () => onCloseMany(tabs.slice(menuIndex + 1).map((tab) => tab.key), menu.key),
+        },
+      ]
+    : [];
   // One Tab stop for the strip; arrows move and select (K7), Delete closes.
   const tabKeys = (event: KeyboardEvent, key: string) => {
     const index = tabs.findIndex((tab) => tab.key === key);
@@ -100,6 +124,10 @@ export function TabBar({
                 data-tab={tab.key}
                 onClick={() => onSelect(tab.key)}
                 onAuxClick={(event) => event.button === 1 && onClose(tab.key)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setMenu({ key: tab.key, at: { x: event.clientX, y: event.clientY } });
+                }}
                 tabIndex={active ? 0 : -1}
                 onKeyDown={(event) => tabKeys(event, tab.key)}
                 className="relative flex h-full min-w-0 items-center gap-2 pl-3 text-callout"
@@ -182,6 +210,7 @@ export function TabBar({
           </Button>
         </Tooltip>
       )}
+      <ContextMenu label={t.tabMenu} at={menu?.at ?? null} items={menuItems} onClose={closeMenu} />
     </div>
   );
 }

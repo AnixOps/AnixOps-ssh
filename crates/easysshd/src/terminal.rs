@@ -7,6 +7,7 @@
 //! client that attaches late replays exactly what it missed.
 
 use crate::integration::{self, Action, Integration};
+use crate::modes::ModeTracker;
 use crate::recorder::Recorder;
 use crate::server::Outbox;
 use easyssh_engine::Utf8Stream;
@@ -40,6 +41,9 @@ pub struct Scrollback {
     len: usize,
     /// Offset the next byte will have: total bytes ever pushed.
     next: u64,
+    /// The modes set by the text already dropped, restored before a replay
+    /// that starts after it.
+    dropped: ModeTracker,
 }
 
 impl Scrollback {
@@ -49,6 +53,7 @@ impl Scrollback {
             chunks: VecDeque::new(),
             len: 0,
             next: 0,
+            dropped: ModeTracker::default(),
         }
     }
 
@@ -87,6 +92,7 @@ impl Scrollback {
                 break;
             };
             if text.len() <= excess {
+                self.dropped.feed(text);
                 self.len -= text.len();
                 self.chunks.pop_front();
                 continue;
@@ -95,6 +101,7 @@ impl Scrollback {
             while !text.is_char_boundary(cut) {
                 cut += 1;
             }
+            self.dropped.feed(&text[..cut]);
             text.drain(..cut);
             *start += cut as u64;
             self.len -= cut;
@@ -124,6 +131,19 @@ impl Scrollback {
             }
         }
         (out, truncated)
+    }
+
+    /// What a replay from `from` should start with: the sequences restoring
+    /// the modes set by dropped text, as `(offset, text)` with the offset
+    /// chosen so it ends where the buffer starts. `None` when nothing was
+    /// dropped before `from`, or it left no mode set.
+    pub fn restore(&self, from: u64) -> Option<(u64, String)> {
+        let first = self.first();
+        if from >= first {
+            return None;
+        }
+        let text = self.dropped.restore();
+        (!text.is_empty()).then(|| (first.saturating_sub(text.len() as u64), text))
     }
 }
 
@@ -728,7 +748,9 @@ impl TermSession {
     ) -> bool {
         let mut state = lock(&self.state);
         state.subscribers.retain(|s| s.conn != conn);
-        let (chunks, truncated) = state.scrollback.since(from_seq.unwrap_or(0));
+        let from = from_seq.unwrap_or(0);
+        let (chunks, truncated) = state.scrollback.since(from);
+        let modes = state.scrollback.restore(from);
         let mut ok = true;
         if let Some(id) = request_id {
             let result = json!({
@@ -739,7 +761,7 @@ impl TermSession {
             });
             ok &= outbox.try_send(json!({"id": id, "ok": result}));
         }
-        for (seq, data) in chunks {
+        for (seq, data) in modes.into_iter().chain(chunks) {
             ok &= outbox.event(
                 "session.output",
                 json!({"session_id": self.id, "data": data, "seq": seq}),
@@ -839,6 +861,30 @@ mod tests {
         assert_eq!(chunks[0].0, 5);
         // Asking from inside the retained range is not truncated.
         assert!(!s.since(7).1);
+    }
+
+    #[test]
+    fn replay_restores_modes_set_by_dropped_text() {
+        let mut s = Scrollback::new(64);
+        s.push("\x1b[?1049h\x1b[?25l\x1b[?1002h\x1b[?1006h");
+        assert_eq!(s.restore(0), None, "nothing dropped yet");
+        // A program that only repaints pushes its start out of the buffer.
+        for _ in 0..10 {
+            s.push("\x1b[H\x1b[2Jframe\r\n");
+        }
+        assert!(s.since(0).1);
+        let (seq, text) = s.restore(0).expect("modes to restore");
+        assert_eq!(text, "\x1b[?1049h\x1b[?25l\x1b[?1006h\x1b[?1002h");
+        // It ends where the buffer starts, so a resume offset stays right.
+        assert_eq!(seq + text.len() as u64, s.first());
+        // A client that already has everything up to the buffer needs none.
+        assert_eq!(s.restore(s.first()), None);
+        // Once the program exits and that leaves the buffer too, nothing is restored.
+        s.push("\x1b[?1002l\x1b[?1006l\x1b[?25h\x1b[?1049l");
+        for _ in 0..20 {
+            s.push("$ ls\r\n");
+        }
+        assert_eq!(s.restore(0), None);
     }
 
     #[test]
