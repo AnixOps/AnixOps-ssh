@@ -3693,6 +3693,11 @@
               "type": "null"
             }
           ]
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Links a folder transfer left out: broken, or leading back up into a folder that holds them. Absent when none."
         }
       },
       "required": [

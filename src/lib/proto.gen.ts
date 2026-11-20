@@ -1928,6 +1928,10 @@ export interface TransferDoneEvent {
   transfer_id: string;
   status: "completed" | "failed" | "cancelled";
   error?: string | null;
+  /**
+   * Links a folder transfer left out: broken, or leading back up into a folder that holds them. Absent when none.
+   */
+  skipped?: number;
 }
 /**
  * Command `tunnel.start` payload (russh engine). Reply: TunnelStartResult; later changes arrive as `tunnel.status`.

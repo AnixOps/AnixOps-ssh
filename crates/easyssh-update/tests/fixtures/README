@@ -1,0 +1,11 @@
+go-feed.json, go-archive.bin and go-public-key.txt were made with the kit's Go
+tools (github.com/AnixOps/anix-kit, commit 73de268a2e0909b71ba1e1b80fd3470ae5a54aa9):
+
+  anixsign keygen k.pem                      (a throw-away key, not a release key)
+  printf 'AnixOps SSH cross-check archive\n' > go-archive.bin
+  anixupdate item k.pem anixops-ssh-linux 2.2.0 2002000 0 \
+    https://github.com/AnixOps/EasySSH/releases/download/v2.2.0/AnixOps-SSH-2.2.0.AppImage go-archive.bin
+  (notes set to "Cross-check fixture.", wrapped in an array as items.json)
+  anixupdate feed k.pem anixops-ssh-linux stable 1800000000 items.json > go-feed.json
+
+kit-foreign-feed.json is the foreignFeed constant of the kit's update/update_test.go.

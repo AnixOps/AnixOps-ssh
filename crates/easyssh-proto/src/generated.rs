@@ -2296,6 +2296,9 @@ impl ::std::convert::TryFrom<::std::string::String> for TransferDirection {
 pub struct TransferDoneEvent {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub error: ::std::option::Option<::std::string::String>,
+    ///Links a folder transfer left out: broken, or leading back up into a folder that holds them. Absent when none.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub skipped: ::std::option::Option<u64>,
     pub status: TransferDoneEventStatus,
     pub transfer_id: ::std::string::String,
 }
