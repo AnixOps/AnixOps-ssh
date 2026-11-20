@@ -774,7 +774,7 @@ impl SftpEntry {
         if recursive {
             self.sftp.set_permissions_all(path, mode).await
         } else {
-            self.sftp.set_permissions(path, mode).await
+            self.sftp.set_stat(path, Some(mode), None).await
         }
     }
 }

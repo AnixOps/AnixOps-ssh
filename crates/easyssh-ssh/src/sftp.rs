@@ -145,7 +145,7 @@ impl Sftp {
         if self.lstat(path).await?.kind == EntryKind::Symlink {
             return Ok(());
         }
-        self.set_permissions(path, mode).await?;
+        self.set_stat(path, Some(mode), None).await?;
         let mut pending = vec![path.to_owned()];
         while let Some(dir) = pending.pop() {
             for entry in self.list(&dir).await? {
@@ -163,10 +163,10 @@ impl Sftp {
                 match entry.stat.kind {
                     EntryKind::Symlink => {}
                     EntryKind::Dir => {
-                        self.set_permissions(&child, mode).await?;
+                        self.set_stat(&child, Some(mode), None).await?;
                         pending.push(child);
                     }
-                    _ => self.set_permissions(&child, mode).await?,
+                    _ => self.set_stat(&child, Some(mode), None).await?,
                 }
             }
         }
