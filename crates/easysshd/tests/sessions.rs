@@ -249,6 +249,38 @@ async fn open_write_output_resize_close() {
     s.stop().await;
 }
 
+/// A client that stops reading for a while during a burst of output (a busy
+/// UI, a test runner) slows the program down instead of being dropped: once
+/// it reads again, everything arrives, in order, on the same connection.
+#[tokio::test]
+async fn a_client_that_falls_behind_is_slowed_not_dropped() {
+    let s = start().await;
+    let mut c = Tc::connect(&s.runtime()).await;
+    let id = c.open().await;
+    // One small write per line: far more output events than the 4096 a
+    // connection may have queued.
+    c.write(
+        &id,
+        "i=0; while [ $i -lt 20000 ]; do echo line-$i; i=$((i+1)); done; echo end-$((4+4))\n",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let out = c.until_output(&id, "end-8").await;
+    assert!(out.contains("line-19999"));
+    let mut next = 0;
+    for e in c
+        .events
+        .iter()
+        .filter(|e| e["kind"] == "session.output" && e["payload"]["session_id"] == id.as_str())
+    {
+        assert_eq!(e["payload"]["seq"], next, "output went missing");
+        next += e["payload"]["data"].as_str().unwrap().len() as u64;
+    }
+    // Still the same connection.
+    c.call("session.list", json!({})).await.unwrap();
+    s.stop().await;
+}
+
 #[tokio::test]
 async fn attach_after_detach_replays_scrollback() {
     let s = start().await;

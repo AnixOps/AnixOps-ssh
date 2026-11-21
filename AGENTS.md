@@ -10,6 +10,33 @@
   attempts on the same problem, stop and report the evidence.
 - Never connect to real hosts or read the user's SSH configuration in tests.
 
+## Changes that touch user data
+
+A third-party review (2026-11-21) found twelve defects that all had the same
+shape: the success path was tested and the failure path was not. Every pull
+request that writes, replaces, deletes or moves user data (local or remote
+files, installers, settings, databases), shares a resource between concurrent
+callers, holds a handle, channel or process, reads an outside stream, or adds a
+"looks done, skip it" shortcut follows these rules, and its description fills
+in the failure-path section of `.github/pull_request_template.md`:
+
+- Never remove or truncate the original before the replacement is in place.
+  Replace atomically (rename over it, `posix-rename@openssh.com`, a swap), or
+  move the original to a unique backup and restore it on failure.
+- Put file-system, SFTP and process steps behind a small trait so a test can
+  fail each step; test a failure at every step and assert the original is
+  still reachable and a retry succeeds.
+- Temporary and destination names are claimed exclusively (`create_new`, a
+  random suffix, a per-id lock), never chosen by `exists()` and created later.
+- Anything a cancel can race (an open, a spawn, a stream) disposes of a result
+  that arrives after the cancel; test with a promise or future that resolves
+  late.
+- Buffers, queues and line or event sizes have limits; cancel and deadlines
+  interrupt a blocked read.
+- A shortcut never bypasses a check the user turned on (verification,
+  signatures, confirmation).
+- A busy state (installing, syncing, restarting) is left on every error path.
+
 ## Building
 
 Nothing is compiled locally. CI (`.github/workflows/ci.yml`) runs once per
@@ -22,6 +49,12 @@ layout checks at the smallest window in Chinese and English
 CI also builds the mobile prototype (`docs/mobile-prototype.md`): the
 "Android (debug APK)" job builds an APK, and the macOS Rust job builds the iOS
 app library without signing (one macOS runner per run).
+
+CI installs exactly what a release installs: `npm ci` (never `npm install`)
+and a `cargo metadata --locked` check, so a package.json / Cargo.toml change
+without its lockfile fails CI the same way it would fail the release.
+`npm run lint:workflows` (run by `npm test`) enforces this in every workflow.
+Change a manifest and its lockfile in the same pull request.
 
 `scripts/ci-changes.sh` decides the rest. `tauri build` (installers) runs on
 main, on manual runs (Actions → CI → Run workflow on the branch), and on pull
