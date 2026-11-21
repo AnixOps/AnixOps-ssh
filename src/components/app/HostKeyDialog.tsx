@@ -27,7 +27,8 @@ export function HostKeyDialog() {
   const [verified, setVerified] = useState(false);
   const match = current ? compareFingerprint(current.fingerprint, pasted) : "empty";
   // A match counts as the verification; unticking is not possible while it holds.
-  const confirmed = verified || match === "match";
+  // A pasted fingerprint that differs always blocks replacing, even after a tick.
+  const confirmed = match === "match" || (verified && match !== "mismatch");
 
   // Every prompt starts blank.
   useEffect(() => {
