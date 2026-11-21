@@ -26,6 +26,7 @@
 //!   and tunnels on leases of the shared connection.
 //! - [`supervisor`]: tmux/screen attach and reconnect with backoff on top of it.
 
+mod commit;
 pub mod events;
 pub mod files;
 pub mod hosts;

@@ -1323,6 +1323,7 @@ function TransferRow({
           <p className={verdict.tone === "success" ? "text-success" : verdict.tone === "danger" ? "text-danger" : "text-label-3"}>
             {verdict.text}
           </p>
+          {verdict.note && <p className="text-label-3">{verdict.note}</p>}
           {verdict.hashes && (
             <dl className="selectable mt-0.5 grid grid-cols-[auto_1fr] gap-x-2 font-mono text-label-2 break-all">
               <dt>{t.verifyLocal}</dt>
