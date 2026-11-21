@@ -3,9 +3,10 @@ import { IDLE, type InstallSupport, type UpdateProgress, type UpdateStatus } fro
 /** The update rows in the browser preview, in step with `UpdateStatus` in
  *  src-tauri/src/update.rs. `?update=found` shows a newer release that installs
  *  from the app, `?update=installing` one downloading, `?update=package` a
- *  .deb installation, `?update=off` a build without a verification key. */
+ *  .deb installation, `?update=restartFailed` an install whose restart failed,
+ *  `?update=off` a build without a verification key. */
 const scene = new URLSearchParams(window.location.search).get("update");
-const hasUpdate = scene === "found" || scene === "installing" || scene === "package";
+const hasUpdate = scene === "found" || scene === "installing" || scene === "package" || scene === "restartFailed";
 const install: InstallSupport = scene === "package" ? "package" : "auto";
 const TOTAL = 94_779_896;
 
@@ -25,7 +26,12 @@ let updates: UpdateStatus = {
     : null,
   install,
   closesSessions: false,
-  progress: scene === "installing" ? { phase: "downloading", downloaded: Math.round(TOTAL * 0.37), total: TOTAL } : IDLE,
+  progress:
+    scene === "installing"
+      ? { phase: "downloading", downloaded: Math.round(TOTAL * 0.37), total: TOTAL }
+      : scene === "restartFailed"
+        ? { phase: "restartFailed", downloaded: TOTAL, total: TOTAL, error: "cannot restart: no such file" }
+        : IDLE,
 };
 
 const listeners = new Set<(progress: UpdateProgress) => void>();
@@ -68,6 +74,11 @@ export function previewUpdateInstall(): Promise<void> {
       setTimeout(() => setProgress({ phase: "restarting", downloaded, total: TOTAL }), 600);
     }, 150);
   });
+}
+
+/** The retry after a failed restart: no install, only the "restarting" phase. */
+export function previewUpdateRestart(): Promise<void> {
+  return new Promise(() => setProgress({ phase: "restarting", downloaded: TOTAL, total: TOTAL, error: null }));
 }
 
 export function previewUpdateCancel(): void {

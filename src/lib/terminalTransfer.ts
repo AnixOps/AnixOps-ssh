@@ -103,37 +103,90 @@ class Outbox {
   }
 }
 
-/** Writes a received file in the background, merging chunks that arrive while a write is running. */
-class Sink {
+/** One write call carries at most this much. */
+export const WRITE_BATCH = 1024 * 1024;
+/** Received bytes waiting for the disk may not grow beyond this; the terminal's data source cannot be paused,
+ *  so a disk that falls this far behind ends the transfer with a clear error. */
+export const MAX_PENDING = 16 * 1024 * 1024;
+
+/** The disk could not keep up with the sender. */
+export class SinkOverflow extends Error {
+  constructor() {
+    super(t.transferBufferFull);
+  }
+}
+
+/** Writes a received file in the background, in order, in batches of at most `WRITE_BATCH` bytes. */
+export class Sink {
   private pending: Uint8Array[] = [];
+  private pendingBytes = 0;
   private busy: Promise<void> | null = null;
   private waiting: (() => void)[] = [];
+  /** The most bytes ever waiting (not counting the batch being written). */
+  peakPending = 0;
   error: unknown = null;
 
   constructor(
     private readonly files: TransferFiles,
     readonly id: number,
+    private readonly onError?: (error: unknown) => void,
+    private readonly maxPending = MAX_PENDING,
   ) {}
 
   push(chunk: Uint8Array): void {
+    if (this.error) return;
+    if (this.pendingBytes + chunk.length > this.maxPending) {
+      this.fail(new SinkOverflow());
+      return;
+    }
     this.pending.push(chunk);
+    this.pendingBytes += chunk.length;
+    this.peakPending = Math.max(this.peakPending, this.pendingBytes);
     if (!this.busy) this.pump();
   }
 
-  private pump(): void {
-    const size = this.pending.reduce((sum, chunk) => sum + chunk.length, 0);
-    const bytes = new Uint8Array(size);
-    let at = 0;
-    for (const chunk of this.pending) {
-      bytes.set(chunk, at);
-      at += chunk.length;
-    }
+  private fail(error: unknown): void {
+    if (this.error) return;
+    this.error = error;
     this.pending = [];
-    this.busy = this.files
-      .write(this.id, bytes)
-      .catch((error) => {
-        this.error = error;
-      })
+    this.pendingBytes = 0;
+    this.onError?.(error);
+  }
+
+  /** The next batch: whole chunks up to the limit, a chunk split where it crosses it. */
+  private take(): Uint8Array {
+    const first = this.pending[0];
+    if (first.length >= WRITE_BATCH) {
+      const batch = first.subarray(0, WRITE_BATCH);
+      if (first.length > WRITE_BATCH) this.pending[0] = first.subarray(WRITE_BATCH);
+      else this.pending.shift();
+      this.pendingBytes -= batch.length;
+      return batch;
+    }
+    const bytes = new Uint8Array(Math.min(WRITE_BATCH, this.pendingBytes));
+    let at = 0;
+    while (this.pending.length > 0 && at < bytes.length) {
+      const chunk = this.pending[0];
+      const room = bytes.length - at;
+      if (chunk.length <= room) {
+        bytes.set(chunk, at);
+        at += chunk.length;
+        this.pending.shift();
+      } else {
+        bytes.set(chunk.subarray(0, room), at);
+        at += room;
+        this.pending[0] = chunk.subarray(room);
+      }
+    }
+    this.pendingBytes -= bytes.length;
+    return bytes;
+  }
+
+  private pump(): void {
+    const bytes = this.take();
+    this.busy = Promise.resolve()
+      .then(() => this.files.write(this.id, bytes))
+      .catch((error) => this.fail(error))
       .finally(() => {
         this.busy = null;
         if (this.pending.length > 0 && !this.error) this.pump();
@@ -397,12 +450,28 @@ export class TerminalTransfer {
     if (closing) await closing().catch(() => {});
   }
 
-  /** Waits for `work`, or throws when the transfer is cancelled first. */
-  private race<T>(work: Promise<T>): Promise<T> {
-    if (this.stopped) return Promise.reject(new Cancelled());
+  /** Waits for `work`, or throws when the transfer is cancelled first. A result that arrives after the
+   *  cancellation is handed to `onLate` (for work that creates something, to dispose of it), once. */
+  private race<T>(work: Promise<T>, onLate?: (value: T) => unknown): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      this.cancelWaiters.add(reject);
-      work.then(resolve, reject).finally(() => this.cancelWaiters.delete(reject));
+      let abandoned = this.stopped;
+      const waiter = (error: Cancelled) => {
+        abandoned = true;
+        reject(error);
+      };
+      if (abandoned) reject(new Cancelled());
+      else this.cancelWaiters.add(waiter);
+      work
+        .then(
+          (value) => {
+            if (!abandoned) resolve(value);
+            else if (onLate) void Promise.resolve().then(() => onLate(value)).catch(() => {});
+          },
+          (error) => {
+            if (!abandoned) reject(error);
+          },
+        )
+        .finally(() => this.cancelWaiters.delete(waiter));
     });
   }
 
@@ -418,6 +487,8 @@ export class TerminalTransfer {
     this.fileNo += 1;
     const count = details.files_remaining ? this.fileNo - 1 + details.files_remaining : null;
     let sink: Sink | null = null;
+    let closed = false;
+    let closeOnce: (keep: boolean) => Promise<void> = () => Promise.resolve();
     try {
       let path: string | undefined;
       if (this.prefs().askWhere) {
@@ -427,10 +498,16 @@ export class TerminalTransfer {
           return;
         }
       }
-      const opened = await this.race(files.openWrite(name, path));
-      const current = new Sink(files, opened.id);
+      // A file opened after a cancel is closed and removed as soon as it shows up.
+      const opened = await this.race(files.openWrite(name, path), (late) => files.close(late.id, false));
+      const current = new Sink(files, opened.id, (error) => this.fail(messageOf(error)));
       sink = current;
-      this.closing = () => files.close(opened.id, false);
+      closeOnce = (keep) => {
+        if (closed) return Promise.resolve();
+        closed = true;
+        return files.close(opened.id, keep);
+      };
+      this.closing = () => closeOnce(false);
       this.patch({ phase: "running", name, total: size, done: 0, index: this.fileNo, count, startedAt: Date.now(), path: opened.path });
       await this.race(
         offer.accept({
@@ -442,12 +519,12 @@ export class TerminalTransfer {
       );
       await this.race(current.flush());
       this.closing = null;
-      await files.close(opened.id, true);
+      await closeOnce(true);
       this.received += 1;
       this.patch({ done: size ?? offer.get_offset(), path: opened.path });
     } catch (error) {
       if (!(error instanceof Cancelled)) this.fail(messageOf(error));
-      if (sink) await files.close(sink.id, false).catch(() => {});
+      if (sink) await closeOnce(false).catch(() => {});
       this.closing = null;
     }
   }
@@ -457,7 +534,7 @@ export class TerminalTransfer {
   private async send(session: ZSession): Promise<void> {
     const files = this.files;
     if (!files) return;
-    let openId: number | null = null;
+    let closeOnce: (() => Promise<void>) | null = null;
     try {
       clearTimeout(this.negotiation);
       const paths = await this.race(files.pickSend());
@@ -467,9 +544,16 @@ export class TerminalTransfer {
         return;
       }
       for (let index = 0; index < paths.length; index += 1) {
-        const source = await this.race(files.openRead(paths[index]));
-        openId = source.id;
-        this.closing = () => files.close(source.id, false);
+        // A file opened after a cancel is closed as soon as it shows up.
+        const source = await this.race(files.openRead(paths[index]), (late) => files.close(late.id, false));
+        let closed = false;
+        const release = () => {
+          if (closed) return Promise.resolve();
+          closed = true;
+          return files.close(source.id, false);
+        };
+        closeOnce = release;
+        this.closing = release;
         this.patch({ phase: "running", name: source.name, total: source.size, done: 0, index: index + 1, count: paths.length, startedAt: Date.now() });
         const transfer = await this.race(
           session.send_offer({
@@ -496,14 +580,14 @@ export class TerminalTransfer {
           }
           this.patch({ done: sent });
         }
-        await files.close(source.id, false);
-        openId = null;
+        await release();
+        closeOnce = null;
         this.closing = null;
       }
       await this.race(session.close());
     } catch (error) {
       if (!(error instanceof Cancelled)) this.fail(messageOf(error));
-      if (openId !== null) await files.close(openId, false).catch(() => {});
+      if (closeOnce) await closeOnce().catch(() => {});
       this.closing = null;
     }
   }
