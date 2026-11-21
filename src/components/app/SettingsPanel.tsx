@@ -47,6 +47,7 @@ import {
   updateCheck,
   updateInstall,
   updateOpen,
+  updateRestart,
   updateSetAuto,
   type SshStatus,
 } from "@/lib/backend";
@@ -795,6 +796,10 @@ function FoundUpdate({ status, version, notes }: { status: UpdateStatus; version
       if (!isCancel(reason)) setFailure(String(reason));
     });
   };
+  const restart = () => {
+    setFailure(null);
+    updateRestart().catch((reason) => setFailure(String(reason)));
+  };
   const open = () => updateOpen().catch((reason) => setFailure(String(reason)));
 
   const blocked: Record<Exclude<InstallSupport, "auto">, string> = {
@@ -810,7 +815,10 @@ function FoundUpdate({ status, version, notes }: { status: UpdateStatus; version
         ? t.updatesVerifying
         : phase === "installing"
           ? t.updatesInstalling
-          : t.updatesRestarting;
+          : phase === "restartFailed"
+            ? t.updatesRestartFailed
+            : t.updatesRestarting;
+  const restartFailed = phase === "restartFailed";
 
   return (
     <div className="space-y-2 px-4 py-3" data-settings-row>
@@ -830,7 +838,12 @@ function FoundUpdate({ status, version, notes }: { status: UpdateStatus; version
           )}
         </div>
         <div className="ml-auto flex max-w-full items-center">
-          {phase === null ? (
+          {restartFailed ? (
+            <Button variant="primary" size="sm" onClick={restart}>
+              <RotateCw />
+              {t.updatesRestart}
+            </Button>
+          ) : phase === null ? (
             auto ? (
               <Button variant="primary" size="sm" onClick={install}>
                 <Download />
@@ -851,7 +864,7 @@ function FoundUpdate({ status, version, notes }: { status: UpdateStatus; version
           )}
         </div>
       </div>
-      {phase && (
+      {phase && !restartFailed && (
         <div
           className="h-1 overflow-hidden rounded-pill bg-fill-2"
           role="progressbar"
@@ -870,6 +883,12 @@ function FoundUpdate({ status, version, notes }: { status: UpdateStatus; version
         <p className="text-callout text-label-2">
           {auto ? (status.closesSessions ? t.updatesInstallHintCloses : t.updatesInstallHint) : blocked[status.install as Exclude<InstallSupport, "auto">]}
         </p>
+      )}
+      {restartFailed && (
+        <div className="space-y-1 text-callout">
+          {status.progress.error && <p className="selectable text-danger">{status.progress.error}</p>}
+          <p className="text-label-2">{t.updatesRestartFailedHint}</p>
+        </div>
       )}
       {failure && <p className="selectable text-callout text-danger">{failure}</p>}
       {notes && <p className="selectable whitespace-pre-wrap text-callout text-label-2">{notes}</p>}

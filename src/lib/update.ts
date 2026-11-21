@@ -32,12 +32,16 @@ export interface UpdateStatus {
 export type InstallSupport = "auto" | "package" | "moveToApplications" | "noPermission" | "none";
 
 export interface UpdateProgress {
-  phase: "downloading" | "verifying" | "installing" | "restarting" | null;
+  /** "restartFailed": installed, but the new version did not start; the page
+   *  offers "Restart" (which never installs again) and a manual hint. */
+  phase: "downloading" | "verifying" | "installing" | "restarting" | "restartFailed" | null;
   downloaded: number;
   total: number;
+  /** Why the restart failed (phase "restartFailed"). */
+  error?: string | null;
 }
 
-export const IDLE: UpdateProgress = { phase: null, downloaded: 0, total: 0 };
+export const IDLE: UpdateProgress = { phase: null, downloaded: 0, total: 0, error: null };
 
 export const NO_UPDATES: UpdateStatus = {
   available: false,

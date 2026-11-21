@@ -225,6 +225,13 @@ pub async fn update_install(app: tauri::AppHandle) -> Result<(), String> {
     update_install::install(app, verifier, update).await
 }
 
+/// After "restart failed": starts the installed version again. It does not
+/// download or install anything. Returns only when starting failed again.
+#[tauri::command]
+pub async fn update_restart(app: tauri::AppHandle) -> Result<(), String> {
+    update_install::restart(app).await
+}
+
 #[tauri::command]
 pub fn update_cancel() {
     update_install::cancel();
