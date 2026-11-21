@@ -310,6 +310,26 @@ mod tests {
         assert!(staging.path(&fresh).is_err(), "an old one goes");
     }
 
+    /// A folder handle that can change the folder's times; Windows needs
+    /// backup semantics to open a folder and the right to write attributes.
+    fn open_folder_for_times(folder: &Path) -> std::fs::File {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            std::fs::OpenOptions::new()
+                .access_mode(FILE_WRITE_ATTRIBUTES)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(folder)
+                .unwrap()
+        }
+        #[cfg(not(windows))]
+        {
+            std::fs::File::open(folder).unwrap()
+        }
+    }
+
     #[test]
     fn a_folder_with_a_recently_appended_file_is_not_swept() {
         let dir = tempfile::tempdir().unwrap();
@@ -321,10 +341,7 @@ mod tests {
         // The folder itself was last changed long ago, the file just now:
         // an upload still being appended to.
         let old = SystemTime::now() - Duration::from_secs(7200);
-        std::fs::File::open(&folder)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
+        open_folder_for_times(&folder).set_modified(old).unwrap();
         staging.sweep(Duration::from_secs(3600));
         assert!(staging.path(&id).is_ok(), "an upload in progress stays");
         // Once the file is old too, the folder goes.
