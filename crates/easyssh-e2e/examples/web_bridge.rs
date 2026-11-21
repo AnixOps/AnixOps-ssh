@@ -219,14 +219,25 @@ mod bridge {
                         }
                         true
                     });
-                    let opened = link
-                        .open_session(
+                    // A hung open would block every later message (this loop
+                    // is serial), so it is reported as an error instead.
+                    let opened = tokio::time::timeout(
+                        Duration::from_secs(30),
+                        link.open_session(
                             Some(&connection.id),
                             number("cols", 80),
                             number("rows", 24),
                             sink,
-                        )
-                        .await;
+                        ),
+                    )
+                    .await;
+                    let opened = match opened {
+                        Ok(opened) => opened.map_err(|error| error.to_string()),
+                        Err(_) => {
+                            eprintln!("web_bridge: session open timed out after 30 s");
+                            Err("session open timed out after 30 s".to_owned())
+                        }
+                    };
                     match opened {
                         Ok(id) => {
                             emit(json!({"op": "opened", "seq": seq, "id": id}));
@@ -236,9 +247,7 @@ mod bridge {
                             }
                             *opened_id.lock().unwrap() = Some(id);
                         }
-                        Err(error) => {
-                            emit(json!({"op": "error", "seq": seq, "message": error.to_string()}))
-                        }
+                        Err(error) => emit(json!({"op": "error", "seq": seq, "message": error})),
                     }
                 }
                 "write" => {

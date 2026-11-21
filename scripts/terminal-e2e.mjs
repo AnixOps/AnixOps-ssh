@@ -92,6 +92,7 @@ const ready = new Promise((resolve, reject) => {
       openStarted.delete(message.seq);
       const pending = pendingOpens.get(message.seq);
       if (pending && message.op === "opened") sessionPages.set(message.id, pending.page);
+      if (message.op === "error") console.log(`session open failed: ${message.message}`);
       pending?.resolve(message);
       pendingOpens.delete(message.seq);
     } else if (message.op === "reply") {
@@ -99,6 +100,12 @@ const ready = new Promise((resolve, reject) => {
       pendingRequests.delete(message.seq);
     } else if (sessionPages.has(message.id) || bridgePage) {
       if (process.env.DEBUG_BRIDGE) console.log("bridge>", line.slice(0, 160));
+      if (message.op === "exit") {
+        // Why a session ended goes in the timeout report.
+        const seen = sessionOutput.get(message.id) ?? { chars: 0, tail: "" };
+        seen.exit = `${message.reason ?? "?"} code=${message.code ?? "-"}${message.signal ? ` signal=${message.signal}` : ""}`;
+        sessionOutput.set(message.id, seen);
+      }
       if (message.op === "data") {
         const seen = sessionOutput.get(message.id) ?? { chars: 0, tail: "" };
         seen.chars += message.data.length;
@@ -424,8 +431,10 @@ async function outputReport(page) {
   if (state.error) return `page: ${state.error}`;
   const sessions = state.opened.map((id) => {
     const seen = sessionOutput.get(id) ?? { chars: 0, tail: "" };
-    return `session ${id}: bridge sent ${seen.chars} chars, page got ${state.delivered[id] ?? 0}, last sent ${JSON.stringify(seen.tail.slice(-60))}`;
+    return `session ${id}: bridge sent ${seen.chars} chars, page got ${state.delivered[id] ?? 0}, last sent ${JSON.stringify(seen.tail.slice(-60))}${seen.exit ? `, ended: ${seen.exit}` : ""}`;
   });
+  const pending = [...pendingOpens.values()].filter((open) => open.page === page).length;
+  if (pending) sessions.push(`opens with no answer from the bridge: ${pending}`);
   return [...sessions, `buffers: ${state.buffers.join(", ")}; failed deliveries: ${failedDeliveries}`].join("\n");
 }
 
