@@ -69,6 +69,13 @@ impl Outbox {
         }
     }
 
+    /// Whether the queue is more than three quarters full: the client is
+    /// behind. Session output waits (and so slows the program down, as a
+    /// terminal does) instead of filling the queue and losing the client.
+    pub fn is_congested(&self) -> bool {
+        self.tx.capacity() < OUTBOX_CAPACITY / 4
+    }
+
     /// Queue an `Event` envelope with the next per-connection `seq`.
     pub fn event(&self, kind: &str, payload: Value) -> bool {
         let mut seq = self.seq.lock().unwrap_or_else(|p| p.into_inner());
