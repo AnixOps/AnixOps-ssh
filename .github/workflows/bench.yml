@@ -1,0 +1,158 @@
+name: Benchmarks
+
+# Reproducible performance and stability numbers for the built-in SSH engine
+# (docs/benchmarks.md). A pull request that touches the engine, SFTP or the e2e
+# harness runs the small version (normal network profile, reduced sizes) and
+# only reports; a harness error or a SHA-256 mismatch fails it, a missed target
+# does not. The nightly run, a manual run and the release (release.yml calls
+# this file) run both profiles at full size; the nightly and manual runs add the
+# long-session stability test (M4).
+on:
+  pull_request:
+    paths:
+      - crates/easyssh-ssh/**
+      - crates/easyssh-e2e/**
+      - e2e/**
+      - .github/workflows/bench.yml
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      soak_minutes:
+        description: M4 duration in minutes (25 sessions)
+        default: "60"
+      soak:
+        description: Run the M4 stability test too
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to benchmark (the release tag)
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  bench:
+    name: Benchmarks (${{ github.event_name == 'pull_request' && 'small, normal profile' || 'full, both profiles' }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: bash -o pipefail {0}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev openssh-client iproute2
+          sudo modprobe ifb || true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the harness
+        run: cargo build --release -p easyssh-e2e --example bench
+      - name: Start the bench server
+        run: |
+          e2e/prepare.sh
+          docker compose -f e2e/docker-compose.bench.yml up -d --build
+          ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' easyssh-e2e-bench)
+          echo "BENCH_HOST=$ip" >> "$GITHUB_ENV"
+          echo "BENCH_PORT=22" >> "$GITHUB_ENV"
+          for _ in $(seq 60); do
+            if exec 3<>"/dev/tcp/$ip/22" 2>/dev/null && read -r -t 2 banner <&3 && [[ "$banner" == SSH-* ]]; then echo "$banner"; exit 0; fi
+            sleep 1
+          done
+          echo "bench server did not answer" >&2; exit 1
+      - name: Run
+        env:
+          BENCH_NETEM: ${{ github.workspace }}/e2e/netem.sh
+          BENCH_CONTAINER: easyssh-e2e-bench
+          FULL: ${{ github.event_name != 'pull_request' }}
+        run: |
+          if [ "$FULL" = true ]; then
+            export BENCH_CONNECTIONS=1000 BENCH_SFTP_MIB=1024 BENCH_SFTP_MIB_WEAK=32 BENCH_OUTAGE_RUNS=30 BENCH_ECHO_SAMPLES=500
+            profiles=normal,weak
+            metrics=m1,m2,m3,m5,m6
+          else
+            export BENCH_CONNECTIONS=200 BENCH_SFTP_MIB=256 BENCH_OUTAGE_RUNS=10
+            profiles=normal
+            metrics=m1,m2,m5,m6
+          fi
+          target/release/examples/bench --profiles "$profiles" --metrics "$metrics" --out bench-out
+      - name: Collect results
+        if: always()
+        run: |
+          mkdir -p bench-out
+          docker logs easyssh-e2e-bench > bench-out/server.log 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-results
+          path: |
+            bench-out/bench.json
+            bench-out/bench-report.md
+            bench-out/release-summary.md
+            bench-out/server.log
+          if-no-files-found: warn
+
+  # M4, the long-session test: nightly and by hand only, never on a pull
+  # request or a release.
+  soak:
+    name: Stability (M4, 25 sessions)
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.soak) }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 420
+    defaults:
+      run:
+        shell: bash -o pipefail {0}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev openssh-client iproute2
+          sudo modprobe ifb || true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --release -p easyssh-e2e --example bench
+      - name: Start the bench server
+        run: |
+          e2e/prepare.sh
+          docker compose -f e2e/docker-compose.bench.yml up -d --build
+          ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' easyssh-e2e-bench)
+          echo "BENCH_HOST=$ip" >> "$GITHUB_ENV"
+          echo "BENCH_PORT=22" >> "$GITHUB_ENV"
+          for _ in $(seq 60); do
+            if exec 3<>"/dev/tcp/$ip/22" 2>/dev/null && read -r -t 2 banner <&3 && [[ "$banner" == SSH-* ]]; then echo "$banner"; exit 0; fi
+            sleep 1
+          done
+          echo "bench server did not answer" >&2; exit 1
+      - name: Run M4
+        env:
+          BENCH_NETEM: ${{ github.workspace }}/e2e/netem.sh
+          BENCH_SOAK_SESSIONS: "25"
+          BENCH_SOAK_MINUTES: ${{ inputs.soak_minutes || '60' }}
+        run: target/release/examples/bench --profiles normal --metrics m4 --out bench-out-soak
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-soak
+          path: bench-out-soak/
+          if-no-files-found: warn

@@ -29,6 +29,8 @@ In order of weight:
 1. **Real servers in CI.** End-to-end tests against an OpenSSH server
    container: terminal, sftp, tunnels and password prompts. Until these
    exist, a green build only proves the code compiles and renders.
+   Performance and stability are measured the same way, against targets, in
+   CI and on every release: [docs/benchmarks.md](docs/benchmarks.md).
 2. **Daily use.** The owner uses the app instead of their usual SSH client
    and files every rough edge as a GitHub issue. Started 2026-10-14; 1.1 is
    planned from these issues after two weeks.

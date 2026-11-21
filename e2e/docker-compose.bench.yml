@@ -1,0 +1,17 @@
+# TEST ONLY. The server for the benchmarks (docs/benchmarks.md): one sshd with
+# a pinned cipher and key exchange, so the built-in engine and OpenSSH `sftp`
+# are compared on the same algorithms. e2e/netem.sh shapes its network from
+# the host (nsenter), so the container needs no extra capability.
+# Run e2e/prepare.sh first.
+services:
+  bench:
+    build: .
+    image: easyssh-e2e-sshd
+    container_name: easyssh-e2e-bench
+    hostname: bench
+    ports:
+      - "127.0.0.1:2224:22"
+    volumes:
+      - ./.keys:/keys:ro
+    environment:
+      SSHD_OPTS: "-o Ciphers=${BENCH_CIPHER:-chacha20-poly1305@openssh.com} -o KexAlgorithms=${BENCH_KEX:-curve25519-sha256}"
