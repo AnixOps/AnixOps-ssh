@@ -84,19 +84,32 @@ pub fn reserve_unique_path(dir: &Path, name: &str) -> Result<PathBuf, String> {
     Err("too many files with the same name".to_owned())
 }
 
+/// The newest modification time of `path` and, for a folder, of everything in
+/// it (appending to a file does not touch the folder's own time).
+fn newest_change(path: &Path, depth: usize) -> Option<SystemTime> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    let mut newest = meta.modified().ok()?;
+    if meta.is_dir() && depth > 0 {
+        for entry in std::fs::read_dir(path).ok()?.flatten() {
+            if let Some(time) = newest_change(&entry.path(), depth - 1) {
+                newest = newest.max(time);
+            }
+        }
+    }
+    Some(newest)
+}
+
 /// Removes the folders in `root` that were last changed more than `age` ago
 /// (leftovers of a transfer that never finished). Files directly in `root`
-/// are judged the same way.
+/// are judged the same way. A folder counts as changed when anything inside
+/// it changed, so an upload still being appended to is never swept.
 pub fn sweep(root: &Path, age: Duration) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
     let now = SystemTime::now();
     for entry in entries.flatten() {
-        let old = entry
-            .metadata()
-            .and_then(|meta| meta.modified())
-            .ok()
+        let old = newest_change(&entry.path(), 4)
             .and_then(|modified| now.duration_since(modified).ok())
             .is_some_and(|elapsed| elapsed > age);
         if !old {
@@ -295,5 +308,33 @@ mod tests {
         std::thread::sleep(Duration::from_millis(30));
         staging.sweep(Duration::from_millis(10));
         assert!(staging.path(&fresh).is_err(), "an old one goes");
+    }
+
+    #[test]
+    fn a_folder_with_a_recently_appended_file_is_not_swept() {
+        let dir = tempfile::tempdir().unwrap();
+        let staging = Staging::new(dir.path().to_path_buf());
+        let id = staging.begin("big.bin").unwrap();
+        staging.append(&id, 0, b"chunk").unwrap();
+        let file = staging.path(&id).unwrap();
+        let folder = file.parent().unwrap().to_path_buf();
+        // The folder itself was last changed long ago, the file just now:
+        // an upload still being appended to.
+        let old = SystemTime::now() - Duration::from_secs(7200);
+        std::fs::File::open(&folder)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        staging.sweep(Duration::from_secs(3600));
+        assert!(staging.path(&id).is_ok(), "an upload in progress stays");
+        // Once the file is old too, the folder goes.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        staging.sweep(Duration::from_secs(3600));
+        assert!(staging.path(&id).is_err());
     }
 }

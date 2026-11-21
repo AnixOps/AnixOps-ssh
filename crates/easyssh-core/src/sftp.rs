@@ -498,6 +498,16 @@ fn each_line(stream: impl Read, mut line: impl FnMut(String) -> bool) {
 
 /// Starts a transfer in its own `sftp -oBatchMode=no -b -` process. The caller waits on or
 /// kills the returned child; standard error carries the failure reason.
+///
+/// Not atomic: an upload is `put -pr` straight onto `remote`, so it overwrites
+/// an existing file in place and a transfer that fails or is cancelled midway
+/// leaves a partial file there. The OpenSSH `sftp` batch cannot do better
+/// portably: `rename` fails when the target exists on servers without the
+/// `posix-rename` extension, and renaming a directory over a directory fails
+/// everywhere, so a temporary name plus rename would break overwrites. This
+/// is the OpenSSH fallback (used when the daemon's built-in engine cannot take
+/// the transfer, and by the e2e tests). Callers that must not clobber
+/// `remote` have to check for it first.
 pub fn spawn_transfer(
     openssh: &OpenSsh,
     connection: &Connection,
@@ -509,6 +519,7 @@ pub fn spawn_transfer(
     let local = local
         .to_str()
         .ok_or_else(|| OpenSshError::Failed("local path is not valid UTF-8".into()))?;
+    debug_assert!(!remote.is_empty(), "a transfer needs a remote path");
     let command = transfer_command(upload, local, remote)?;
     let mut child = hide_window(&mut Command::new(openssh.sftp_path()?))
         .args(sftp_args(connection, true)?)
