@@ -623,12 +623,13 @@ fn stage_chunk(state: State<'_, Mobile>, request: Request<'_>) -> Result<u64, St
     state.staging.append(&id, offset, bytes)
 }
 
-/// The path of a staged file, to hand to `transfer_start`.
+/// The path of a staged file, to hand to `transfer_start`. `total` is the
+/// file's size; a staged copy of any other length is refused.
 #[tauri::command]
-fn stage_finish(state: State<'_, Mobile>, id: String) -> Result<String, String> {
+fn stage_finish(state: State<'_, Mobile>, id: String, total: u64) -> Result<String, String> {
     state
         .staging
-        .path(&id)
+        .finish(&id, total)
         .map(|path| path.to_string_lossy().into_owned())
 }
 
