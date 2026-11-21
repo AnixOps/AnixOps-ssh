@@ -65,7 +65,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the harness
-        run: cargo build --release -p easyssh-e2e --example bench
+        run: cargo build --locked --release -p easyssh-e2e --example bench
       - name: Start the bench server
         run: |
           e2e/prepare.sh
@@ -131,7 +131,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo build --release -p easyssh-e2e --example bench
+      - run: cargo build --locked --release -p easyssh-e2e --example bench
       - name: Start the bench server
         run: |
           e2e/prepare.sh

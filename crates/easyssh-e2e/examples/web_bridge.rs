@@ -31,7 +31,7 @@ mod bridge {
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::io::Write;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
     use std::time::Duration;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -138,13 +138,29 @@ mod bridge {
         Ok(connection)
     }
 
-    static OUT: Mutex<()> = Mutex::new(());
+    static OUT: OnceLock<std::sync::mpsc::Sender<String>> = OnceLock::new();
 
+    /// Queues a line for stdout. Never blocks: the daemon drops a client
+    /// that falls 4096 frames behind (`OUTBOX_CAPACITY`), and writing to
+    /// stdout straight from the link's reader made this bridge exactly such
+    /// a client whenever the test runner paused reading during a burst like
+    /// `seq 1 200000`. The app forwards to the webview without waiting too.
     fn emit(value: Value) {
-        let _guard = OUT.lock().unwrap();
-        let mut stdout = std::io::stdout().lock();
-        let _ = writeln!(stdout, "{value}");
-        let _ = stdout.flush();
+        let out = OUT.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<String>();
+            std::thread::spawn(move || {
+                let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
+                while let Ok(line) = rx.recv() {
+                    let _ = writeln!(stdout, "{line}");
+                    while let Ok(line) = rx.try_recv() {
+                        let _ = writeln!(stdout, "{line}");
+                    }
+                    let _ = stdout.flush();
+                }
+            });
+            tx
+        });
+        let _ = out.send(value.to_string());
     }
 
     pub async fn run() {
@@ -175,7 +191,7 @@ mod bridge {
         let answerer = Arc::new(Answerer {
             link: Mutex::new(None),
         });
-        let link = Link::connect(&runtime, answerer.clone())
+        let mut link = Link::connect(&runtime, answerer.clone())
             .await
             .expect("connect to the daemon");
         *answerer.link.lock().unwrap() = Some(link.clone());
@@ -188,6 +204,19 @@ mod bridge {
             let Ok(message) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
+            // A lost connection would fail every later check; say so once
+            // and connect again, as the app's supervisor does. Sessions of
+            // the old connection have already ended as `disconnected`.
+            if !link.is_alive() {
+                eprintln!("web_bridge: the daemon connection was lost; reconnecting");
+                match Link::connect(&runtime, answerer.clone()).await {
+                    Ok(fresh) => {
+                        *answerer.link.lock().unwrap() = Some(fresh.clone());
+                        link = fresh;
+                    }
+                    Err(error) => eprintln!("web_bridge: reconnect failed: {error}"),
+                }
+            }
             let text = |key: &str| message[key].as_str().unwrap_or_default().to_owned();
             let number = |key: &str, default: u64| message[key].as_u64().unwrap_or(default) as u16;
             match message["op"].as_str().unwrap_or_default() {
