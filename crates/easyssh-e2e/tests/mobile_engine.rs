@@ -1479,7 +1479,7 @@ mod resume {
     /// Runs one transfer to its end; `cancel_at` cancels it once that many
     /// bytes have been reported.
     async fn run(
-        engine: &Engine,
+        engine: &Arc<Engine>,
         entry: &Arc<SftpEntry>,
         upload: bool,
         local: &Path,
@@ -1488,10 +1488,7 @@ mod resume {
         cancel_at: Option<u64>,
     ) -> Run {
         let (sender, mut receiver) = mpsc::unbounded_channel::<(String, Value)>();
-        let sink: easyssh_engine::Events = Arc::new(move |name: &str, payload: Value| {
-            let _ = sender.send((name.to_owned(), payload));
-            1usize
-        });
+        let sink = cancelling_sink(engine, cancel_at, sender);
         let id = engine.files().start_transfer_with(
             entry.clone(),
             upload,
@@ -1499,17 +1496,13 @@ mod resume {
             remote.to_owned(),
             local.is_dir(),
             options,
-            sink,
+            sink.events,
         );
+        let _ = sink.id.set(id);
         let mut events = Vec::new();
         let status = within("transfer", async {
             loop {
                 let (name, payload) = receiver.recv().await.expect("events");
-                if let (Some(at), "transfer.progress") = (cancel_at, name.as_str()) {
-                    if payload["bytes"].as_u64().unwrap_or(0) >= at {
-                        engine.files().cancel_transfer(&id);
-                    }
-                }
                 let done = name == "transfer.done";
                 let status = payload["status"].as_str().map(str::to_owned);
                 events.push((name, payload));
@@ -1520,6 +1513,39 @@ mod resume {
         })
         .await;
         Run { events, status }
+    }
+
+    struct CancellingSink {
+        events: easyssh_engine::Events,
+        id: Arc<std::sync::OnceLock<String>>,
+    }
+
+    /// Forwards every event to `sender` and, when `cancel_at` is set, cancels
+    /// the transfer from inside the progress report that first reaches that
+    /// many bytes. Cancelling there, before the transfer sends its next
+    /// chunk, does not depend on how fast the link is or on when the test
+    /// gets to read the event; the engine reports every chunk because
+    /// `setup` sets the progress interval to zero.
+    fn cancelling_sink(
+        engine: &Arc<Engine>,
+        cancel_at: Option<u64>,
+        sender: mpsc::UnboundedSender<(String, Value)>,
+    ) -> CancellingSink {
+        let id: Arc<std::sync::OnceLock<String>> = Arc::default();
+        let engine = Arc::downgrade(engine);
+        let target = id.clone();
+        let events: easyssh_engine::Events = Arc::new(move |name: &str, payload: Value| {
+            if let (Some(at), "transfer.progress", Some(id), Some(engine)) =
+                (cancel_at, name, target.get(), engine.upgrade())
+            {
+                if payload["bytes"].as_u64().unwrap_or(0) >= at {
+                    engine.files().cancel_transfer(id);
+                }
+            }
+            let _ = sender.send((name.to_owned(), payload));
+            1usize
+        });
+        CancellingSink { events, id }
     }
 
     struct Setup {
@@ -1539,6 +1565,9 @@ mod resume {
         engine
             .files()
             .set_resume_dir(scratch.path().join("journal"));
+        // Every chunk is reported, so a test can cancel at a byte count
+        // however fast the containers move the data.
+        engine.files().set_progress_interval(Duration::ZERO);
         let (sftp_id, home) = within("sftp", engine.open_files(&target()))
             .await
             .expect("open the files");
@@ -1712,10 +1741,7 @@ mod resume {
         std::fs::write(tree.join("big.bin"), sample_bytes(30_000_000)).unwrap();
         let remote = format!("{}/tree", s.dir);
         let (sender, mut receiver) = mpsc::unbounded_channel::<(String, Value)>();
-        let sink: easyssh_engine::Events = Arc::new(move |name: &str, payload: Value| {
-            let _ = sender.send((name.to_owned(), payload));
-            1usize
-        });
+        let sink = cancelling_sink(&s.engine, Some(8_000_000), sender);
         let id = s.engine.files().start_transfer_with(
             s.entry.clone(),
             true,
@@ -1723,15 +1749,12 @@ mod resume {
             remote.clone(),
             true,
             Options::default(),
-            sink,
+            sink.events,
         );
+        let _ = sink.id.set(id);
         within("cancel", async {
             loop {
-                let (name, payload) = receiver.recv().await.expect("events");
-                if name == "transfer.progress" && payload["bytes"].as_u64().unwrap_or(0) > 8_000_000
-                {
-                    s.engine.files().cancel_transfer(&id);
-                }
+                let (name, _) = receiver.recv().await.expect("events");
                 if name == "transfer.done" {
                     return;
                 }
