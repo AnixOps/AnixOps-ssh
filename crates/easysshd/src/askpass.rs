@@ -24,7 +24,7 @@
 use easyssh_vault::{match_prompt, Answer, Binding, PromptAnswers, SecretKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::net::TcpStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -85,6 +85,25 @@ pub fn run_helper_if_requested() {
 /// Sends one prompt to the daemon and waits for the answer (blocking).
 /// `None` when the user cancelled or the daemon cannot be reached.
 pub fn ask(endpoint: &str, context: &str, host: &str, prompt: &str) -> Option<String> {
+    // The daemon gives up on the prompt after `ANSWER_TIMEOUT`; wait a little
+    // longer for its reply, never forever.
+    ask_with_timeout(
+        endpoint,
+        context,
+        host,
+        prompt,
+        ANSWER_TIMEOUT + Duration::from_secs(30),
+    )
+}
+
+/// [`ask`] with the longest time to wait for the reply.
+fn ask_with_timeout(
+    endpoint: &str,
+    context: &str,
+    host: &str,
+    prompt: &str,
+    timeout: Duration,
+) -> Option<String> {
     let (port, token) = endpoint.split_once(' ')?;
     let port: u16 = port.parse().ok()?;
     let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
@@ -96,9 +115,41 @@ pub fn ask(endpoint: &str, context: &str, host: &str, prompt: &str) -> Option<St
     };
     serde_json::to_writer(&mut stream, &request).ok()?;
     stream.write_all(b"\n").ok()?;
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line).ok()?;
-    serde_json::from_str::<Option<String>>(line.trim()).ok()?
+    let line = read_reply(&mut stream, timeout)?;
+    serde_json::from_slice::<Option<String>>(&line).ok()?
+}
+
+/// Reads one newline-terminated reply of at most [`MAX_REQUEST`] bytes within
+/// `timeout` in total. `None` on a timeout, an oversized reply or a close
+/// before the newline.
+fn read_reply(stream: &mut TcpStream, timeout: Duration) -> Option<Vec<u8>> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut line = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let left = deadline.checked_duration_since(std::time::Instant::now())?;
+        stream
+            .set_read_timeout(Some(left.max(Duration::from_millis(1))))
+            .ok()?;
+        let read = match std::io::Read::read(stream, &mut chunk) {
+            Ok(0) => return None,
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        };
+        match chunk[..read].iter().position(|b| *b == b'\n') {
+            Some(end) => {
+                line.extend_from_slice(&chunk[..end]);
+                return (line.len() as u64 <= MAX_REQUEST).then_some(line);
+            }
+            None => {
+                line.extend_from_slice(&chunk[..read]);
+                if line.len() as u64 > MAX_REQUEST {
+                    return None;
+                }
+            }
+        }
+    }
 }
 
 /// Environment for an OpenSSH process so its prompts reach the daemon.
@@ -473,4 +524,67 @@ impl Hub {
 /// Constant-time equality for the token.
 fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+#[cfg(test)]
+mod client_tests {
+    use super::*;
+    use std::io::Read;
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    /// A fake daemon: reads the request line, then runs `reply` on the socket.
+    fn fake_daemon(reply: impl FnOnce(TcpStream) + Send + 'static) -> String {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut byte = [0u8; 1];
+            while stream.read(&mut byte).unwrap_or(0) == 1 && byte[0] != b'\n' {}
+            reply(stream);
+        });
+        format!("{port} token")
+    }
+
+    #[test]
+    fn a_normal_reply_is_read() {
+        let endpoint = fake_daemon(|mut s| {
+            let _ = s.write_all(b"\"secret\"\n");
+        });
+        let answer = ask_with_timeout(&endpoint, "c", "h", "p", Duration::from_secs(5));
+        assert_eq!(answer.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn a_reply_that_never_ends_is_refused_at_the_cap() {
+        let endpoint = fake_daemon(|mut s| {
+            let chunk = [b'a'; 8192];
+            // More than the cap and no newline; stop when the client hangs up.
+            for _ in 0..1024 {
+                if s.write_all(&chunk).is_err() {
+                    break;
+                }
+            }
+        });
+        let started = Instant::now();
+        assert_eq!(
+            ask_with_timeout(&endpoint, "c", "h", "p", Duration::from_secs(20)),
+            None
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_silent_daemon_times_out() {
+        let endpoint = fake_daemon(|s| {
+            std::thread::sleep(Duration::from_secs(3));
+            drop(s);
+        });
+        let started = Instant::now();
+        assert_eq!(
+            ask_with_timeout(&endpoint, "c", "h", "p", Duration::from_millis(300)),
+            None
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 }
