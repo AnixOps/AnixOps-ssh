@@ -678,6 +678,41 @@ fn local_part(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// The local temporary files being written right now. Two downloads of one
+/// file into one folder would write the same `.name.easyssh-part` (its name is
+/// fixed so a stopped download can resume); the second is refused instead of
+/// truncating and mixing into the first.
+static ACTIVE_LOCAL_PARTS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+struct LocalPartClaim(PathBuf);
+
+impl LocalPartClaim {
+    fn take(part: &Path) -> Result<LocalPartClaim, SshError> {
+        let mut active = ACTIVE_LOCAL_PARTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if active.iter().any(|taken| taken == part) {
+            return Err(SshError::Sftp(format!(
+                "another transfer is already writing {}",
+                part.display()
+            )));
+        }
+        active.push(part.to_owned());
+        Ok(LocalPartClaim(part.to_owned()))
+    }
+}
+
+impl Drop for LocalPartClaim {
+    fn drop(&mut self) {
+        let mut active = ACTIVE_LOCAL_PARTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(at) = active.iter().position(|taken| *taken == self.0) {
+            active.swap_remove(at);
+        }
+    }
+}
+
 /// What one transfer works with.
 struct Job<'a> {
     sftp: &'a Sftp,
@@ -1222,6 +1257,7 @@ async fn download_file(job: &mut Job<'_>, remote: &str, local_path: &Path) -> Re
         }
     }
     let part = local_part(local_path);
+    let _claim = LocalPartClaim::take(&part)?;
     let part_text = part.to_string_lossy().into_owned();
     let local_key = local_path.to_string_lossy().into_owned();
     let mut offset = 0;
@@ -1476,6 +1512,18 @@ mod tests {
             local_part(Path::new("/tmp/x/report 1.pdf")),
             Path::new("/tmp/x/.report 1.pdf.easyssh-part")
         );
+    }
+
+    #[test]
+    fn one_local_part_is_written_by_one_download_at_a_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let part = local_part(&dir.path().join("same.bin"));
+        let other = local_part(&dir.path().join("other.bin"));
+        let first = LocalPartClaim::take(&part).unwrap();
+        assert!(LocalPartClaim::take(&part).is_err(), "no second writer");
+        let _unrelated = LocalPartClaim::take(&other).unwrap();
+        drop(first);
+        assert!(LocalPartClaim::take(&part).is_ok(), "free again afterwards");
     }
 
     #[test]

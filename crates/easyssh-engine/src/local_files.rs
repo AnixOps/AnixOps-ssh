@@ -38,27 +38,47 @@ pub fn safe_file_name(name: &str) -> String {
     }
 }
 
-/// `name`, or `name (1)`, `name (2)`, ... when it exists in `dir`.
-pub fn unique_path(dir: &Path, name: &str) -> Result<PathBuf, String> {
-    let name = safe_file_name(name);
-    let candidate = dir.join(&name);
-    if !candidate.exists() {
-        return Ok(candidate);
-    }
-    let path = Path::new(&name);
+/// `name`, `name (1)`, `name (2)`, ... (the number goes before the extension).
+fn numbered_names(name: &str) -> impl Iterator<Item = String> + '_ {
+    let path = Path::new(name);
     let stem = path
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .unwrap_or(&name);
+        .unwrap_or(name);
     let extension = path.extension().and_then(|extension| extension.to_str());
-    for number in 1..1000 {
-        let file = match extension {
-            Some(extension) => format!("{stem} ({number}).{extension}"),
-            None => format!("{stem} ({number})"),
-        };
+    std::iter::once(name.to_owned()).chain((1..1000).map(move |number| match extension {
+        Some(extension) => format!("{stem} ({number}).{extension}"),
+        None => format!("{stem} ({number})"),
+    }))
+}
+
+/// `name`, or `name (1)`, `name (2)`, ... when it exists in `dir`. Only a
+/// suggestion: someone else may take the name before it is used. To take it
+/// for certain use [`reserve_unique_path`].
+pub fn unique_path(dir: &Path, name: &str) -> Result<PathBuf, String> {
+    let name = safe_file_name(name);
+    let found = numbered_names(&name)
+        .map(|file| dir.join(file))
+        .find(|candidate| !candidate.exists());
+    found.ok_or_else(|| "too many files with the same name".to_owned())
+}
+
+/// Like [`unique_path`], but the name is taken for good: an empty file is
+/// created under it with `create_new` (exclusive, so two callers never get
+/// the same name). The caller replaces that file with the real one, or
+/// removes it when it gives up.
+pub fn reserve_unique_path(dir: &Path, name: &str) -> Result<PathBuf, String> {
+    let name = safe_file_name(name);
+    for file in numbered_names(&name) {
         let candidate = dir.join(file);
-        if !candidate.exists() {
-            return Ok(candidate);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(_) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.to_string()),
         }
     }
     Err("too many files with the same name".to_owned())
@@ -212,6 +232,25 @@ mod tests {
             unique_path(dir.path(), "Makefile").unwrap(),
             dir.path().join("Makefile (1)")
         );
+    }
+
+    #[test]
+    fn a_reserved_name_is_never_handed_out_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = reserve_unique_path(dir.path(), "log.txt").unwrap();
+        let second = reserve_unique_path(dir.path(), "log.txt").unwrap();
+        assert_eq!(first, dir.path().join("log.txt"));
+        assert_eq!(second, dir.path().join("log (1).txt"));
+        assert!(first.exists() && second.exists());
+        // Threads racing for one name each get their own.
+        let paths: Vec<_> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| reserve_unique_path(dir.path(), "r.bin").unwrap()))
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let distinct: std::collections::HashSet<_> = paths.iter().collect();
+        assert_eq!(distinct.len(), 8);
     }
 
     #[test]
