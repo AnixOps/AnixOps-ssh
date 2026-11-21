@@ -60,7 +60,7 @@ jobs:
       - name: Install fonts for CJK screenshots
         run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
       - name: Install
-        run: mkdir -p logs && npm install 2>&1 | tee logs/npm-install.log
+        run: mkdir -p logs && npm ci 2>&1 | tee logs/npm-install.log
         shell: bash -o pipefail {0}
       - name: Typecheck and build
         run: npm run build 2>&1 | tee logs/frontend-build.log
@@ -132,8 +132,15 @@ jobs:
           # Pull requests start from main's cache and do not save their own:
           # many branch caches would push main's out of the 10 GB limit.
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Release builds install exactly what the lockfiles say; so does CI, so
+      # a green CI run means the release install works (npm ci fails on a
+      # package.json / package-lock.json mismatch, cargo --locked on a stale
+      # Cargo.lock). scripts/check-workflows.mjs keeps it that way.
+      - name: Cargo.lock matches Cargo.toml
+        run: mkdir -p logs && cargo metadata --locked --format-version 1 > /dev/null 2> logs/cargo-locked.log || { cat logs/cargo-locked.log; exit 1; }
+        shell: bash
       - name: Install frontend
-        run: mkdir -p logs && npm install > logs/npm-install.log 2>&1
+        run: mkdir -p logs && npm ci > logs/npm-install.log 2>&1
       - name: Build frontend
         id: frontend
         run: npm run build 2>&1 | tee logs/frontend-build.log
@@ -298,7 +305,7 @@ jobs:
         run: cargo build -p easyssh-e2e --example web_bridge 2>&1 | tee logs/web-bridge-build.log
       - name: Build the frontend
         run: |
-          npm install > logs/npm-install.log 2>&1
+          npm ci > logs/npm-install.log 2>&1
           npm run build 2>&1 | tee logs/frontend-build.log
           npx playwright install --with-deps chromium > logs/playwright-install.log 2>&1
       - name: Wait for both servers
@@ -363,7 +370,7 @@ jobs:
             -p easyssh-core -p easyssh-crypto -p easyssh-ssh -p easyssh-store -p easyssh-vault -p easyssh-engine -p easyssh-mobile-keys \
             2>&1 | tee logs/android-engine-check.log
       - name: Install frontend
-        run: npm install > logs/npm-install.log 2>&1
+        run: npm ci > logs/npm-install.log 2>&1
       - name: Build debug APK
         run: |
           start=$(date +%s)

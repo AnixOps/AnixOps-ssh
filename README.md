@@ -9,7 +9,7 @@ A clean, Termius-style SSH client for the OpenSSH already on your computer.
 Hosts on the left, sessions in tabs, files beside the terminal, and nothing
 you do not need.
 
-[中文使用指南](docs/guide.zh-CN.md) · [Download](https://github.com/AnixOps/EasySSH/releases/latest) · [Try the UI in a browser](https://anixops.github.io/EasySSH/) (sample data, no connections)
+[Website](https://anixops.com/ssh) · [中文使用指南](docs/guide.zh-CN.md) · [Download](https://github.com/AnixOps/EasySSH/releases/latest) · [Try the UI in a browser](https://anixops.github.io/EasySSH/) (sample data, no connections)
 
 ![Terminal tabs with the host list](docs/screenshots/terminal-dark.png)
 
@@ -292,7 +292,7 @@ stores update them.
 ## Development
 
 ```bash
-npm install
+npm ci               # installs exactly package-lock.json, as CI and releases do
 npm run dev          # the UI in a browser with preview data
 npm run tauri dev    # the desktop app (needs Rust and the Tauri prerequisites)
 ```

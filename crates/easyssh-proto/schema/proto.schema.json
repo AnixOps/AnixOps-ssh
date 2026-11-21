@@ -4065,6 +4065,16 @@
           "minimum": 0,
           "description": "Files whose hashes were equal."
         },
+        "skipped_verified": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Of `files`, those already complete (same size and time) that were found equal and so not sent again."
+        },
+        "unverified": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Files that could not be checked because the server cannot hash them, including files left out as already complete without a check."
+        },
         "path": {
           "type": "string",
           "description": "Remote path of the first file that differs."

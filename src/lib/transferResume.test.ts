@@ -11,6 +11,13 @@ describe("verifyView", () => {
     expect(verifyView({ status: "match", files: 12 }).text).toBe("SHA-256 一致（12 个文件）");
   });
 
+  it("notes files left out as already equal and files that could not be checked", () => {
+    const view = verifyView({ status: "match", files: 3, skippedVerified: 2, unverified: 1 });
+    expect(view.tone).toBe("success");
+    expect(view.note).toBe("其中 2 个已存在且内容一致，未重传；另有 1 个文件无法校验");
+    expect(verifyView({ status: "match", files: 1 }).note).toBeUndefined();
+  });
+
   it("shows a difference in danger with both hashes", () => {
     const view = verifyView({ status: "mismatch", files: 0, localSha256: "aa", remoteSha256: "bb" });
     expect(view.tone).toBe("danger");

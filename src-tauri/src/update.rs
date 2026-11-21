@@ -92,13 +92,8 @@ fn save(path: &Path, state: &State) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(error)?;
     }
-    let temp = path.with_extension("json.tmp");
-    std::fs::write(
-        &temp,
-        serde_json::to_vec_pretty(state).map_err(|e| e.to_string())?,
-    )
-    .map_err(error)?;
-    std::fs::rename(&temp, path).map_err(error)
+    let bytes = serde_json::to_vec_pretty(state).map_err(|e| e.to_string())?;
+    easyssh_core::atomic_file::write(path, &bytes).map_err(error)
 }
 
 fn now() -> i64 {
@@ -225,6 +220,13 @@ pub async fn update_install(app: tauri::AppHandle) -> Result<(), String> {
     update_install::install(app, verifier, update).await
 }
 
+/// After "restart failed": starts the installed version again. It does not
+/// download or install anything. Returns only when starting failed again.
+#[tauri::command]
+pub async fn update_restart(app: tauri::AppHandle) -> Result<(), String> {
+    update_install::restart(app).await
+}
+
 #[tauri::command]
 pub fn update_cancel() {
     update_install::cancel();
@@ -245,6 +247,36 @@ mod tests {
             sha256: String::new(),
             signature: String::new(),
         }
+    }
+
+    #[test]
+    fn concurrent_saves_leave_one_whole_state_and_no_temporary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("update.json");
+        let a = State {
+            last_sequence: 1,
+            found: Some(found(1)),
+            ..State::default()
+        };
+        let b = State {
+            last_sequence: 2,
+            found: Some(found(2)),
+            ..State::default()
+        };
+        std::thread::scope(|scope| {
+            for state in [&a, &b] {
+                let path = &path;
+                scope.spawn(move || {
+                    for _ in 0..20 {
+                        let _ = save(path, state);
+                    }
+                });
+            }
+        });
+        save(&path, &b).unwrap();
+        let loaded = load(&path);
+        assert!(loaded == a || loaded == b);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]

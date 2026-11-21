@@ -678,6 +678,41 @@ fn local_part(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// The local temporary files being written right now. Two downloads of one
+/// file into one folder would write the same `.name.easyssh-part` (its name is
+/// fixed so a stopped download can resume); the second is refused instead of
+/// truncating and mixing into the first.
+static ACTIVE_LOCAL_PARTS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+struct LocalPartClaim(PathBuf);
+
+impl LocalPartClaim {
+    fn take(part: &Path) -> Result<LocalPartClaim, SshError> {
+        let mut active = ACTIVE_LOCAL_PARTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if active.iter().any(|taken| taken == part) {
+            return Err(SshError::Sftp(format!(
+                "another transfer is already writing {}",
+                part.display()
+            )));
+        }
+        active.push(part.to_owned());
+        Ok(LocalPartClaim(part.to_owned()))
+    }
+}
+
+impl Drop for LocalPartClaim {
+    fn drop(&mut self) {
+        let mut active = ACTIVE_LOCAL_PARTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(at) = active.iter().position(|taken| *taken == self.0) {
+            active.swap_remove(at);
+        }
+    }
+}
+
 /// What one transfer works with.
 struct Job<'a> {
     sftp: &'a Sftp,
@@ -699,6 +734,12 @@ struct Job<'a> {
 struct Verified {
     /// Files whose two SHA-256 are equal.
     matched: u64,
+    /// Of those, files that were left out as already complete and found
+    /// equal, so nothing was sent.
+    skipped_verified: u64,
+    /// Files that could not be checked (the server cannot hash them), among
+    /// them files left out as already complete without a check.
+    unverified: u64,
     /// Why the server could not be asked, when it could not.
     unavailable: Option<String>,
     /// The first file whose two SHA-256 differ: remote path, local, remote.
@@ -708,7 +749,10 @@ struct Verified {
 impl Verified {
     /// Did any file get checked, or fail to be?
     fn active(&self) -> bool {
-        self.matched > 0 || self.unavailable.is_some() || self.mismatch.is_some()
+        self.matched > 0
+            || self.unverified > 0
+            || self.unavailable.is_some()
+            || self.mismatch.is_some()
     }
 
     fn json(&self) -> Value {
@@ -716,9 +760,12 @@ impl Verified {
             json!({"status": "mismatch", "files": self.matched, "path": path,
                    "local_sha256": local, "remote_sha256": remote})
         } else if self.matched == 0 && self.unavailable.is_some() {
-            json!({"status": "unavailable", "files": 0, "detail": self.unavailable})
+            json!({"status": "unavailable", "files": 0, "detail": self.unavailable,
+                   "unverified": self.unverified})
         } else {
-            json!({"status": "match", "files": self.matched})
+            json!({"status": "match", "files": self.matched,
+                   "skipped_verified": self.skipped_verified, "unverified": self.unverified,
+                   "detail": self.unavailable})
         }
     }
 }
@@ -766,7 +813,10 @@ async fn verify_file(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Resu
     }
     match check_file(job.session, local_path, remote).await? {
         Check::Match(_) => job.verified.matched += 1,
-        Check::Unavailable(detail) => job.verified.unavailable = Some(detail),
+        Check::Unavailable(detail) => {
+            job.verified.unverified += 1;
+            job.verified.unavailable = Some(detail);
+        }
         Check::Mismatch {
             local,
             remote: there,
@@ -778,6 +828,30 @@ async fn verify_file(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Resu
         }
     }
     Ok(())
+}
+
+/// Whether a file that looks complete (same size and modification time) may
+/// be left out. A transfer that was asked to verify must not trust size and
+/// time alone: the contents are compared first. A difference sends the file
+/// again; a server that cannot hash is reported as unverified, not as
+/// checked.
+async fn may_skip(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Result<bool, SshError> {
+    if !job.options.verify {
+        return Ok(true);
+    }
+    Ok(match check_file(job.session, local_path, remote).await? {
+        Check::Match(_) => {
+            job.verified.matched += 1;
+            job.verified.skipped_verified += 1;
+            true
+        }
+        Check::Unavailable(detail) => {
+            job.verified.unverified += 1;
+            job.verified.unavailable = Some(detail);
+            true
+        }
+        Check::Mismatch { .. } => false,
+    })
 }
 
 impl Job<'_> {
@@ -1000,6 +1074,7 @@ async fn upload_file(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Resu
                 && there.size == size
                 && mtime.is_some()
                 && resume::secs(there.modified) == mtime
+                && may_skip(job, local_path, &target).await?
             {
                 job.progress.add(size);
                 return Ok(());
@@ -1094,14 +1169,10 @@ async fn upload_file(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Resu
     if mode.is_some() || modified.is_some() {
         let _ = sftp.set_stat(&part, mode, modified).await;
     }
-    // A plain SFTP rename does not replace an existing file on OpenSSH.
-    if let Err(error) = sftp.rename(&part, &target).await {
-        if existing.is_none() {
-            return at(Err(error), "renaming to", &target);
-        }
-        at(sftp.remove_file(&target).await, "replacing", &target)?;
-        at(sftp.rename(&part, &target).await, "renaming to", &target)?;
-    }
+    // The original is never deleted before the new file is in place (see
+    // `commit`); a plain SFTP rename does not replace a file on OpenSSH.
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    crate::commit::commit(sftp, &part, &target, &token[..12]).await?;
     job.writing(None);
     verify_file(job, local_path, &target).await
 }
@@ -1215,6 +1286,7 @@ async fn download_file(job: &mut Job<'_>, remote: &str, local_path: &Path) -> Re
                 && here.len() == size
                 && mtime.is_some()
                 && resume::secs(here.modified().ok()) == mtime
+                && may_skip(job, local_path, remote).await?
             {
                 job.progress.add(size);
                 return Ok(());
@@ -1222,6 +1294,7 @@ async fn download_file(job: &mut Job<'_>, remote: &str, local_path: &Path) -> Re
         }
     }
     let part = local_part(local_path);
+    let _claim = LocalPartClaim::take(&part)?;
     let part_text = part.to_string_lossy().into_owned();
     let local_key = local_path.to_string_lossy().into_owned();
     let mut offset = 0;
@@ -1428,6 +1501,31 @@ mod tests {
     use std::time::SystemTime;
 
     #[test]
+    fn verified_counts_are_reported_apart() {
+        let v = Verified {
+            matched: 3,
+            skipped_verified: 2,
+            unverified: 1,
+            unavailable: Some("no sha256sum on the server".into()),
+            ..Default::default()
+        };
+        let json = v.json();
+        assert_eq!(json["status"], "match");
+        assert_eq!(json["files"], 3);
+        assert_eq!(json["skipped_verified"], 2);
+        assert_eq!(json["unverified"], 1);
+        // Nothing could be checked: not a "match".
+        let none = Verified {
+            unverified: 2,
+            unavailable: Some("no sha256sum on the server".into()),
+            ..Default::default()
+        };
+        assert!(none.active());
+        assert_eq!(none.json()["status"], "unavailable");
+        assert_eq!(none.json()["unverified"], 2);
+    }
+
+    #[test]
     fn remote_names_cannot_escape() {
         assert!(safe_name("report.pdf"));
         // Fine on the server; a download maps them for the local side.
@@ -1476,6 +1574,18 @@ mod tests {
             local_part(Path::new("/tmp/x/report 1.pdf")),
             Path::new("/tmp/x/.report 1.pdf.easyssh-part")
         );
+    }
+
+    #[test]
+    fn one_local_part_is_written_by_one_download_at_a_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let part = local_part(&dir.path().join("same.bin"));
+        let other = local_part(&dir.path().join("other.bin"));
+        let first = LocalPartClaim::take(&part).unwrap();
+        assert!(LocalPartClaim::take(&part).is_err(), "no second writer");
+        let _unrelated = LocalPartClaim::take(&other).unwrap();
+        drop(first);
+        assert!(LocalPartClaim::take(&part).is_ok(), "free again afterwards");
     }
 
     #[test]
