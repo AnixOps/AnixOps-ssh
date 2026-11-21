@@ -43,6 +43,7 @@ import {
 } from "@/lib/backend";
 import { adhocId, formatTarget, parseAdhocId, type Target } from "@/lib/quickConnect";
 import { participants, scopeOf, setBroadcastScope, setPanes, toggleGlobalBroadcast, toggleTabBroadcast, useBroadcast } from "@/lib/broadcast";
+import { onHostEditRequested } from "@/lib/hostEditUi";
 import { t } from "@/lib/i18n";
 import { serialHosts } from "@/lib/serialUi";
 import { loadLayout, planRestore, saveLayout, setWindowLabel } from "@/lib/layoutStore";
@@ -139,6 +140,19 @@ export function App() {
   const [editing, setEditing] = useState<Host | null | undefined>(undefined);
   /** A new host being created starts as a serial port. */
   const [newSerial, setNewSerial] = useState(false);
+  // A failed connect card asks for the editor of its host.
+  const hostsForEdit = useRef(snapshot.hosts);
+  hostsForEdit.current = snapshot.hosts;
+  useEffect(
+    () =>
+      onHostEditRequested((hostId) => {
+        const host = hostsForEdit.current.find((candidate) => candidate.id === hostId);
+        if (!host) return;
+        setNewSerial(false);
+        setEditing(host);
+      }),
+    [],
+  );
   /** Values for the host being created from an unsaved connection. */
   const [prefill, setPrefill] = useState<HostPrefill | undefined>(undefined);
   /** Tabs of unsaved connections that no longer offer "save as host". */

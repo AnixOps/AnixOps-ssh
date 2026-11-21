@@ -55,6 +55,8 @@ import { attachShellIntegration, type ShellIntegrationHandle } from "@/lib/shell
 import { clearTerminalCwd, publishTerminalCwd } from "@/lib/terminalCwd";
 import { ShellIntegrationLineSource } from "@/lib/shellIntegration/lineSource";
 import { pasteNeedsConfirm, type BroadcastScope, targetsFor } from "@/lib/broadcast";
+import { failureText } from "@/lib/connectFailureText";
+import { requestHostEdit } from "@/lib/hostEditUi";
 import { t } from "@/lib/i18n";
 import { duration, ease, enter, leave } from "@/lib/motion";
 import { animationFrameSchedule, OutputBuffer } from "@/lib/outputBuffer";
@@ -1048,20 +1050,24 @@ export function TerminalView({
             <Unplug className="size-5 shrink-0 text-label-2" strokeWidth={1.5} />
             {/* The words keep 12rem; the buttons wrap under them in a narrow pane. */}
             <div className="min-w-0 grow basis-48">
-              <p className="text-callout font-medium text-label-1">
-                {status.error ? t.sessionFailed : exitTitle(status)}
-              </p>
-              <p className="selectable line-clamp-4 break-words text-callout text-label-2">
-                {status.error
-                  ? isSerialPermissionError(status.error)
-                    ? t.serialPermissionDenied
-                    : status.error
-                  : autoRetry === "gaveup"
-                    ? t.autoReconnectGaveUp
-                    : hostId
-                      ? t.enterToReconnect
-                      : t.enterToReopen}
-              </p>
+              {status.error && !isSerialPermissionError(status.error) ? (
+                <ConnectFailureText error={status.error} />
+              ) : (
+                <>
+                  <p className="text-callout font-medium text-label-1">
+                    {status.error ? t.sessionFailed : exitTitle(status)}
+                  </p>
+                  <p className="selectable line-clamp-4 break-words text-callout text-label-2">
+                    {status.error
+                      ? t.serialPermissionDenied
+                      : autoRetry === "gaveup"
+                        ? t.autoReconnectGaveUp
+                        : hostId
+                          ? t.enterToReconnect
+                          : t.enterToReopen}
+                  </p>
+                </>
+              )}
               {autoRetry && autoRetry !== "gaveup" && <AutoReconnectCountdown plan={autoRetry} />}
             </div>
             <Button variant="primary" size="sm" onClick={() => startRef.current()}>
@@ -1073,6 +1079,14 @@ export function TerminalView({
                 {t.autoReconnectCancel}
               </Button>
             )}
+            {(() => {
+              const action = status.error ? failureAction(status.error, hostId) : null;
+              return action && (
+                <Button variant="secondary" size="sm" onClick={action.run}>
+                  {action.label}
+                </Button>
+              );
+            })()}
             {hostId && (
               <Button variant="secondary" size="sm" onClick={() => void openExternal(hostId)}>
                 <SquareArrowOutUpRight />
@@ -1084,6 +1098,47 @@ export function TerminalView({
       )}
       </AnimatePresence>
     </div>
+  );
+}
+
+/** The button that fixes the stage: the host editor (for the key, address or port), or the vault dialog. */
+function failureAction(error: string, hostId: string | null): { label: string; run: () => void } | null {
+  const { stage } = failureText(error);
+  if (stage === "vault") return { label: t.vaultUnlock, run: requestVaultUnlock };
+  if (!hostId || stage === "cancelled") return null;
+  return { label: stage === "auth" ? t.failChooseKey : t.editHost, run: () => requestHostEdit(hostId) };
+}
+
+/** The staged explanation of a failed connect, with the engine's own text behind a disclosure. */
+function ConnectFailureText({ error }: { error: string }) {
+  const { title, hint } = failureText(error);
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <p className="text-callout font-medium text-label-1">{title}</p>
+      {hint && <p className="selectable break-words text-callout text-label-2">{hint}</p>}
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className="mt-1 inline-flex items-center gap-1 rounded-xs text-callout text-label-2 hover:text-label-1"
+      >
+        <ChevronDown className={cn("size-4 transition-transform", open && "rotate-180")} strokeWidth={1.5} />
+        {open ? t.failHideDetails : t.failShowDetails}
+      </button>
+      {open && (
+        <div className="mt-1 flex items-start gap-1">
+          <pre className="selectable max-h-32 min-w-0 grow overflow-auto whitespace-pre-wrap break-words rounded-xs bg-fill-1 px-2 py-1 font-mono text-callout text-label-2">
+            {error}
+          </pre>
+          <Tooltip label={t.failCopyDetails}>
+            <Button variant="quiet" size="icon-sm" aria-label={t.failCopyDetails} onClick={() => void copyText(error).catch(console.error)}>
+              <Copy />
+            </Button>
+          </Tooltip>
+        </div>
+      )}
+    </>
   );
 }
 
