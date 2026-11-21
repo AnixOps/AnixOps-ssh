@@ -292,7 +292,7 @@ stores update them.
 ## Development
 
 ```bash
-npm install
+npm ci               # installs exactly package-lock.json, as CI and releases do
 npm run dev          # the UI in a browser with preview data
 npm run tauri dev    # the desktop app (needs Rust and the Tauri prerequisites)
 ```
