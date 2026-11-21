@@ -382,11 +382,19 @@ async function newPage({ width = 1200, height = 760, query = "" } = {}) {
 
 /** Opens a host from the list; the bridge connects it to the e2e server. */
 async function openHost(page, name = "prod-web-01") {
+  await revealHosts(page);
   await page.getByRole("button", { name: new RegExp(name) }).first().click();
   await page.locator(".xterm-screen").last().waitFor();
   // The engine gives a channel that does not open 15 s before it reconnects;
   // the session-open times are reported at the end.
   await waitScreen(page, /keyuser@/, { timeout: 35000 });
+}
+
+/** With a session open the host list is folded away; the rail brings it back. */
+async function revealHosts(page) {
+  if (await page.getByPlaceholder(/搜索主机/).isVisible()) return;
+  await page.getByRole("button", { name: "主机", exact: true }).click();
+  await page.getByPlaceholder(/搜索主机/).waitFor({ timeout: 3000 });
 }
 
 /** Text of the active terminal's viewport (or the whole buffer). */
@@ -595,34 +603,41 @@ check("显示", "ansi-black-contrast", "ANSI 黑色是深色，htop 表头、tmu
   return `黑色 ${theme.black}，彩色底上最低对比度 ${worst.toFixed(1)}:1，最低对比度保护 ${ratio}`;
 });
 
-check("窗口", "sidebar-toggle", "侧栏可收起，让终端占满窗口（Termius、MobaXterm、VS Code）", async (page) => {
+check("窗口", "sidebar-toggle", "打开会话后主机列表让位给终端（Termius）；点图标栏的主机图标浮在终端上，不改变终端宽度；Esc 收回且键盘回到终端；可固定在旁边", async (page) => {
   await openHost(page);
-  const before = await term(page, (t) => t.cols);
+  const list = page.getByPlaceholder(/搜索主机/);
+  if (await list.isVisible()) throw new Error("打开会话后主机列表还占着位置");
+  const cols = await term(page, (t) => t.cols);
   await page.getByRole("button", { name: "主机", exact: true }).click();
+  await list.waitFor({ timeout: 3000 });
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: join(outDir, "sidebar-peek.png") });
+  const peekCols = await term(page, (t) => t.cols);
+  if (peekCols !== cols) throw new Error(`主机列表浮出时终端宽度变了（${cols} → ${peekCols} 列）`);
+  await page.keyboard.press("Escape");
+  await list.waitFor({ state: "hidden", timeout: 3000 });
+  await page.waitForTimeout(200);
+  const focused = await page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea"));
+  if (!focused) throw new Error("Esc 收回主机列表后键盘没有回到终端");
+  await page.getByRole("button", { name: "固定侧栏" }).click();
   await page.waitForTimeout(600);
-  const after = await term(page, (t) => t.cols);
-  await page.screenshot({ path: join(outDir, "sidebar-hidden.png") });
-  await page.getByRole("button", { name: "主机", exact: true }).click();
-  await page.waitForTimeout(300);
-  if (!(after > before)) throw new Error(`收起侧栏后终端宽度没有变化（${before} 列）`);
-  const visible = await page.getByPlaceholder(/搜索主机/).isVisible();
-  if (!visible) throw new Error("再次点击没有展开侧栏");
-  return `${before} 列 → ${after} 列，再次点击展开`;
+  const pinned = await term(page, (t) => t.cols);
+  if (!(await list.isVisible()) || !(pinned < cols)) throw new Error(`固定后主机列表没有停在终端旁边（${cols} → ${pinned} 列）`);
+  return `终端 ${cols} 列；浮出时不变，Esc 收回回到终端；固定后 ${pinned} 列`;
 });
 
-check("窗口", "focus-mode", "突出终端：侧栏底部有收起按钮，终端里 Ctrl+Shift+S 收起/展开；专注模式（F11，macOS ⌃⌘Z）只留标签和终端，重开后记住", async (page) => {
+check("窗口", "focus-mode", "突出终端：打开会话后侧栏让位，终端里 Ctrl+Shift+S 浮出主机列表；专注模式（F11，macOS ⌃⌘Z）只留标签和终端，重开后记住", async (page) => {
   await openHost(page);
   const cols = () => term(page, (t) => t.cols);
   const settle = () => page.waitForTimeout(600);
-  const base = await cols();
-  await page.getByRole("button", { name: "收起侧栏" }).click();
-  await settle();
+  // The host list has made way for the session already (sidebar-toggle).
   const folded = await cols();
-  if (!(folded > base)) throw new Error(`点“收起侧栏”后终端没有变宽（${base} 列）`);
   await page.locator(".xterm-screen").last().click();
   await page.keyboard.press(isMacRun ? "Control+Meta+S" : "Control+Shift+S");
   await settle();
   if (!(await page.getByPlaceholder(/搜索主机/).isVisible())) throw new Error("终端里按快捷键没有展开侧栏");
+  await page.keyboard.press("Escape");
+  await settle();
   await page.getByRole("button", { name: "专注模式" }).click();
   await settle();
   const focused = await cols();
@@ -640,7 +655,7 @@ check("窗口", "focus-mode", "突出终端：侧栏底部有收起按钮，终�
   await page.keyboard.press(isMacRun ? "Control+Meta+Z" : "F11");
   await page.getByRole("button", { name: "退出专注模式" }).click();
   await page.getByRole("navigation", { name: "AnixOps SSH" }).waitFor({ timeout: 3000 });
-  return `${base} 列 → 收起侧栏 ${folded} 列 → 专注模式 ${focused} 列；快捷键和“退出专注模式”按钮可用，重开后记住`;
+  return `会话打开后 ${folded} 列 → 专注模式 ${focused} 列；快捷键和“退出专注模式”按钮可用，重开后记住`;
 });
 
 check("复制粘贴", "copy-shortcut", "选中后 Ctrl+Shift+C（macOS ⌘C）复制", async (page) => {
@@ -1049,6 +1064,7 @@ check("标签与分屏", "duplicate-tab", "标签右键“复制标签”再开�
 
 check("标签与分屏", "open-host-new-tab", "同一主机再开一个标签（主机右键“在新标签中打开”）", async (page) => {
   await openHost(page);
+  await revealHosts(page);
   await page.getByRole("button", { name: /prod-web-01/ }).first().click({ button: "right" });
   await page.getByRole("menuitem", { name: "在新标签中打开" }).click();
   await page.waitForFunction(() => window.__anixopsE2eOpened.length >= 2, null, { timeout: 15000 });

@@ -9,7 +9,14 @@ import { FilesPane } from "@/components/app/FilesPane";
 import { MonitorPane } from "@/components/app/MonitorPane";
 import { BroadcastBar } from "@/components/app/PaneOverlays";
 import { monitorOpenByDefault, rememberMonitorOpen, useMonitorLayout } from "@/lib/monitorPrefs";
-import { focusModeByDefault, rememberFocusMode, rememberSidebarHidden, sidebarHiddenByDefault } from "@/lib/sidebarPrefs";
+import {
+  focusModeByDefault,
+  rememberFocusMode,
+  rememberSidebarHidden,
+  rememberSidebarPinned,
+  sidebarHiddenByDefault,
+  sidebarPinnedByDefault,
+} from "@/lib/sidebarPrefs";
 import { fitWorkspace, useElementWidth } from "@/lib/workspaceFit";
 import { ForwardsPanel } from "@/components/app/ForwardsPanel";
 import { HostEditor, type HostPrefill } from "@/components/app/HostEditor";
@@ -68,7 +75,8 @@ import {
 import { loadSettings } from "@/lib/settings";
 import { FirstRunPrompt } from "@/components/app/FirstRunPrompt";
 import { appShortcut, inTerminal, type AppShortcut } from "@/lib/shortcuts";
-import { terminalFor } from "@/lib/terminals";
+import { focusTerminal, terminalFor } from "@/lib/terminals";
+import { cn } from "@/lib/utils";
 
 let nextTab = 1;
 let nextPane = 1;
@@ -112,13 +120,23 @@ export function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [settingsQuery, setSettingsQuery] = useState("");
   const previousNav = useRef<NavKey>("hosts");
-  // The sidebar can be hidden so the terminal gets the whole window; going to
-  // a section shows it again, and choosing the section that is open hides it.
+  // The sidebar can be hidden so the terminal gets the whole window. Unless it
+  // is pinned, opening a session hides it (as Termius gives the window to the
+  // terminal); the rail or Ctrl+B then shows it over the terminal ("peek"),
+  // without resizing the terminal, until a host is opened or Esc.
   const [sidebarHidden, setSidebarHidden] = useState(sidebarHiddenByDefault);
   const hideSidebar = useCallback((hidden: boolean) => {
     rememberSidebarHidden(hidden);
     setSidebarHidden(hidden);
   }, []);
+  const [sidebarPinned, setSidebarPinnedState] = useState(sidebarPinnedByDefault);
+  const setSidebarPinned = useCallback((pinned: boolean) => {
+    rememberSidebarPinned(pinned);
+    setSidebarPinnedState(pinned);
+  }, []);
+  const [peek, setPeek] = useState(false);
+  // Read by the callbacks below, which are made before the tabs exist.
+  const hasTabsRef = useRef(false);
   // Focus mode leaves only the tabs and the terminal (no rail, no sidebar);
   // going to a section ends it.
   const [focusMode, setFocusModeState] = useState(focusModeByDefault);
@@ -126,21 +144,60 @@ export function App() {
     rememberFocusMode(on);
     setFocusModeState(on);
   }, []);
+  /** Shows the sidebar: beside the terminal when pinned or with no session
+   *  (and for settings, a page of its own), otherwise over it. */
+  const revealSidebar = useCallback(
+    (key: NavKey) => {
+      if (key === "settings" || sidebarPinned || !hasTabsRef.current) {
+        hideSidebar(false);
+        setPeek(false);
+      } else {
+        // Coming from settings, which docked it: back over the terminal.
+        if (nav === "settings") hideSidebar(true);
+        if (sidebarHidden || nav === "settings") setPeek(true);
+      }
+    },
+    [hideSidebar, nav, sidebarHidden, sidebarPinned],
+  );
   const setNav = useCallback(
     (key: NavKey) => {
       setNavKey((current) => {
         if (current !== "settings") previousNav.current = current;
         return key;
       });
-      hideSidebar(false);
+      revealSidebar(key);
       setFocusMode(false);
     },
-    [hideSidebar, setFocusMode],
+    [revealSidebar, setFocusMode],
   );
-  const toggleSidebar = useCallback(() => hideSidebar(!sidebarHidden), [hideSidebar, sidebarHidden]);
+  /** Leaving settings for the section before it: an unpinned sidebar makes
+   *  way for the sessions again. */
+  const closeSettings = useCallback(() => {
+    setNavKey(previousNav.current);
+    if (hasTabsRef.current && !sidebarPinned) hideSidebar(true);
+  }, [hideSidebar, sidebarPinned]);
+  /** Ctrl+B and choosing the open section: a docked sidebar folds away; a
+   *  hidden one comes back over the terminal while sessions are open (beside
+   *  it on the settings page, which has no terminal). */
+  const toggleSidebar = useCallback(() => {
+    if (!sidebarHidden) hideSidebar(true);
+    else if (hasTabsRef.current && nav !== "settings") setPeek((open) => !open);
+    else hideSidebar(false);
+  }, [hideSidebar, nav, sidebarHidden]);
+  /** The rail's pin button: docks the sidebar for good, or unpins and folds it. */
+  const togglePin = useCallback(() => {
+    if (sidebarHidden || !sidebarPinned) {
+      setSidebarPinned(true);
+      hideSidebar(false);
+      setPeek(false);
+    } else {
+      setSidebarPinned(false);
+      if (hasTabsRef.current) hideSidebar(true);
+    }
+  }, [hideSidebar, setSidebarPinned, sidebarHidden, sidebarPinned]);
   const chooseNav = useCallback(
-    (key: NavKey) => (key === nav ? hideSidebar(!sidebarHidden) : setNav(key)),
-    [hideSidebar, nav, setNav, sidebarHidden],
+    (key: NavKey) => (key === nav ? toggleSidebar() : setNav(key)),
+    [nav, setNav, toggleSidebar],
   );
   const [snapshot, setSnapshot] = useState<HostsSnapshot>({ hosts: [], groups: [], warnings: [] });
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -498,6 +555,39 @@ export function App() {
   // Without a tab there is nothing to focus on: the window shows as usual.
   const focused = focusMode && tabs.length > 0;
   const settingsOpen = nav === "settings" && !focused;
+  const hasTabs = tabs.length > 0;
+  hasTabsRef.current = hasTabs;
+  // Beside the workspace, or over it (peek), or not at all.
+  const sidebarDocked = !focused && (!sidebarHidden || !hasTabs);
+  const peeking = !focused && !sidebarDocked && peek;
+  // A new session hides an unpinned sidebar; closing the last one shows it.
+  const tabCount = useRef(tabs.length);
+  useEffect(() => {
+    const before = tabCount.current;
+    tabCount.current = tabs.length;
+    if (tabs.length > before) {
+      setPeek(false);
+      if (!sidebarPinned && !sidebarHidden) hideSidebar(true);
+    } else if (tabs.length === 0 && before > 0) hideSidebar(false);
+  }, [tabs.length, sidebarPinned, sidebarHidden, hideSidebar]);
+  // Going to a tab (a host that was already open) also ends the peek.
+  useEffect(() => setPeek(false), [activeKey]);
+  // The keyboard goes with the sidebar when it comes over the terminal: its
+  // search field, or its first control (Esc then puts it away).
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!peeking) return;
+    const frame = window.requestAnimationFrame(() => {
+      const panel = sidebarRef.current;
+      if (!panel || panel.contains(document.activeElement)) return;
+      panel.querySelector<HTMLElement>("input, button, [tabindex='0']")?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [peeking, nav]);
+  const endPeek = useCallback(() => {
+    setPeek(false);
+    focusTerminal(activeTab?.panes.focused ?? null);
+  }, [activeTab]);
   /** The SSH host a tab's monitor reads; null for local shells and serial ports. */
   const monitorHost = (hostId: string | null): Host | null => {
     const host = hostId ? snapshot.hosts.find((candidate) => candidate.id === hostId) : undefined;
@@ -572,19 +662,39 @@ export function App() {
     <TooltipProvider delayDuration={500}>
     <ConfirmProvider>
       <BroadcastGuardBridge />
-      <div className="flex h-full">
+      <div className="relative flex h-full">
         <FirstRunPrompt />
         {!focused && (
           <IconRail
             active={nav}
-            sidebarHidden={sidebarHidden}
+            sidebarHidden={!sidebarDocked && !peeking}
+            pinned={sidebarPinned && sidebarDocked}
             onChange={chooseNav}
-            onToggleSidebar={toggleSidebar}
-            onFocusMode={tabs.length > 0 ? () => setFocusMode(true) : undefined}
+            onTogglePin={hasTabs ? togglePin : undefined}
+            onFocusMode={hasTabs ? () => setFocusMode(true) : undefined}
           />
         )}
+        {peeking && (
+          // Over the terminal: a click outside puts the sidebar away again.
+          <div aria-hidden className="absolute inset-y-0 right-0 left-16 z-20" onPointerDown={endPeek} />
+        )}
         {/* Switching sections is immediate in a desktop window (M9). */}
-        <div key={nav} className="flex shrink-0" hidden={sidebarHidden || focused}>
+        <div
+          key={nav}
+          ref={sidebarRef}
+          className={cn("flex shrink-0", peeking && "absolute inset-y-0 left-16 z-30 bg-bg shadow-3")}
+          hidden={!sidebarDocked && !peeking}
+          onKeyDown={
+            peeking
+              ? (event) => {
+                  if (event.key === "Escape" && !event.defaultPrevented) {
+                    event.preventDefault();
+                    endPeek();
+                  }
+                }
+              : undefined
+          }
+        >
         {nav === "hosts" ? (
           <HostList
             hosts={snapshot.hosts}
@@ -624,17 +734,17 @@ export function App() {
           <SettingsPage
             section={settingsSection}
             query={settingsQuery}
-            showPicker={sidebarHidden}
+            showPicker={!sidebarDocked}
             onSection={setSettingsSection}
-            onClose={() => setNav(previousNav.current)}
+            onClose={closeSettings}
             status={status}
             onRecheck={checkSsh}
             onDataChanged={reload}
           />
         )}
-        {/* Under the settings page the sessions keep their size and output,
-            but take no focus or keys. */}
-        <main className="flex min-w-0 flex-1 flex-col bg-bg" inert={settingsOpen}>
+        {/* Under the settings page, or the sidebar over them, the sessions
+            keep their size and output but take no focus or keys. */}
+        <main className="flex min-w-0 flex-1 flex-col bg-bg" inert={settingsOpen || peeking}>
           {tabs.length > 0 && (
             <TabBar
               tabs={viewTabs}

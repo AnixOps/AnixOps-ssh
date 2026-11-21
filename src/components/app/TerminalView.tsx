@@ -714,6 +714,7 @@ export function TerminalView({
       write: (data) => sessionRef.current?.write(data),
       paste: (text) => terminal.paste(text),
       connected: () => sessionRef.current !== null,
+      focus: () => terminal.focus(),
       close() {
         closing = true;
         stopTimer();

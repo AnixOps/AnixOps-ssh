@@ -80,9 +80,9 @@ htop（修复前：表头和底栏 F1–F10 后面的字看不清）：
 |---|---|
 | ![重连修复前](screenshots/terminal-parity/exit-reconnect-before.png) | ![重连修复后](screenshots/terminal-parity/exit-reconnect-after.png) |
 
-收起侧栏后终端占满宽度：
+打开会话后主机列表让位给终端（1200 px 窗口 76 → 117 列）；点图标栏的主机图标，列表浮在终端上，终端宽度不变，Esc 或打开主机后收回；「固定侧栏」可让它一直停在旁边：
 
-![收起侧栏](screenshots/terminal-parity/sidebar-hidden.png)
+![主机列表浮在终端上](screenshots/terminal-parity/sidebar-peek.png)
 
 ## 文件面板、连接管理、端口转发、设置（第二轮）
 
