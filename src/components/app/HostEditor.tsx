@@ -1,4 +1,4 @@
-import { FileUp, RefreshCw, Star, Trash2 } from "lucide-react";
+import { ChevronRight, FileUp, RefreshCw, Star, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { HostHistory, HostVault } from "@/components/app/HostSync";
 import { ProxySection } from "@/components/app/ProxySection";
@@ -77,7 +77,8 @@ export function HostEditor({
   serial?: boolean;
   /** Values for a new host, such as the connection a tab was opened with. */
   prefill?: HostPrefill;
-  onDone: () => void;
+  /** After a save (with the host and whether to connect now) or a delete. */
+  onDone: (saved?: { id: string; connect: boolean }) => void;
   onCancel: () => void;
 }) {
   const saved = host?.source === "saved";
@@ -109,6 +110,17 @@ export function HostEditor({
   const [logChoice, setLogChoice] = useState<HostChoice>("default");
   const [keep, setKeep] = useState<KeepSession>(host ? hostKeepSession(host.id) : "off");
   const [logLoaded, setLogLoaded] = useState<HostChoice | null>(null);
+  // Connection details and credentials come first; the rest waits under
+  // "Advanced" (brand H5), open when this host already uses any of it.
+  const [advancedOpen, setAdvancedOpen] = useState(() => {
+    const start = host?.fields ?? prefill?.fields;
+    return Boolean(
+      start &&
+        (start.proxyJump || (start.engine && start.engine !== "auto") || start.proxy || start.shellIntegration || start.forwardX11),
+    ) || (host ? hostKeepSession(host.id) !== "off" : false);
+  });
+  // A new host (not a tab being saved) can connect as soon as it is saved.
+  const offerConnect = !host && !prefill;
 
   useEffect(() => firstRef.current?.focus(), []);
   const refreshPorts = () => serialPorts().then(setPorts).catch(() => setPorts([]));
@@ -163,13 +175,16 @@ export function HostEditor({
   // A serial port has no network connection to proxy.
   const proxyOn = !serialOn && Boolean(fields.proxy);
 
-  const submit = async () => {
+  // An empty name falls back to the address, as the save does.
+  const nameFallback = serialOn ? serial.port.trim() : byAlias ? fields.alias?.trim() ?? "" : fields.hostname.trim();
+
+  const submit = async (connect = false) => {
     setBusy(true);
     setError(null);
     try {
       const id = await saveHost({
         id: host?.id ?? null,
-        name: name.trim() || (serialOn ? serial.port.trim() : byAlias ? fields.alias ?? "" : fields.hostname),
+        name: name.trim() || nameFallback,
         group: group.trim() || null,
         tags: tags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean),
         favorite,
@@ -203,7 +218,7 @@ export function HostEditor({
         }
       }
       setHostKeepSession(id, keep);
-      onDone();
+      onDone({ id, connect });
     } catch (reason) {
       setError(String(reason));
       setBusy(false);
@@ -224,13 +239,14 @@ export function HostEditor({
     }
   };
 
+  const ready = !busy && (serialOn ? serialReady(serial) : proxyReady(fields.proxy));
   const title = !host ? (serialOn ? t.newSerialHost : t.newHost) : saved ? t.editHost : t.saveToHosts;
 
   return (
     <Overlay
       labelledBy="host-editor-title"
       onDismiss={onCancel}
-      onSubmit={() => void submit()}
+      onSubmit={() => void submit(offerConnect)}
       className="flex max-h-full max-w-lg flex-col"
     >
         <div className="flex items-center gap-2 px-6 pt-6">
@@ -247,10 +263,6 @@ export function HostEditor({
         </div>
 
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 pt-5 pb-2">
-          <Field label={t.hostName}>
-            <Input ref={firstRef} value={name} onChange={(event) => setName(event.target.value)} placeholder="prod-web-01" />
-          </Field>
-
           <Field label={t.hostKind} group>
             <Segmented
               value={serialOn}
@@ -282,9 +294,10 @@ export function HostEditor({
             {byAlias ? (
               <Field label={t.alias}>
                 <Input
+                  ref={firstRef}
                   value={fields.alias ?? ""}
                   onChange={(event) => set("alias", event.target.value)}
-                  placeholder="bastion"
+                  placeholder={`${t.examplePrefix}bastion`}
                   className="font-mono"
                   spellCheck={false}
                 />
@@ -294,9 +307,10 @@ export function HostEditor({
                 <div className="grid grid-cols-[1fr_6rem] gap-3">
                   <Field label={t.hostname}>
                     <Input
+                      ref={firstRef}
                       value={fields.hostname}
                       onChange={(event) => set("hostname", event.target.value)}
-                      placeholder="10.0.1.11"
+                      placeholder={`${t.examplePrefix}10.0.1.11`}
                       className="font-mono"
                       spellCheck={false}
                     />
@@ -316,123 +330,13 @@ export function HostEditor({
                   <Input
                     value={fields.username ?? ""}
                     onChange={(event) => set("username", event.target.value || null)}
-                    placeholder="deploy"
+                    placeholder={`${t.examplePrefix}deploy`}
                     className="font-mono"
                     spellCheck={false}
                   />
                 </Field>
               </>
             )}
-
-            <Field label={t.proxyJump} hint={t.optional}>
-              <Input
-                value={fields.proxyJump ?? ""}
-                onChange={(event) => set("proxyJump", event.target.value || null)}
-                placeholder="bastion"
-                className="font-mono"
-                spellCheck={false}
-              />
-            </Field>
-
-            <Field label={t.hostEngine} hint={t.optional}>
-              <Select
-                aria-label={t.hostEngine}
-                value={fields.engine ?? "auto"}
-                onChange={(event) => set("engine", event.target.value as EnginePreference)}
-              >
-                <option value="auto">{t.engineAuto}</option>
-                <option value="russh">{t.engineBuiltin}</option>
-                <option value="openssh">{t.engineOpenssh}</option>
-              </Select>
-            </Field>
-            </>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <Field label={t.group} hint={t.optional}>
-              <Input value={group} onChange={(event) => setGroup(event.target.value)} list="host-editor-groups" />
-              <datalist id="host-editor-groups">
-                {groups.map((candidate) => (
-                  <option key={candidate.id} value={candidate.name} />
-                ))}
-              </datalist>
-            </Field>
-            <Field label={t.tags} hint={t.tagsHint}>
-              <Input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="web, nginx" />
-            </Field>
-          </div>
-
-          <Field label={t.color} group>
-            <div className="flex items-center gap-2">
-              <Swatch selected={color === null} label={t.noColor} onClick={() => setColor(null)} />
-              {COLORS.map((token, index) => (
-                <Swatch key={token} color={token} selected={color === token} label={`${t.color} ${index + 1}`} onClick={() => setColor(token)} />
-              ))}
-            </div>
-          </Field>
-
-          <Field label={t.envLabel} hint={t.envHint} group>
-            <Segmented
-              size="sm"
-              label={t.envLabel}
-              value={environment ?? "none"}
-              onChange={(value) => setEnvironment(value === "none" ? null : value)}
-              options={[
-                { value: "none", label: t.envNone },
-                { value: "production", label: t.envProduction },
-                { value: "staging", label: t.envStaging },
-                { value: "testing", label: t.envTesting },
-                // Marked "development" by a synced record: shown, so saving does not drop it.
-                ...(environment === "development" ? [{ value: "development" as const, label: t.envDevelopment }] : []),
-              ]}
-            />
-          </Field>
-
-          <div className="flex items-center justify-between gap-4">
-            <p className="flex items-center gap-2 text-callout text-label-2">
-              <Star className="size-4" strokeWidth={1.5} />
-              {t.favorite}
-            </p>
-            <Switch on={favorite} label={t.favorite} onClick={() => setFavorite(!favorite)} />
-          </div>
-
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-callout text-label-1">{t.shellIntegration}</p>
-              <p className="mt-0.5 text-callout text-label-3">{t.shellIntegrationHint}</p>
-            </div>
-            <Switch
-              on={fields.shellIntegration}
-              label={t.shellIntegration}
-              onClick={() => set("shellIntegration", !fields.shellIntegration)}
-            />
-          </div>
-
-          {!serialOn && (
-            <>
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-callout text-label-1">{t.hostForwardX11}</p>
-                  <p className="mt-0.5 text-callout text-label-3">{t.hostForwardX11Hint}</p>
-                </div>
-                <Switch
-                  on={fields.forwardX11 ?? false}
-                  label={t.hostForwardX11}
-                  onClick={() => set("forwardX11", !fields.forwardX11)}
-                />
-              </div>
-              <ProxySection
-                proxy={fields.proxy ?? null}
-                onChange={(proxy) => set("proxy", proxy)}
-                openssh={fields.engine === "openssh"}
-                password={{
-                  saved: savedSecrets.proxyPassword,
-                  value: drafts.proxyPassword.value,
-                  cleared: drafts.proxyPassword.cleared,
-                  onValue: (value) => draft("proxyPassword", { value, cleared: false }),
-                  onCleared: (cleared) => draft("proxyPassword", { cleared }),
-                }}
-              />
             </>
           )}
 
@@ -501,35 +405,161 @@ export function HostEditor({
             </section>
           )}
 
+          <Field label={t.hostName} hint={t.optional}>
+            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder={nameFallback || t.hostNameAuto} />
+          </Field>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label={t.group} hint={t.optional}>
+              <Input value={group} onChange={(event) => setGroup(event.target.value)} list="host-editor-groups" />
+              <datalist id="host-editor-groups">
+                {groups.map((candidate) => (
+                  <option key={candidate.id} value={candidate.name} />
+                ))}
+              </datalist>
+            </Field>
+            <Field label={t.tags} hint={t.tagsHint}>
+              <Input value={tags} onChange={(event) => setTags(event.target.value)} placeholder={`${t.examplePrefix}web, nginx`} />
+            </Field>
+          </div>
+
+          <Field label={t.envLabel} hint={t.envHint} group>
+            <Segmented
+              size="sm"
+              label={t.envLabel}
+              value={environment ?? "none"}
+              onChange={(value) => setEnvironment(value === "none" ? null : value)}
+              options={[
+                { value: "none", label: t.envNone },
+                { value: "production", label: t.envProduction },
+                { value: "staging", label: t.envStaging },
+                { value: "testing", label: t.envTesting },
+                // Marked "development" by a synced record: shown, so saving does not drop it.
+                ...(environment === "development" ? [{ value: "development" as const, label: t.envDevelopment }] : []),
+              ]}
+            />
+          </Field>
+
+          <Field label={t.color} group>
+            <div className="flex items-center gap-2">
+              <Swatch selected={color === null} label={t.noColor} onClick={() => setColor(null)} />
+              {COLORS.map((token, index) => (
+                <Swatch key={token} color={token} selected={color === token} label={`${t.color} ${index + 1}`} onClick={() => setColor(token)} />
+              ))}
+            </div>
+          </Field>
+
+          <div className="flex items-center justify-between gap-4">
+            <p className="flex items-center gap-2 text-callout text-label-2">
+              <Star className="size-4" strokeWidth={1.5} />
+              {t.favorite}
+            </p>
+            <Switch on={favorite} label={t.favorite} onClick={() => setFavorite(!favorite)} />
+          </div>
+
           <Field label={t.notes} hint={t.optional}>
             <Textarea value={fields.notes} onChange={(event) => set("notes", event.target.value)} rows={3} />
           </Field>
 
-          {saved && host && <HostVault hostId={host.id} onMoved={onDone} />}
-          {saved && host && <HostHistory hostId={host.id} onRestored={onDone} />}
-          {!serialOn && (
-            <Field label={t.keepSession}>
-              <Select aria-label={t.keepSession} value={keep} onChange={(event) => setKeep(event.target.value as KeepSession)}>
-                <option value="off">{t.keepSessionOff}</option>
-                <option value="tmux">tmux</option>
-                <option value="screen">screen</option>
-              </Select>
-              <span className="mt-1 block text-callout text-label-3">{t.keepSessionHint}</span>
+          <details
+            open={advancedOpen}
+            onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+            className="group"
+          >
+            <summary className="flex h-8 cursor-pointer list-none items-center gap-1 text-callout text-label-2 hover:text-label-1">
+              <ChevronRight className="size-4 transition-transform duration-micro group-open:rotate-90" strokeWidth={1.5} />
+              {t.advanced}
+              <span className="ml-1 truncate text-label-3">{t.hostAdvancedHint}</span>
+            </summary>
+            <div className="mt-3 space-y-5">
+            {!serialOn && (
+              <>
+                <Field label={t.proxyJump} hint={t.optional}>
+                  <Input
+                    value={fields.proxyJump ?? ""}
+                    onChange={(event) => set("proxyJump", event.target.value || null)}
+                    placeholder={`${t.examplePrefix}bastion`}
+                    className="font-mono"
+                    spellCheck={false}
+                  />
+                </Field>
+
+                <Field label={t.hostEngine} hint={t.optional}>
+                  <Select
+                    aria-label={t.hostEngine}
+                    value={fields.engine ?? "auto"}
+                    onChange={(event) => set("engine", event.target.value as EnginePreference)}
+                  >
+                    <option value="auto">{t.engineAuto}</option>
+                    <option value="russh">{t.engineBuiltin}</option>
+                    <option value="openssh">{t.engineOpenssh}</option>
+                  </Select>
+                </Field>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-callout text-label-1">{t.hostForwardX11}</p>
+                    <p className="mt-0.5 text-callout text-label-3">{t.hostForwardX11Hint}</p>
+                  </div>
+                  <Switch
+                    on={fields.forwardX11 ?? false}
+                    label={t.hostForwardX11}
+                    onClick={() => set("forwardX11", !fields.forwardX11)}
+                  />
+                </div>
+                <ProxySection
+                  proxy={fields.proxy ?? null}
+                  onChange={(proxy) => set("proxy", proxy)}
+                  openssh={fields.engine === "openssh"}
+                  password={{
+                    saved: savedSecrets.proxyPassword,
+                    value: drafts.proxyPassword.value,
+                    cleared: drafts.proxyPassword.cleared,
+                    onValue: (value) => draft("proxyPassword", { value, cleared: false }),
+                    onCleared: (cleared) => draft("proxyPassword", { cleared }),
+                  }}
+                />
+              </>
+            )}
+
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-callout text-label-1">{t.shellIntegration}</p>
+                <p className="mt-0.5 text-callout text-label-3">{t.shellIntegrationHint}</p>
+              </div>
+              <Switch
+                on={fields.shellIntegration}
+                label={t.shellIntegration}
+                onClick={() => set("shellIntegration", !fields.shellIntegration)}
+              />
+            </div>
+
+            {saved && host && <HostVault hostId={host.id} onMoved={onDone} />}
+            {saved && host && <HostHistory hostId={host.id} onRestored={onDone} />}
+            {!serialOn && (
+              <Field label={t.keepSession}>
+                <Select aria-label={t.keepSession} value={keep} onChange={(event) => setKeep(event.target.value as KeepSession)}>
+                  <option value="off">{t.keepSessionOff}</option>
+                  <option value="tmux">tmux</option>
+                  <option value="screen">screen</option>
+                </Select>
+                <span className="mt-1 block text-callout text-label-3">{t.keepSessionHint}</span>
+              </Field>
+            )}
+            <Field label={t.logsHost} hint={t.logsHostHint}>
+              <Segmented
+                size="sm"
+                label={t.logsHost}
+                value={logChoice}
+                onChange={setLogChoice}
+                options={[
+                  { value: "default", label: t.logsHostFollow },
+                  { value: "on", label: t.logsHostOn },
+                  { value: "off", label: t.logsHostOff },
+                ]}
+              />
             </Field>
-          )}
-          <Field label={t.logsHost} hint={t.logsHostHint}>
-            <Segmented
-              size="sm"
-              label={t.logsHost}
-              value={logChoice}
-              onChange={setLogChoice}
-              options={[
-                { value: "default", label: t.logsHostFollow },
-                { value: "on", label: t.logsHostOn },
-                { value: "off", label: t.logsHostOff },
-              ]}
-            />
-          </Field>
+            </div>
+          </details>
 
           {error && (
             <Notice>
@@ -539,15 +569,16 @@ export function HostEditor({
         </div>
 
         <div className="flex items-center justify-end gap-2 px-6 pt-4 pb-6">
-          <Button type="button" variant="secondary" onClick={onCancel}>
+          <Button type="button" variant={offerConnect ? "quiet" : "secondary"} onClick={onCancel}>
             {t.cancel}
           </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={busy || (serialOn && !serialReady(serial)) || (!serialOn && !proxyReady(fields.proxy))}
-          >
-            {t.save}
+          {offerConnect && (
+            <Button type="button" variant="secondary" disabled={!ready} onClick={() => void submit(false)}>
+              {t.save}
+            </Button>
+          )}
+          <Button type="submit" variant="primary" disabled={!ready}>
+            {offerConnect ? t.saveAndConnect : t.save}
           </Button>
         </div>
     </Overlay>
