@@ -1805,7 +1805,13 @@ check("端口转发", "forward-remote", "远程转发（-R）：服务器上的�
     await openHost(page);
     const remotePort = 20000 + Math.floor(Math.random() * 20000);
     await createTunnel(page, { name: "e2e-remote", kind: "remote", bindPort: remotePort, targetHost: "127.0.0.1", targetPort: localPort });
+    // Back to the session: with a session open the host list floats over the
+    // terminal (and covers it), so Esc puts it away again.
     await page.getByRole("button", { name: "主机", exact: true }).click();
+    if (await page.locator("main[inert]").count()) {
+      await page.keyboard.press("Escape");
+      await page.locator("main[inert]").waitFor({ state: "detached", timeout: 2000 });
+    }
     const text = await remoteOutput(page, `exec 3<>/dev/tcp/127.0.0.1/${remotePort} && head -1 <&3; exec 3<&-`);
     if (!/hello-from-local/.test(text)) throw new Error(`服务器上读到：${text}`);
     return `服务器 127.0.0.1:${remotePort} → 本机 ${localPort}`;
