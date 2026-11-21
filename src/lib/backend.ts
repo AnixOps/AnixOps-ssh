@@ -530,6 +530,10 @@ export interface TransferRequest {
 export interface VerifyResult {
   status: "match" | "mismatch" | "unavailable";
   files: number;
+  /** Of `files`, those already there with the same content and so not sent again. */
+  skippedVerified?: number;
+  /** Files the server could not hash. */
+  unverified?: number;
   path?: string | null;
   localSha256?: string | null;
   remoteSha256?: string | null;

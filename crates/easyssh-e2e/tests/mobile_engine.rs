@@ -1772,7 +1772,97 @@ mod resume {
         assert!(sums.contains(&sha_hex(b"")), "{sums}");
         let again = run(&s.engine, &s.entry, true, &tree, &remote, RESUME, None).await;
         assert_eq!(again.status, "completed");
-        assert_eq!(again.done()["verify"]["files"], 0, "nothing was sent again");
+        // Files left out as complete are still checked, and say so.
+        assert_eq!(again.done()["verify"]["files"], 3);
+        assert_eq!(again.done()["verify"]["skipped_verified"], 3);
+        s.finish().await;
+    }
+
+    /// Same length, same modification second, other content: the size and
+    /// time shortcut of a resumed transfer must not trust it when asked to
+    /// verify.
+    #[tokio::test]
+    #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+    async fn an_upload_that_looks_complete_is_verified_before_it_is_skipped() {
+        let s = setup().await;
+        let remote = format!("{}/looks same.txt", s.dir);
+        let local = s.local("looks same.txt");
+        std::fs::write(&local, b"0123456789").unwrap();
+        let first = run(&s.engine, &s.entry, true, &local, &remote, RESUME, None).await;
+        assert_eq!(first.status, "completed", "{:?}", first.done());
+        // Another file on the server with the same size and time.
+        let modified = std::fs::metadata(&local).unwrap().modified().unwrap();
+        sh(&s.shell, &format!("printf 'abcdefghij' > '{remote}'")).await;
+        s.entry
+            .sftp()
+            .set_stat(&remote, None, Some(modified))
+            .await
+            .unwrap();
+        assert_eq!(sh(&s.shell, &format!("cat '{remote}'")).await, "abcdefghij");
+
+        // Verification off: the old shortcut, the wrong content stays.
+        let off = Options {
+            resume: true,
+            verify: false,
+        };
+        let skipped = run(&s.engine, &s.entry, true, &local, &remote, off, None).await;
+        assert_eq!(skipped.status, "completed");
+        assert_eq!(sh(&s.shell, &format!("cat '{remote}'")).await, "abcdefghij");
+
+        // Verification on: the difference is found and the file sent again.
+        let fixed = run(&s.engine, &s.entry, true, &local, &remote, RESUME, None).await;
+        assert_eq!(fixed.status, "completed", "{:?}", fixed.done());
+        assert_eq!(sh(&s.shell, &format!("cat '{remote}'")).await, "0123456789");
+        assert_eq!(fixed.done()["verify"]["status"], "match");
+        assert_eq!(fixed.done()["verify"]["files"], 1);
+        assert_eq!(fixed.done()["verify"]["skipped_verified"], 0);
+
+        // Same content now: skipped, and recorded as checked.
+        let same = run(&s.engine, &s.entry, true, &local, &remote, RESUME, None).await;
+        assert_eq!(same.status, "completed");
+        assert_eq!(same.done()["verify"]["status"], "match");
+        assert_eq!(same.done()["verify"]["files"], 1);
+        assert_eq!(same.done()["verify"]["skipped_verified"], 1);
+        s.finish().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+    async fn a_download_that_looks_complete_is_verified_before_it_is_skipped() {
+        let s = setup().await;
+        let remote = format!("{}/looks same.txt", s.dir);
+        sh(&s.shell, &format!("printf 0123456789 > '{remote}'")).await;
+        let local = s.local("looks same.txt");
+        let off = Options {
+            resume: true,
+            verify: false,
+        };
+        let first = run(&s.engine, &s.entry, false, &local, &remote, off, None).await;
+        assert_eq!(first.status, "completed", "{:?}", first.done());
+        // Another local file with the same size and time.
+        let modified = std::fs::metadata(&local).unwrap().modified().unwrap();
+        std::fs::write(&local, b"abcdefghij").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&local)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+
+        let skipped = run(&s.engine, &s.entry, false, &local, &remote, off, None).await;
+        assert_eq!(skipped.status, "completed");
+        assert_eq!(std::fs::read(&local).unwrap(), b"abcdefghij");
+
+        let fixed = run(&s.engine, &s.entry, false, &local, &remote, RESUME, None).await;
+        assert_eq!(fixed.status, "completed", "{:?}", fixed.done());
+        assert_eq!(std::fs::read(&local).unwrap(), b"0123456789");
+        assert_eq!(fixed.done()["verify"]["status"], "match");
+        assert_eq!(fixed.done()["verify"]["skipped_verified"], 0);
+
+        let same = run(&s.engine, &s.entry, false, &local, &remote, RESUME, None).await;
+        assert_eq!(same.status, "completed");
+        assert_eq!(same.done()["verify"]["files"], 1);
+        assert_eq!(same.done()["verify"]["skipped_verified"], 1);
         s.finish().await;
     }
 
