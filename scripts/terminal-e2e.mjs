@@ -345,28 +345,30 @@ async function openHost(page, name = "prod-web-01") {
 }
 
 /** Text of the active terminal's viewport (or the whole buffer). */
-function screen(page, { all = false, index = -1 } = {}) {
+function screen(page, { all = false, index = -1, normal = false } = {}) {
   return page.evaluate(
-    ({ all, index }) => {
+    ({ all, index, normal }) => {
       const terminals = [...window.__anixopsE2eTerminals.values()];
       const terminal = terminals.at(index);
       if (!terminal) return "";
-      const buffer = terminal.buffer.active;
+      // `normal`: the main screen even while a full-screen program (tmux)
+      // shows the alternate one.
+      const buffer = normal ? terminal.buffer.normal : terminal.buffer.active;
       const start = all ? 0 : buffer.viewportY;
       const end = all ? buffer.length : buffer.viewportY + terminal.rows;
       const lines = [];
       for (let y = start; y < end; y++) lines.push(buffer.getLine(y)?.translateToString(true) ?? "");
       return lines.join("\n");
     },
-    { all, index },
+    { all, index, normal },
   );
 }
 
-async function waitScreen(page, pattern, { timeout = 15000, all = true, index = -1 } = {}) {
+async function waitScreen(page, pattern, { timeout = 15000, all = true, index = -1, normal = false } = {}) {
   const deadline = Date.now() + timeout;
   let text = "";
   while (Date.now() < deadline) {
-    text = await screen(page, { all, index });
+    text = await screen(page, { all, index, normal });
     if (pattern.test(text)) return text;
     await page.waitForTimeout(100);
   }
@@ -1070,7 +1072,8 @@ check("会话", "keep-session-tmux", "保留会话（tmux）：断开后重连�
   await page.locator(".xterm-screen").last().click();
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => window.__anixopsE2eOpened.length >= 2, null, { timeout: 15000 });
-  await waitScreen(page, /已回到主机上的 tmux 会话/);
+  // tmux switches to the alternate screen at once; the divider stays on the main one.
+  await waitScreen(page, /已回到主机上的 tmux 会话/, { normal: true });
   await waitScreen(page, new RegExp(mark), { all: false });
   await run(page, "tmux kill-session -t anixops");
   return "重连回到同一个 tmux 会话，之前的输出还在";
