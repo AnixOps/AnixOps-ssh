@@ -65,6 +65,7 @@ import { capabilityReply, mouseTrackingRequest, parseOsc52, sanitizeTitle, shoul
 import { binaryInput } from "@/lib/terminalBytes";
 import { registerTerminal, terminalFor } from "@/lib/terminals";
 import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
+import { attachCommand, claimSlot, hostKeepSession, keepSessionName, reconnectDivider } from "@/lib/keepSession";
 import { exitTitle, RESIZE_DEBOUNCE_MS, TERMINAL_RESET, trailingDebounce, type SessionEnd } from "@/lib/terminalSession";
 import { searchDecorations, terminalFont, terminalTheme } from "@/lib/terminalTheme";
 import { createTerminalTransfer } from "@/lib/terminalTransferFiles";
@@ -544,6 +545,8 @@ export function TerminalView({
     // only after a session that was open, and never past a question the
     // user had to answer (password, passphrase, host key).
     let everConnected = false;
+    // Keep session: the tmux/screen name stays with this view across reconnects.
+    const keepSlot = hostId ? claimSlot(hostId) : null;
     let connectedAt: number | undefined;
     let prompted = false;
     let closing = false;
@@ -647,6 +650,7 @@ export function TerminalView({
       };
       const attaching = reattach;
       reattach = undefined;
+      const kept = hostId ? hostKeepSession(hostId) : "off";
       (attaching
         ? attachSession(attaching, onEvent)
         : openSession(hostId, terminal.cols, terminal.rows, onEvent)
@@ -659,6 +663,11 @@ export function TerminalView({
           } else if (!exited) {
             sessionRef.current = session;
             onSession?.(tabKey, session.id);
+            // Enter the multiplexer on a fresh shell (a reattached one is
+            // already there). Typed once per shell, never replayed input.
+            if (!attaching && kept !== "off" && keepSlot) {
+              session.write(attachCommand(kept, keepSessionName(keepSlot.slot)));
+            }
             if (session.engine) {
               engine = { engine: session.engine, reason: session.engineReason ?? null };
               if (connected) report({ state: "connected", engine });
@@ -710,6 +719,9 @@ export function TerminalView({
       // reporting, bracketed paste) before the new one starts.
       output.flush();
       terminal.write(TERMINAL_RESET + "\r\n");
+      // After a shell that was up, say that this is a new one (local only,
+      // never sent to the host).
+      if (everConnected && hostId) terminal.write(reconnectDivider(new Date(), hostKeepSession(hostId)));
       start();
       terminal.focus();
     };
@@ -733,6 +745,7 @@ export function TerminalView({
 
     return () => {
       disposed = true;
+      keepSlot?.release();
       transfer.cancel();
       transfer.bind(null);
       stopTimer();
