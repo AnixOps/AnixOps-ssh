@@ -2,7 +2,7 @@
 //! ZMODEM protocol (src/lib/terminalTransfer.ts) and reads or writes the disk
 //! through these commands; the bookkeeping is `easyssh_engine::terminal_files`.
 
-use easyssh_engine::local_files::{safe_file_name, unique_path};
+use easyssh_engine::local_files::safe_file_name;
 use easyssh_engine::terminal_files::{SourceInfo, TerminalFiles};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -42,16 +42,17 @@ pub fn terminal_file_open_write(
     name: String,
     path: Option<String>,
 ) -> Result<Sink, String> {
-    let target = match path {
-        Some(path) => PathBuf::from(path),
+    let (id, target) = match path {
+        Some(path) => files.open_sink(&PathBuf::from(path))?,
         None => {
             let dir = dirs::download_dir()
                 .or_else(dirs::home_dir)
                 .ok_or("no Downloads folder was found")?;
-            unique_path(&dir, &safe_file_name(&name))?
+            // The name is reserved (not just checked), so two receives of the
+            // same name cannot end up in one file.
+            files.open_sink_unique(&dir, &safe_file_name(&name))?
         }
     };
-    let (id, target) = files.open_sink(&target)?;
     Ok(Sink {
         id,
         path: target.to_string_lossy().into_owned(),

@@ -20,7 +20,6 @@ use serde::Serialize;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
@@ -41,47 +40,34 @@ pub enum Support {
     None,
 }
 
-/// Where the install is: shown while it runs, read again after the page
-/// was closed and opened.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct Progress {
-    /// "downloading", "verifying", "installing", "restarting"; `None` when idle.
-    pub phase: Option<&'static str>,
-    pub downloaded: u64,
-    pub total: u64,
-}
+pub use crate::update_flow::Progress;
+use crate::update_flow::{Launcher, Machine, Relaunch, IDLE};
 
-const IDLE: Progress = Progress {
-    phase: None,
-    downloaded: 0,
-    total: 0,
-};
-
-static PROGRESS: Mutex<Progress> = Mutex::new(IDLE);
+static MACHINE: Machine = Machine::new();
 static CANCEL: AtomicBool = AtomicBool::new(false);
 const EVENT: &str = "update-progress";
 
 pub fn progress() -> Progress {
-    PROGRESS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    MACHINE.get()
 }
 
 fn set(app: &AppHandle, next: Progress) {
-    *PROGRESS.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
-    let _ = app.emit(EVENT, next);
+    MACHINE.set(next, &|p| {
+        let _ = app.emit(EVENT, p.clone());
+    });
 }
 
 pub fn cancel() {
     CANCEL.store(true, Ordering::SeqCst);
 }
 
-/// How the program can start again once the old process is gone.
-#[allow(dead_code)] // each platform uses one
-enum Relaunch {
-    /// The installer starts it (Windows `/R`).
-    ByInstaller,
-    /// Run this command once this process has exited.
-    After(Vec<std::ffi::OsString>),
+/// Starts the new version through the platform's helper process.
+struct PlatformLauncher;
+
+impl Launcher for PlatformLauncher {
+    fn spawn(&self, command: &[std::ffi::OsString]) -> Result<(), String> {
+        platform::relaunch_after_exit(command)
+    }
 }
 
 /// Worked out once: it probes the app's folder for write access.
@@ -101,13 +87,7 @@ pub async fn install(app: AppHandle, verifier: Verifier, update: Update) -> Resu
     if support() != Support::Auto {
         return Err("this installation cannot be updated from the app".into());
     }
-    {
-        let mut progress = PROGRESS.lock().unwrap_or_else(|e| e.into_inner());
-        if progress.phase.is_some() {
-            return Err("an update is already being installed".into());
-        }
-        progress.phase = Some("downloading");
-    }
+    MACHINE.begin()?;
     CANCEL.store(false, Ordering::SeqCst);
     let worker = app.clone();
     let result =
@@ -123,20 +103,29 @@ pub async fn install(app: AppHandle, verifier: Verifier, update: Update) -> Resu
             return Err(error.to_string());
         }
     };
-    set(
-        &app,
-        Progress {
-            phase: Some("restarting"),
-            ..progress()
-        },
-    );
-    if let Relaunch::After(command) = relaunch {
-        platform::relaunch_after_exit(&command)?;
-    }
+    // The files are replaced. A restart that cannot start leaves the
+    // recoverable "restartFailed" phase, not a stuck "restarting".
+    MACHINE.restart(relaunch, &PlatformLauncher, &|p| {
+        let _ = app.emit(EVENT, p.clone());
+    })?;
+    quit(&app).await;
+    Ok(())
+}
+
+/// "Restart" after the restart failed: starts the installed version again,
+/// without installing anything. Returns only on failure.
+pub async fn restart(app: AppHandle) -> Result<(), String> {
+    MACHINE.retry_restart(&PlatformLauncher, &|p| {
+        let _ = app.emit(EVENT, p.clone());
+    })?;
+    quit(&app).await;
+    Ok(())
+}
+
+async fn quit(app: &AppHandle) {
     // Let the page paint "Restarting…" before the window goes.
     tokio::time::sleep(Duration::from_millis(400)).await;
     app.exit(0);
-    Ok(())
 }
 
 fn run(app: &AppHandle, verifier: &Verifier, update: &Update) -> Result<Relaunch, String> {
@@ -164,6 +153,7 @@ fn run(app: &AppHandle, verifier: &Verifier, update: &Update) -> Result<Relaunch
                     phase: Some("downloading"),
                     downloaded: done,
                     total,
+                    error: None,
                 },
             );
         }
@@ -185,6 +175,7 @@ fn run(app: &AppHandle, verifier: &Verifier, update: &Update) -> Result<Relaunch
             phase: Some("verifying"),
             downloaded: total,
             total,
+            error: None,
         },
     );
     let verified = File::open(&part).map_err(|e| e.to_string()).and_then(|f| {
@@ -209,6 +200,7 @@ fn run(app: &AppHandle, verifier: &Verifier, update: &Update) -> Result<Relaunch
             phase: Some("installing"),
             downloaded: total,
             total,
+            error: None,
         },
     );
     std::fs::rename(&part, &file).map_err(|e| e.to_string())?;
@@ -217,6 +209,8 @@ fn run(app: &AppHandle, verifier: &Verifier, update: &Update) -> Result<Relaunch
 
 /// Removes installers left from earlier updates (the folder is ours).
 pub fn clean_old_downloads() {
+    #[cfg(target_os = "macos")]
+    platform::recover();
     let Ok(dir) = platform::download_dir() else {
         return;
     };
@@ -326,6 +320,7 @@ exec "$@""#;
 #[cfg(target_os = "macos")]
 mod platform {
     use super::{cache_dir, writable, Relaunch, Support};
+    use crate::update_swap;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -358,6 +353,16 @@ mod platform {
 
     pub fn saved_name(name: &str) -> String {
         name.to_owned()
+    }
+
+    /// At startup: finishes or undoes a swap that an earlier run did not
+    /// complete (a backup is only removed once the app is there).
+    pub fn recover() {
+        let Some(bundle) = bundle() else { return };
+        let (Some(parent), Some(name)) = (bundle.parent(), bundle.file_name()) else {
+            return;
+        };
+        let _ = update_swap::recover(&update_swap::RealFs, parent, &name.to_string_lossy());
     }
 
     fn run(command: &mut Command) -> Result<(), String> {
@@ -415,11 +420,11 @@ mod platform {
             .find(|p| p.extension().is_some_and(|e| e == "app"))
             .ok_or("the disk image holds no app")?;
 
-        // Copy next to the running app, on the same volume, then swap by renames.
-        let staged = parent.join(format!(".{name}.update"));
-        let old = parent.join(format!(".{name}.old"));
+        // Put an earlier cut-short swap right before anything is touched.
+        update_swap::recover(&update_swap::RealFs, parent, &name)?;
+        // Copy next to the running app, on the same volume, then swap.
+        let staged = update_swap::staged_path(parent, &name);
         let _ = std::fs::remove_dir_all(&staged);
-        let _ = std::fs::remove_dir_all(&old);
         run(Command::new("ditto").arg(&new_app).arg(&staged))
             .map_err(|e| format!("cannot copy the new version: {e}"))?;
         drop(mounted);
@@ -427,17 +432,17 @@ mod platform {
             .args(["-dr", "com.apple.quarantine"])
             .arg(&staged)
             .output();
-        std::fs::rename(&bundle, &old).map_err(|e| {
-            let _ = std::fs::remove_dir_all(&staged);
-            format!("cannot replace the app: {e}")
-        })?;
-        if let Err(e) = std::fs::rename(&staged, &bundle) {
-            let _ = std::fs::rename(&old, &bundle);
-            let _ = std::fs::remove_dir_all(&staged);
-            return Err(format!("cannot replace the app: {e}"));
-        }
-        // The running process keeps its open files; the old copy can go.
-        let _ = std::fs::remove_dir_all(&old);
+        // One atomic exchange where the volume has it; otherwise two renames
+        // with a unique backup and a marker, recovered after an interruption.
+        let unique = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        );
+        update_swap::replace_bundle(&update_swap::RealFs, &bundle, &staged, &unique)?;
         let _ = std::fs::remove_file(dmg);
         Ok(Relaunch::After(vec![
             "/usr/bin/open".into(),
@@ -450,6 +455,7 @@ mod platform {
 #[cfg(target_os = "linux")]
 mod platform {
     use super::{writable, Relaunch, Support};
+    use crate::update_swap;
     use std::path::{Path, PathBuf};
 
     pub use super::unix::relaunch_after_exit;
@@ -485,9 +491,11 @@ mod platform {
     pub fn install(file: &Path) -> Result<Relaunch, String> {
         use std::os::unix::fs::PermissionsExt;
         let image = appimage().ok_or("not running from an AppImage")?;
+        // The old file's permissions, and the owner may run it: group and
+        // other keep exactly what they had.
         let mode = std::fs::metadata(&image)
-            .map(|m| m.permissions().mode() | 0o111)
-            .unwrap_or(0o755);
+            .map(|m| update_swap::appimage_mode(m.permissions().mode()))
+            .unwrap_or(0o700);
         let replaced = std::fs::set_permissions(file, std::fs::Permissions::from_mode(mode))
             .and_then(|()| std::fs::rename(file, &image));
         if let Err(e) = replaced {
@@ -576,7 +584,7 @@ mod tests {
         assert_eq!(std::fs::read(&image).unwrap(), b"new");
         assert!(!new.exists());
         let mode = std::fs::metadata(&image).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o751);
+        assert_eq!(mode & 0o777, 0o750);
         std::env::remove_var("APPIMAGE");
         assert_eq!(platform::support(), Support::Package);
     }

@@ -2777,7 +2777,13 @@ pub struct TransferVerifyOutcome {
     pub path: ::std::option::Option<::std::string::String>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub remote_sha256: ::std::option::Option<::std::string::String>,
+    ///Of `files`, those already complete (same size and time) that were found equal and so not sent again.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub skipped_verified: ::std::option::Option<u64>,
     pub status: TransferVerifyOutcomeStatus,
+    ///Files that could not be checked because the server cannot hash them, including files left out as already complete without a check.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub unverified: ::std::option::Option<u64>,
 }
 ///`TransferVerifyOutcomeStatus`
 #[derive(
