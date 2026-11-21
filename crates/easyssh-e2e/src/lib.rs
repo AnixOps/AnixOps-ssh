@@ -12,6 +12,7 @@
 //! `SSH_AUTH_SOCK` is removed.
 #![cfg(unix)]
 
+pub mod bench;
 pub mod russh_support;
 pub mod sk;
 

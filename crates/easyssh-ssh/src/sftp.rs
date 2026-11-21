@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 use crate::session::Session;
 use russh_sftp::client::{Config as SftpConfig, SftpSession};
 use std::time::SystemTime;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 
 /// A remote file opened for reading or writing (`AsyncRead`, `AsyncWrite`,
 /// `AsyncSeek`). Call `shutdown()` (or `close()`) after writing.
@@ -257,6 +257,31 @@ impl Sftp {
     /// Creates the file (truncating an existing one) for writing.
     pub async fn create(&self, path: &str) -> Result<SftpFile> {
         Ok(self.session.create(path).await?)
+    }
+
+    /// Opens an existing file for reading, starting at `offset` (resuming a
+    /// download).
+    pub async fn open_read_at(&self, path: &str, offset: u64) -> Result<SftpFile> {
+        let mut file = self.open_read(path).await?;
+        if offset > 0 {
+            file.seek(std::io::SeekFrom::Start(offset))
+                .await
+                .map_err(|e| Error::Sftp(format!("seeking in {path}: {e}")))?;
+        }
+        Ok(file)
+    }
+
+    /// Opens an existing file for writing at `offset` without truncating it
+    /// (resuming an upload). Fails when the file does not exist.
+    pub async fn open_write_at(&self, path: &str, offset: u64) -> Result<SftpFile> {
+        let mut file = self
+            .session
+            .open_with_flags(path, russh_sftp::protocol::OpenFlags::WRITE)
+            .await?;
+        file.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(|e| Error::Sftp(format!("seeking in {path}: {e}")))?;
+        Ok(file)
     }
 
     /// Streams a remote file into `sink`; returns the byte count.

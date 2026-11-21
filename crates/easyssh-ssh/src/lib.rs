@@ -19,6 +19,7 @@ mod error;
 mod forward;
 #[cfg(test)]
 mod forward_tests;
+mod hash;
 mod interaction;
 pub mod known_hosts;
 mod params;
@@ -52,6 +53,7 @@ pub use channels::{ExecOutput, ExitStatus, ShellHandle, ShellOptions};
 pub use env::{default_terminal_modes, lang_for, local_shell_env, shell_env};
 pub use error::{AuthMethod, Error, Result};
 pub use forward::{Endpoint, Forward, ForwardFailures, ForwardKind};
+pub use hash::{parse_sha256, shell_quote};
 
 pub use interaction::{Decision, DenyAll, HostKeyDetails, Interaction, KbdPrompt};
 pub use known_hosts::{KnownHostStatus, KnownHosts, KnownHostsFile, MemoryKnownHosts};

@@ -205,6 +205,12 @@ impl LinkHandler for Proxy {
     fn transfer_progress(&self, transfer_id: &str, bytes: u64, total: Option<u64>) {
         self.user.transfer_progress(transfer_id, bytes, total);
     }
+    fn transfer_note(&self, transfer_id: &str, note: &str, resumed_from: Option<u64>) {
+        self.user.transfer_note(transfer_id, note, resumed_from);
+    }
+    fn transfer_verify(&self, transfer_id: &str, verify: &serde_json::Value) {
+        self.user.transfer_verify(transfer_id, verify);
+    }
     fn transfer_done(&self, transfer_id: &str, status: &str, error: Option<&str>) {
         self.user.transfer_done(transfer_id, status, error);
     }

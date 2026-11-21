@@ -11,8 +11,12 @@ description = "End-to-end tests that run the OpenSSH orchestration against real 
 async-trait = "0.1"
 easyssh-core = { path = "../easyssh-core" }
 easyssh-ssh = { path = "../easyssh-ssh", features = ["software-key"] }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "process"] }
 tempfile = "3"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
@@ -23,6 +27,4 @@ easyssh-crypto = { path = "../easyssh-crypto" }
 easyssh-sessionlog = { path = "../easyssh-sessionlog" }
 easyssh-store = { path = "../easyssh-store" }
 easyssh-vault = { path = "../easyssh-vault" }
-serde_json.workspace = true
-sha2.workspace = true
 tokio = { workspace = true, features = ["io-std"] }

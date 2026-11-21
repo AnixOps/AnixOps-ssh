@@ -1941,6 +1941,14 @@ export interface TransferStartParams {
   local_path: string;
   remote_path: string;
   recursive?: boolean;
+  /**
+   * Continue from the partial files an earlier try left (when their source is unchanged) and skip files that are already complete.
+   */
+  resume?: boolean;
+  /**
+   * Compare SHA-256 here and on the server for each file once it is there; a difference fails the transfer but keeps the file.
+   */
+  verify?: boolean;
 }
 /**
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -1961,6 +1969,14 @@ export interface TransferEnqueueParams {
   local_path: string;
   remote_path: string;
   recursive?: boolean;
+  /**
+   * Continue from the partial files an earlier try left (when their source is unchanged) and skip files that are already complete.
+   */
+  resume?: boolean;
+  /**
+   * Compare SHA-256 here and on the server for each file once it is there; a difference fails the transfer but keeps the file.
+   */
+  verify?: boolean;
 }
 /**
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
@@ -1992,6 +2008,11 @@ export interface TransferProgressEvent {
    * Bytes the whole transfer will move (a folder: the sum of its files), when known.
    */
   total?: number;
+  /**
+   * How the transfer went on from an earlier try: `resumed` (from `resumed_from` bytes), or it began again from zero because the source changed or the partial file was gone.
+   */
+  note?: "resumed" | "source_changed" | "part_missing";
+  resumed_from?: number;
 }
 /**
  * Event `transfer.started` payload: a queued transfer left the queue and runs.
@@ -2016,6 +2037,30 @@ export interface TransferDoneEvent {
    * Links a folder transfer left out: broken, or leading back up into a folder that holds them. Absent when none.
    */
   skipped?: number;
+  verify?: TransferVerifyOutcome;
+}
+/**
+ * Result of the SHA-256 check of a transfer (`transfer.done.verify`) or of `transfer.verify`. `unavailable`: the server has no sha256sum or shasum.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferVerifyOutcome".
+ */
+export interface TransferVerifyOutcome {
+  status: "match" | "mismatch" | "unavailable";
+  /**
+   * Files whose hashes were equal.
+   */
+  files?: number;
+  /**
+   * Remote path of the first file that differs.
+   */
+  path?: string;
+  local_sha256?: string;
+  remote_sha256?: string;
+  /**
+   * Why the server could not be asked.
+   */
+  detail?: string | null;
 }
 /**
  * Command `tunnel.start` payload (russh engine). Reply: TunnelStartResult; later changes arrive as `tunnel.status`.
@@ -2095,4 +2140,72 @@ export interface TunnelStatusEvent {
    * Why the last of `channel_errors` failed, e.g. `127.0.0.1:1: connect failed`.
    */
   last_channel_error?: string | null;
+}
+/**
+ * Command `transfer.partial` payload: does an earlier try of this transfer have partial files to continue? Reply: TransferPartialResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferPartialParams".
+ */
+export interface TransferPartialParams {
+  host_id: string;
+  direction: TransferDirection;
+  /**
+   * The source of an upload; for a download the target if known.
+   */
+  local_path?: string;
+  /**
+   * Final remote path (an upload names the remote file, not its directory).
+   */
+  remote_path: string;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferPartialResult".
+ */
+export interface TransferPartialResult {
+  found: boolean;
+  files?: number;
+  /**
+   * Bytes of the partial files when last recorded.
+   */
+  bytes?: number;
+  /**
+   * Bytes of those files when complete.
+   */
+  size?: number;
+  /**
+   * Where the download goes (the target of the earlier try).
+   */
+  local_path?: string;
+}
+/**
+ * Command `transfer.discard` payload: removes the partial files of this transfer (remote ones over a file session) and their records. Reply: TransferDiscardResult.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferDiscardParams".
+ */
+export interface TransferDiscardParams {
+  host_id: string;
+  direction: TransferDirection;
+  local_path?: string;
+  remote_path: string;
+}
+/**
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferDiscardResult".
+ */
+export interface TransferDiscardResult {
+  removed: number;
+}
+/**
+ * Command `transfer.verify` payload: compare SHA-256 of a local and a remote file. Reply: TransferVerifyOutcome.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "TransferVerifyParams".
+ */
+export interface TransferVerifyParams {
+  host_id: string;
+  local_path: string;
+  remote_path: string;
 }

@@ -4,6 +4,7 @@
 
 use crate::events::Events;
 use crate::local_files::safe_file_name;
+use crate::resume::{self, Entry, Journal};
 use crate::Lease;
 use easyssh_ssh::{DirEntry, EntryKind, Error as SshError, FileStat, Sftp};
 use serde_json::{json, Value};
@@ -15,13 +16,16 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, UNIX_EPOCH};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::runtime::Handle;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
 const CHUNK: usize = 64 * 1024;
 const PROGRESS_EVERY: Duration = Duration::from_millis(150);
+
+/// How often the length of a partial file is written to the journal.
+const JOURNAL_EVERY: Duration = Duration::from_secs(1);
 
 /// A file session no transfer is using is kept this long for the next one.
 const IDLE_SESSION: Duration = Duration::from_secs(20);
@@ -37,7 +41,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// An open file session. Dropping it releases the connection lease.
 pub struct SftpEntry {
     sftp: Sftp,
-    _lease: Lease,
+    lease: Lease,
 }
 
 /// The file a transfer is writing right now, under a temporary name next to
@@ -82,6 +86,9 @@ pub struct Files {
     pools: Mutex<HashMap<String, Arc<Pool>>>,
     limit: AtomicUsize,
     next: AtomicU64,
+    /// Records of partial files; without one a stopped transfer removes its
+    /// temporary file as it always did.
+    journal: Mutex<Option<Arc<Journal>>>,
 }
 
 impl Default for Files {
@@ -92,6 +99,7 @@ impl Default for Files {
             pools: Mutex::default(),
             limit: AtomicUsize::new(easyssh_core::transfer::concurrent_transfers()),
             next: AtomicU64::new(0),
+            journal: Mutex::new(None),
         }
     }
 }
@@ -251,13 +259,7 @@ impl Files {
     pub async fn open_with(&self, sftp: Sftp, lease: Lease) -> Result<(String, String), SshError> {
         let home = sftp.home().await?;
         let id = self.id("sftp");
-        lock(&self.sessions).insert(
-            id.clone(),
-            Arc::new(SftpEntry {
-                sftp,
-                _lease: lease,
-            }),
-        );
+        lock(&self.sessions).insert(id.clone(), Arc::new(SftpEntry { sftp, lease }));
         Ok((id, home))
     }
 
@@ -283,6 +285,51 @@ impl Files {
         }
         lock(&self.sessions).clear();
         lock(&self.pools).clear();
+    }
+
+    /// Keeps partial files of stopped transfers, with records in `dir`, so
+    /// they can be continued (see [`resume`]). Records and local partial
+    /// files older than a week are removed now.
+    pub fn set_resume_dir(&self, dir: PathBuf) {
+        *lock(&self.journal) = Some(Arc::new(Journal::open(dir)));
+    }
+
+    /// The partial files an earlier try of this transfer left, if there is a
+    /// journal. `local` is the source of an upload or the target of a
+    /// download; `None` matches any (a download's target name is not known
+    /// before it starts).
+    pub fn partials(
+        &self,
+        host: &str,
+        upload: bool,
+        local: Option<&str>,
+        remote: &str,
+    ) -> Vec<Entry> {
+        let journal = lock(&self.journal).clone();
+        journal.map_or_else(Vec::new, |j| j.find(host, upload, local, remote))
+    }
+
+    /// Removes partial files and their records. Remote ones need `sftp`;
+    /// without it only the records and the local files go. Returns how many
+    /// files were removed.
+    pub async fn discard_partials(&self, entries: &[Entry], sftp: Option<&Sftp>) -> usize {
+        let journal = lock(&self.journal).clone();
+        let mut removed = 0;
+        for entry in entries {
+            if let Some(journal) = &journal {
+                journal.discard_local(entry);
+            }
+            if entry.upload {
+                if let Some(sftp) = sftp {
+                    if sftp.remove_file(&entry.part).await.is_ok() {
+                        removed += 1;
+                    }
+                }
+            } else {
+                removed += 1;
+            }
+        }
+        removed
     }
 
     /// Sets how many transfers of a host run at once (at least 1). Applies to
@@ -315,11 +362,36 @@ impl Files {
         recursive: bool,
         broadcast: Events,
     ) -> String {
+        self.start_transfer_with(
+            entry,
+            upload,
+            local,
+            remote,
+            recursive,
+            Options::default(),
+            broadcast,
+        )
+    }
+
+    /// [`start_transfer`](Self::start_transfer) with [`Options`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_transfer_with(
+        &self,
+        entry: Arc<SftpEntry>,
+        upload: bool,
+        local: PathBuf,
+        remote: String,
+        recursive: bool,
+        options: Options,
+        broadcast: Events,
+    ) -> String {
         let work = Work {
             upload,
             local,
             remote,
             recursive,
+            host: String::new(),
+            options,
         };
         self.launch(None, Some(entry), work, broadcast).0
     }
@@ -341,11 +413,38 @@ impl Files {
         recursive: bool,
         broadcast: Events,
     ) -> (String, bool) {
+        self.start_queued_transfer_with(
+            key,
+            open,
+            upload,
+            local,
+            remote,
+            recursive,
+            Options::default(),
+            broadcast,
+        )
+    }
+
+    /// [`start_queued_transfer`](Self::start_queued_transfer) with [`Options`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_queued_transfer_with(
+        &self,
+        key: &str,
+        open: Opener,
+        upload: bool,
+        local: PathBuf,
+        remote: String,
+        recursive: bool,
+        options: Options,
+        broadcast: Events,
+    ) -> (String, bool) {
         let work = Work {
             upload,
             local,
             remote,
             recursive,
+            host: key.to_owned(),
+            options,
         };
         self.launch(Some((self.pool(key), open)), None, work, broadcast)
     }
@@ -376,6 +475,7 @@ impl Files {
         };
         let queued = permits.is_some();
         let queued_pool = queue.is_some();
+        let journal = lock(&self.journal).clone();
         let task = tokio::spawn(async move {
             let _ = gate.await;
             let mut permit = immediate;
@@ -392,10 +492,7 @@ impl Files {
                 let got = match pool.take() {
                     Some(entry) => Ok(entry),
                     None => match open.await {
-                        Ok((sftp, lease)) => Ok(Arc::new(SftpEntry {
-                            sftp,
-                            _lease: lease,
-                        })),
+                        Ok((sftp, lease)) => Ok(Arc::new(SftpEntry { sftp, lease })),
                         Err(message) => Err(message),
                     },
                 };
@@ -420,8 +517,15 @@ impl Files {
             };
             let mut job = Job {
                 sftp: &task_entry.sftp,
+                session: &task_entry.lease,
                 progress: Progress::new(task_id.clone(), broadcast.clone()),
                 current: task_current.clone(),
+                journal,
+                host: work.host.clone(),
+                top_local: work.local.to_string_lossy().into_owned(),
+                top_remote: work.remote.clone(),
+                options: work.options,
+                verified: Verified::default(),
             };
             // Size the work first so the pane can show a percentage and the
             // time left, for a folder as well as a file.
@@ -465,6 +569,9 @@ impl Files {
             let mut done = json!({"transfer_id": task_id, "status": status, "error": error});
             if skipped > 0 {
                 done["skipped"] = json!(skipped);
+            }
+            if work.options.verify && (status == "completed" || job.verified.active()) {
+                done["verify"] = job.verified.json();
             }
             // The next in line starts once this one has reported its end.
             broadcast.emit("transfer.done", done);
@@ -528,6 +635,19 @@ struct Work {
     local: PathBuf,
     remote: String,
     recursive: bool,
+    /// The host's queue key, part of what a partial file belongs to.
+    host: String,
+    options: Options,
+}
+
+/// What a transfer is asked to do besides moving the bytes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Options {
+    /// Continue from the partial files an earlier try left, and skip files
+    /// that are already complete (same size and modification time).
+    pub resume: bool,
+    /// Compare SHA-256 of each file here and on the server once it is there.
+    pub verify: bool,
 }
 
 async fn remove_partial(sftp: &Sftp, current: &Current) {
@@ -561,9 +681,149 @@ fn local_part(path: &Path) -> PathBuf {
 /// What one transfer works with.
 struct Job<'a> {
     sftp: &'a Sftp,
+    /// The connection the file session runs on, for commands (`sha256sum`).
+    session: &'a easyssh_ssh::Session,
     progress: Progress,
     /// The file being written now, for a cancel or failure to remove.
     current: Current,
+    journal: Option<Arc<Journal>>,
+    host: String,
+    top_local: String,
+    top_remote: String,
+    options: Options,
+    verified: Verified,
+}
+
+/// How the checks of a transfer's files came out.
+#[derive(Default)]
+struct Verified {
+    /// Files whose two SHA-256 are equal.
+    matched: u64,
+    /// Why the server could not be asked, when it could not.
+    unavailable: Option<String>,
+    /// The first file whose two SHA-256 differ: remote path, local, remote.
+    mismatch: Option<(String, String, String)>,
+}
+
+impl Verified {
+    /// Did any file get checked, or fail to be?
+    fn active(&self) -> bool {
+        self.matched > 0 || self.unavailable.is_some() || self.mismatch.is_some()
+    }
+
+    fn json(&self) -> Value {
+        if let Some((path, local, remote)) = &self.mismatch {
+            json!({"status": "mismatch", "files": self.matched, "path": path,
+                   "local_sha256": local, "remote_sha256": remote})
+        } else if self.matched == 0 && self.unavailable.is_some() {
+            json!({"status": "unavailable", "files": 0, "detail": self.unavailable})
+        } else {
+            json!({"status": "match", "files": self.matched})
+        }
+    }
+}
+
+/// The two SHA-256 of a file here and on the server.
+pub enum Check {
+    Match(String),
+    Mismatch {
+        local: String,
+        remote: String,
+    },
+    /// The server has no `sha256sum` or `shasum`, or could not run it.
+    Unavailable(String),
+}
+
+/// Hashes `local` and asks the server for the hash of `remote`.
+pub async fn check_file(
+    session: &easyssh_ssh::Session,
+    local: &Path,
+    remote: &str,
+) -> Result<Check, SshError> {
+    let path = local.to_owned();
+    let hashing = tokio::task::spawn_blocking(move || resume::sha256_file(&path));
+    let remote_hash = session.remote_sha256(remote).await;
+    let here = hashing
+        .await
+        .map_err(|e| SshError::Sftp(format!("hashing {}: {e}", local.display())))?
+        .map_err(|e| self::local(e, local))?;
+    Ok(match remote_hash {
+        Ok(Some(there)) if there == here => Check::Match(here),
+        Ok(Some(there)) => Check::Mismatch {
+            local: here,
+            remote: there,
+        },
+        Ok(None) => Check::Unavailable("no sha256sum on the server".into()),
+        Err(error) => Check::Unavailable(error.to_string()),
+    })
+}
+
+/// Checks a finished file when the transfer was asked to. A difference
+/// fails the transfer but leaves the file where it is.
+async fn verify_file(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Result<(), SshError> {
+    if !job.options.verify {
+        return Ok(());
+    }
+    match check_file(job.session, local_path, remote).await? {
+        Check::Match(_) => job.verified.matched += 1,
+        Check::Unavailable(detail) => job.verified.unavailable = Some(detail),
+        Check::Mismatch {
+            local,
+            remote: there,
+        } => {
+            job.verified.mismatch = Some((remote.to_owned(), local, there));
+            return Err(SshError::Sftp(format!(
+                "SHA-256 of {remote} differs from the local file"
+            )));
+        }
+    }
+    Ok(())
+}
+
+impl Job<'_> {
+    #[allow(clippy::too_many_arguments)]
+    fn record(
+        &self,
+        upload: bool,
+        local: &str,
+        remote: &str,
+        part: &str,
+        size: u64,
+        mtime: Option<u64>,
+        bytes: u64,
+    ) {
+        if let Some(journal) = &self.journal {
+            journal.save(&Entry {
+                host: self.host.clone(),
+                upload,
+                local: local.to_owned(),
+                remote: remote.to_owned(),
+                part: part.to_owned(),
+                size,
+                mtime,
+                bytes,
+                top_local: self.top_local.clone(),
+                top_remote: self.top_remote.clone(),
+                updated: resume::now_secs(),
+            });
+        }
+    }
+
+    fn forget(&self, upload: bool, local: &str, remote: &str) {
+        if let Some(journal) = &self.journal {
+            journal.remove(&self.host, upload, local, remote);
+        }
+    }
+
+    /// The record of the partial file of this file, when resuming.
+    fn earlier(&self, upload: bool, local: &str, remote: &str) -> Option<Entry> {
+        if !self.options.resume {
+            return None;
+        }
+        self.journal
+            .as_ref()?
+            .load(&self.host, upload, local, remote)
+    }
 }
 
 impl Job<'_> {
@@ -608,6 +868,20 @@ impl Progress {
 
     fn emit(&self) {
         let mut payload = json!({"transfer_id": self.id, "bytes": self.bytes});
+        if let Some(total) = self.total {
+            payload["total"] = json!(total);
+        }
+        self.broadcast.emit("transfer.progress", payload);
+    }
+
+    /// Tells the client how the transfer went on from an earlier try:
+    /// `resumed` (from `offset` bytes), `source_changed` or `part_missing`
+    /// (it began again from zero).
+    fn note(&self, note: &str, offset: u64) {
+        let mut payload = json!({"transfer_id": self.id, "bytes": self.bytes, "note": note});
+        if note == "resumed" {
+            payload["resumed_from"] = json!(offset);
+        }
         if let Some(total) = self.total {
             payload["total"] = json!(total);
         }
@@ -698,6 +972,9 @@ async fn upload_file(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Resu
     let mut source = tokio::fs::File::open(local_path)
         .await
         .map_err(|e| local(e, local_path))?;
+    let metadata = source.metadata().await.ok();
+    let size = metadata.as_ref().map_or(0, |m| m.len());
+    let mtime = resume::secs(metadata.as_ref().and_then(|m| m.modified().ok()));
     // Uploading onto a link replaces the file it points to, as writing
     // through it did. A broken link is replaced itself.
     let mut existing = sftp.lstat(remote).await.ok();
@@ -714,9 +991,70 @@ async fn upload_file(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Resu
     if existing.as_ref().is_some_and(|s| s.kind == EntryKind::Dir) {
         return Err(SshError::Sftp(format!("{remote} is a folder")));
     }
+    let local_key = local_path.to_string_lossy().into_owned();
+    // A resumed transfer leaves out what is already there complete: same
+    // size and, as an upload sets it, the same modification time.
+    if job.options.resume {
+        if let Some(there) = &existing {
+            if there.kind == EntryKind::File
+                && there.size == size
+                && mtime.is_some()
+                && resume::secs(there.modified) == mtime
+            {
+                job.progress.add(size);
+                return Ok(());
+            }
+        }
+    }
     let part = remote_part(&target);
-    job.writing(Some(Partial::Remote(part.clone())));
-    let mut file = at(sftp.create(&part).await, "creating", &part)?;
+    // Where to continue: only when the same source made the partial file.
+    let mut offset = 0;
+    if let Some(earlier) = job.earlier(true, &local_key, &target) {
+        let usable = earlier.same_source(size, mtime) && earlier.part == part;
+        let there = if usable {
+            sftp.stat(&part).await.ok().map(|s| s.size)
+        } else {
+            None
+        };
+        match there.and_then(|len| resume::resume_offset(true, len, size)) {
+            Some(start) => offset = start,
+            None => job.progress.note(
+                if usable {
+                    "part_missing"
+                } else {
+                    "source_changed"
+                },
+                0,
+            ),
+        }
+    }
+    let keep = job.journal.is_some();
+    if !keep {
+        job.writing(Some(Partial::Remote(part.clone())));
+    }
+    let mut file = if offset > 0 {
+        match sftp.open_write_at(&part, offset).await {
+            Ok(file) => file,
+            Err(_) => {
+                offset = 0;
+                job.progress.note("part_missing", 0);
+                at(sftp.create(&part).await, "creating", &part)?
+            }
+        }
+    } else {
+        at(sftp.create(&part).await, "creating", &part)?
+    };
+    if offset > 0 {
+        source
+            .seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(|e| local(e, local_path))?;
+        job.progress.add(offset);
+        job.progress.note("resumed", offset);
+    }
+    job.record(true, &local_key, &target, &part, size, mtime, offset);
+    let mut moved = offset;
+    let mut saved = Instant::now();
     let mut buffer = vec![0u8; CHUNK];
     loop {
         let read = source
@@ -729,17 +1067,25 @@ async fn upload_file(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Resu
         file.write_all(&buffer[..read])
             .await
             .map_err(|e| SshError::Sftp(format!("writing {remote}: {e}")))?;
+        moved += read as u64;
         job.progress.add(read as u64);
+        if saved.elapsed() >= JOURNAL_EVERY {
+            saved = Instant::now();
+            job.record(true, &local_key, &target, &part, size, mtime, moved);
+        }
     }
     file.shutdown()
         .await
         .map_err(|e| SshError::Sftp(format!("closing {remote}: {e}")))?;
     drop(file);
+    // All the data is there: from here a failure removes the temporary file
+    // instead of keeping it for a resume.
+    job.forget(true, &local_key, &target);
+    job.writing(Some(Partial::Remote(part.clone())));
     // A replaced file keeps its own permissions, as it did when it was
     // overwritten in place; a new one gets the local permissions, like
     // `put -p`. Both get the local modification time. A server that refuses
     // leaves an upload that is still complete.
-    let metadata = source.metadata().await.ok();
     let mode = existing
         .as_ref()
         .and_then(|s| s.permissions)
@@ -757,7 +1103,7 @@ async fn upload_file(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Resu
         at(sftp.rename(&part, &target).await, "renaming to", &target)?;
     }
     job.writing(None);
-    Ok(())
+    verify_file(job, local_path, &target).await
 }
 /// The permission bits of a local file; Windows has none to give.
 fn local_mode(metadata: &std::fs::Metadata) -> Option<u32> {
@@ -859,12 +1205,75 @@ async fn upload_path(
 
 async fn download_file(job: &mut Job<'_>, remote: &str, local_path: &Path) -> Result<(), SshError> {
     let stat = at(job.sftp.stat(remote).await, "reading", remote)?;
-    let mut file = at(job.sftp.open_read(remote).await, "opening", remote)?;
+    let size = stat.size;
+    let mtime = resume::secs(stat.modified);
+    // A resumed transfer leaves out what is already there complete: same
+    // size and, as a download sets it, the same modification time.
+    if job.options.resume {
+        if let Ok(here) = tokio::fs::metadata(local_path).await {
+            if here.is_file()
+                && here.len() == size
+                && mtime.is_some()
+                && resume::secs(here.modified().ok()) == mtime
+            {
+                job.progress.add(size);
+                return Ok(());
+            }
+        }
+    }
     let part = local_part(local_path);
-    job.writing(Some(Partial::Local(part.clone())));
-    let mut sink = tokio::fs::File::create(&part)
-        .await
-        .map_err(|e| local(e, &part))?;
+    let part_text = part.to_string_lossy().into_owned();
+    let local_key = local_path.to_string_lossy().into_owned();
+    let mut offset = 0;
+    if let Some(earlier) = job.earlier(false, &local_key, remote) {
+        let usable = earlier.same_source(size, mtime) && earlier.part == part_text;
+        let here = if usable {
+            tokio::fs::metadata(&part).await.ok().map(|m| m.len())
+        } else {
+            None
+        };
+        match here.and_then(|len| resume::resume_offset(false, len, size)) {
+            Some(start) => offset = start,
+            None => job.progress.note(
+                if usable {
+                    "part_missing"
+                } else {
+                    "source_changed"
+                },
+                0,
+            ),
+        }
+    }
+    let mut file = at(
+        job.sftp.open_read_at(remote, offset).await,
+        "opening",
+        remote,
+    )?;
+    let keep = job.journal.is_some();
+    if !keep {
+        job.writing(Some(Partial::Local(part.clone())));
+    }
+    let mut sink = if offset > 0 {
+        let mut sink = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&part)
+            .await
+            .map_err(|e| local(e, &part))?;
+        sink.set_len(offset).await.map_err(|e| local(e, &part))?;
+        sink.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(|e| local(e, &part))?;
+        job.progress.add(offset);
+        job.progress.note("resumed", offset);
+        sink
+    } else {
+        tokio::fs::File::create(&part)
+            .await
+            .map_err(|e| local(e, &part))?
+    };
+    job.record(false, &local_key, remote, &part_text, size, mtime, offset);
+    let mut moved = offset;
+    let mut saved = Instant::now();
     let mut buffer = vec![0u8; CHUNK];
     loop {
         let read = file
@@ -877,9 +1286,24 @@ async fn download_file(job: &mut Job<'_>, remote: &str, local_path: &Path) -> Re
         sink.write_all(&buffer[..read])
             .await
             .map_err(|e| local(e, &part))?;
+        moved += read as u64;
         job.progress.add(read as u64);
+        if saved.elapsed() >= JOURNAL_EVERY {
+            saved = Instant::now();
+            // What is on disk is a prefix of the file only once flushed.
+            sink.flush().await.map_err(|e| local(e, &part))?;
+            job.record(false, &local_key, remote, &part_text, size, mtime, moved);
+        }
     }
     sink.flush().await.map_err(|e| local(e, &part))?;
+    if moved < size {
+        // The server ended the file early (it changed while it was read).
+        return Err(SshError::Sftp(format!(
+            "{remote} ended after {moved} of {size} bytes"
+        )));
+    }
+    job.forget(false, &local_key, remote);
+    job.writing(Some(Partial::Local(part.clone())));
     let sink = sink.into_std().await;
     preserve_local(&sink, &stat).map_err(|e| local(e, &part))?;
     drop(sink);
@@ -887,7 +1311,7 @@ async fn download_file(job: &mut Job<'_>, remote: &str, local_path: &Path) -> Re
         .await
         .map_err(|e| local(e, local_path))?;
     job.writing(None);
-    Ok(())
+    verify_file(job, local_path, remote).await
 }
 
 async fn download_path(
@@ -947,6 +1371,11 @@ async fn download_path(
 }
 
 impl SftpEntry {
+    /// The SFTP channel itself.
+    pub fn sftp(&self) -> &Sftp {
+        &self.sftp
+    }
+
     /// The listing as the mobile file browser shows it: directories first,
     /// then by name, without the names that cannot be safely joined.
     pub async fn list_view(&self, path: &str) -> Result<Vec<Value>, SshError> {

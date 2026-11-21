@@ -22,4 +22,6 @@ socat TCP-LISTEN:7777,bind=127.0.0.1,fork,reuseaddr EXEC:cat &
 # The same echo on a Unix socket (direct-streamlocal forwards).
 socat UNIX-LISTEN:/tmp/e2e-echo.sock,fork,mode=0666,unlink-early EXEC:cat &
 
-exec /usr/sbin/sshd -D -e
+# SSHD_OPTS is only set by e2e/docker-compose.bench.yml (a pinned cipher and kex).
+# shellcheck disable=SC2086
+exec /usr/sbin/sshd -D -e ${SSHD_OPTS:-}

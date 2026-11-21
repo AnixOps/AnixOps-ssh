@@ -42,6 +42,8 @@ export interface Settings {
   followTerminalFolder: boolean;
   /** A double-click on a file in the files pane: open it in the editor (FinalShell, WinSCP) or download it. */
   filesDoubleClick: "edit" | "download";
+  /** Compare SHA-256 of a file here and on the server after each transfer. */
+  filesVerifyTransfers: boolean;
   /** The SSH engine for hosts that follow the global setting: the built-in
    * engine unless OpenSSH was chosen (an advanced option kept for compatibility). */
   sshEngine: SshEngine;
@@ -71,6 +73,7 @@ let current: Settings = {
   editorCommand: "",
   followTerminalFolder: false,
   filesDoubleClick: "edit",
+  filesVerifyTransfers: false,
   sshEngine: "russh",
   crashReports: null,
   usageStats: false,

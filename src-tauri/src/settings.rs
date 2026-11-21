@@ -66,6 +66,9 @@ pub struct Settings {
     /// What a double-click on a file in the files pane does.
     #[serde(default)]
     files_double_click: FileDoubleClick,
+    /// Compare SHA-256 of a file here and on the server after each transfer.
+    #[serde(default)]
+    files_verify_transfers: bool,
 }
 
 /// A double-click on a file: open it in the editor (FinalShell, MobaXterm,
@@ -121,6 +124,7 @@ struct FilesBehaviour {
     editor_command: String,
     follow_terminal_folder: bool,
     double_click: FileDoubleClick,
+    verify_transfers: bool,
 }
 
 const FILES_BEHAVIOUR: &str = "files_behaviour";
@@ -216,6 +220,7 @@ pub fn settings_get() -> Result<Settings, String> {
         editor_command: files.editor_command,
         follow_terminal_folder: files.follow_terminal_folder,
         files_double_click: files.double_click,
+        files_verify_transfers: files.verify_transfers,
     })
 }
 
@@ -277,6 +282,7 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
         editor_command: settings.editor_command.trim().to_owned(),
         follow_terminal_folder: settings.follow_terminal_folder,
         double_click: settings.files_double_click,
+        verify_transfers: settings.files_verify_transfers,
     };
     if files != files_behaviour() {
         store

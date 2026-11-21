@@ -389,6 +389,41 @@ jobs:
             for feed in feeds/*.appcast.json; do echo "- $(basename "$feed")"; done
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # The full benchmark run (docs/benchmarks.md) for the tagged commit, attached
+  # to the release when it finishes. Like the mobile jobs it is not in
+  # publish's needs: it takes a while, and a failure here never blocks or
+  # fails the release itself.
+  bench:
+    name: Benchmarks
+    needs: prepare
+    uses: ./.github/workflows/bench.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+
+  bench-attach:
+    name: Attach benchmark report
+    needs: bench
+    if: ${{ !cancelled() && needs.bench.result == 'success' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: bench-results
+          path: bench
+      - name: Attach to the release and add a summary to its notes
+        run: |
+          gh release upload "$TAG" bench/bench-report.md bench/bench.json --repo "$GITHUB_REPOSITORY" --clobber
+          body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body)
+          if ! grep -q '^### Benchmarks' <<< "$body"; then
+            printf '%s\n\n%s\n' "$body" "$(cat bench/release-summary.md)" > notes.md
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
+          fi
+          cat bench/bench-report.md >> "$GITHUB_STEP_SUMMARY"
+
   publish:
     name: Publish release
     needs: [build, update-feed]
