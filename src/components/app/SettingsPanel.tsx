@@ -470,6 +470,13 @@ export function SettingsPage({
                   ]}
                 />
               </SettingsRow>
+              <SettingsRow label={t.verifyTransfers} hint={t.verifyTransfersHint}>
+                <Switch
+                  on={current.filesVerifyTransfers}
+                  label={t.verifyTransfers}
+                  onClick={() => update({ filesVerifyTransfers: !current.filesVerifyTransfers })}
+                />
+              </SettingsRow>
               <SettingsRow label={t.editorCommand} hint={t.editorCommandHint} stacked>
                 <Input
                   value={editor}

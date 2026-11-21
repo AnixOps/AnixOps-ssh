@@ -2370,6 +2370,22 @@ impl ::std::convert::TryFrom<::std::string::String> for TransferDirection {
         value.parse()
     }
 }
+///Command `transfer.discard` payload: removes the partial files of this transfer (remote ones over a file session) and their records. Reply: TransferDiscardResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferDiscardParams {
+    pub direction: TransferDirection,
+    pub host_id: ::std::string::String,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub local_path: ::std::option::Option<::std::string::String>,
+    pub remote_path: ::std::string::String,
+}
+///`TransferDiscardResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferDiscardResult {
+    pub removed: u64,
+}
 ///Event `transfer.done` payload.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
@@ -2381,6 +2397,8 @@ pub struct TransferDoneEvent {
     pub skipped: ::std::option::Option<u64>,
     pub status: TransferDoneEventStatus,
     pub transfer_id: ::std::string::String,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub verify: ::std::option::Option<TransferVerifyOutcome>,
 }
 ///`TransferDoneEventStatus`
 #[derive(
@@ -2451,6 +2469,12 @@ pub struct TransferEnqueueParams {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub recursive: ::std::option::Option<bool>,
     pub remote_path: ::std::string::String,
+    ///Continue from the partial files an earlier try left (when their source is unchanged) and skip files that are already complete.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub resume: ::std::option::Option<bool>,
+    ///Compare SHA-256 here and on the server for each file once it is there; a difference fails the transfer but keeps the file.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub verify: ::std::option::Option<bool>,
 }
 ///`TransferEnqueueResult`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -2459,15 +2483,108 @@ pub struct TransferEnqueueResult {
     pub queued: bool,
     pub transfer_id: ::std::string::String,
 }
+///Command `transfer.partial` payload: does an earlier try of this transfer have partial files to continue? Reply: TransferPartialResult.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferPartialParams {
+    pub direction: TransferDirection,
+    pub host_id: ::std::string::String,
+    ///The source of an upload; for a download the target if known.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub local_path: ::std::option::Option<::std::string::String>,
+    ///Final remote path (an upload names the remote file, not its directory).
+    pub remote_path: ::std::string::String,
+}
+///`TransferPartialResult`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferPartialResult {
+    ///Bytes of the partial files when last recorded.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub bytes: ::std::option::Option<u64>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub files: ::std::option::Option<u64>,
+    pub found: bool,
+    ///Where the download goes (the target of the earlier try).
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub local_path: ::std::option::Option<::std::string::String>,
+    ///Bytes of those files when complete.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub size: ::std::option::Option<u64>,
+}
 ///Event `transfer.progress` payload: bytes moved so far, and the total when known.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TransferProgressEvent {
     pub bytes: u64,
+    ///How the transfer went on from an earlier try: `resumed` (from `resumed_from` bytes), or it began again from zero because the source changed or the partial file was gone.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub note: ::std::option::Option<TransferProgressEventNote>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub resumed_from: ::std::option::Option<u64>,
     ///Bytes the whole transfer will move (a folder: the sum of its files), when known.
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub total: ::std::option::Option<u64>,
     pub transfer_id: ::std::string::String,
+}
+///How the transfer went on from an earlier try: `resumed` (from `resumed_from` bytes), or it began again from zero because the source changed or the partial file was gone.
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum TransferProgressEventNote {
+    #[serde(rename = "resumed")]
+    Resumed,
+    #[serde(rename = "source_changed")]
+    SourceChanged,
+    #[serde(rename = "part_missing")]
+    PartMissing,
+}
+impl ::std::fmt::Display for TransferProgressEventNote {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Resumed => f.write_str("resumed"),
+            Self::SourceChanged => f.write_str("source_changed"),
+            Self::PartMissing => f.write_str("part_missing"),
+        }
+    }
+}
+impl ::std::str::FromStr for TransferProgressEventNote {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "resumed" => Ok(Self::Resumed),
+            "source_changed" => Ok(Self::SourceChanged),
+            "part_missing" => Ok(Self::PartMissing),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for TransferProgressEventNote {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for TransferProgressEventNote {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
 }
 ///Command `transfer.start` payload. Both paths are final (an upload names the remote file, not its directory). Progress and the end arrive as events. Reply: TransferStartResult.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -2478,7 +2595,13 @@ pub struct TransferStartParams {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub recursive: ::std::option::Option<bool>,
     pub remote_path: ::std::string::String,
+    ///Continue from the partial files an earlier try left (when their source is unchanged) and skip files that are already complete.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub resume: ::std::option::Option<bool>,
     pub sftp_id: ::std::string::String,
+    ///Compare SHA-256 here and on the server for each file once it is there; a difference fails the transfer but keeps the file.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub verify: ::std::option::Option<bool>,
 }
 ///`TransferStartResult`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -2570,6 +2693,92 @@ impl ::std::convert::TryFrom<::std::string::String> for TransferStatus {
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
         value.parse()
     }
+}
+///Result of the SHA-256 check of a transfer (`transfer.done.verify`) or of `transfer.verify`. `unavailable`: the server has no sha256sum or shasum.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferVerifyOutcome {
+    ///Why the server could not be asked.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub detail: ::std::option::Option<::std::string::String>,
+    ///Files whose hashes were equal.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub files: ::std::option::Option<u64>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub local_sha256: ::std::option::Option<::std::string::String>,
+    ///Remote path of the first file that differs.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub path: ::std::option::Option<::std::string::String>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub remote_sha256: ::std::option::Option<::std::string::String>,
+    pub status: TransferVerifyOutcomeStatus,
+}
+///`TransferVerifyOutcomeStatus`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum TransferVerifyOutcomeStatus {
+    #[serde(rename = "match")]
+    Match,
+    #[serde(rename = "mismatch")]
+    Mismatch,
+    #[serde(rename = "unavailable")]
+    Unavailable,
+}
+impl ::std::fmt::Display for TransferVerifyOutcomeStatus {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Match => f.write_str("match"),
+            Self::Mismatch => f.write_str("mismatch"),
+            Self::Unavailable => f.write_str("unavailable"),
+        }
+    }
+}
+impl ::std::str::FromStr for TransferVerifyOutcomeStatus {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "match" => Ok(Self::Match),
+            "mismatch" => Ok(Self::Mismatch),
+            "unavailable" => Ok(Self::Unavailable),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for TransferVerifyOutcomeStatus {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for TransferVerifyOutcomeStatus {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///Command `transfer.verify` payload: compare SHA-256 of a local and a remote file. Reply: TransferVerifyOutcome.
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct TransferVerifyParams {
+    pub host_id: ::std::string::String,
+    pub local_path: ::std::string::String,
+    pub remote_path: ::std::string::String,
 }
 ///Rust: tunnel::Tunnel.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]

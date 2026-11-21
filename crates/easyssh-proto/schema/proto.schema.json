@@ -3660,6 +3660,14 @@
         },
         "recursive": {
           "type": "boolean"
+        },
+        "resume": {
+          "type": "boolean",
+          "description": "Continue from the partial files an earlier try left (when their source is unchanged) and skip files that are already complete."
+        },
+        "verify": {
+          "type": "boolean",
+          "description": "Compare SHA-256 here and on the server for each file once it is there; a difference fails the transfer but keeps the file."
         }
       },
       "required": [
@@ -3700,6 +3708,14 @@
         },
         "recursive": {
           "type": "boolean"
+        },
+        "resume": {
+          "type": "boolean",
+          "description": "Continue from the partial files an earlier try left (when their source is unchanged) and skip files that are already complete."
+        },
+        "verify": {
+          "type": "boolean",
+          "description": "Compare SHA-256 here and on the server for each file once it is there; a difference fails the transfer but keeps the file."
         }
       },
       "required": [
@@ -3754,6 +3770,19 @@
           "type": "integer",
           "minimum": 0,
           "description": "Bytes the whole transfer will move (a folder: the sum of its files), when known."
+        },
+        "note": {
+          "type": "string",
+          "enum": [
+            "resumed",
+            "source_changed",
+            "part_missing"
+          ],
+          "description": "How the transfer went on from an earlier try: `resumed` (from `resumed_from` bytes), or it began again from zero because the source changed or the partial file was gone."
+        },
+        "resumed_from": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "required": [
@@ -3804,6 +3833,9 @@
           "type": "integer",
           "minimum": 0,
           "description": "Links a folder transfer left out: broken, or leading back up into a folder that holds them. Absent when none."
+        },
+        "verify": {
+          "$ref": "#/$defs/TransferVerifyOutcome"
         }
       },
       "required": [
@@ -4002,6 +4034,164 @@
       ],
       "additionalProperties": false,
       "description": "Event `tunnel.status` payload."
+    },
+    "TransferVerifyOutcome": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "match",
+            "mismatch",
+            "unavailable"
+          ]
+        },
+        "files": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Files whose hashes were equal."
+        },
+        "path": {
+          "type": "string",
+          "description": "Remote path of the first file that differs."
+        },
+        "local_sha256": {
+          "type": "string"
+        },
+        "remote_sha256": {
+          "type": "string"
+        },
+        "detail": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the server could not be asked."
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false,
+      "description": "Result of the SHA-256 check of a transfer (`transfer.done.verify`) or of `transfer.verify`. `unavailable`: the server has no sha256sum or shasum."
+    },
+    "TransferPartialParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/TransferDirection"
+        },
+        "local_path": {
+          "type": "string",
+          "description": "The source of an upload; for a download the target if known."
+        },
+        "remote_path": {
+          "type": "string",
+          "description": "Final remote path (an upload names the remote file, not its directory)."
+        }
+      },
+      "required": [
+        "host_id",
+        "direction",
+        "remote_path"
+      ],
+      "additionalProperties": false,
+      "description": "Command `transfer.partial` payload: does an earlier try of this transfer have partial files to continue? Reply: TransferPartialResult."
+    },
+    "TransferPartialResult": {
+      "type": "object",
+      "properties": {
+        "found": {
+          "type": "boolean"
+        },
+        "files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bytes of the partial files when last recorded."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bytes of those files when complete."
+        },
+        "local_path": {
+          "type": "string",
+          "description": "Where the download goes (the target of the earlier try)."
+        }
+      },
+      "required": [
+        "found"
+      ],
+      "additionalProperties": false
+    },
+    "TransferDiscardParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/TransferDirection"
+        },
+        "local_path": {
+          "type": "string"
+        },
+        "remote_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id",
+        "direction",
+        "remote_path"
+      ],
+      "additionalProperties": false,
+      "description": "Command `transfer.discard` payload: removes the partial files of this transfer (remote ones over a file session) and their records. Reply: TransferDiscardResult."
+    },
+    "TransferDiscardResult": {
+      "type": "object",
+      "properties": {
+        "removed": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "removed"
+      ],
+      "additionalProperties": false
+    },
+    "TransferVerifyParams": {
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "type": "string"
+        },
+        "local_path": {
+          "type": "string"
+        },
+        "remote_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host_id",
+        "local_path",
+        "remote_path"
+      ],
+      "additionalProperties": false,
+      "description": "Command `transfer.verify` payload: compare SHA-256 of a local and a remote file. Reply: TransferVerifyOutcome."
     }
   }
 }

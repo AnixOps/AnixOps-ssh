@@ -49,9 +49,14 @@ import {
   pickUploads,
   revealLocal,
   startTransfer,
+  transferDiscard,
+  transferPartial,
+  transferVerify,
   type FilesHandle,
   type RemoteFile,
   type TransferEvent,
+  type TransferRequest,
+  type VerifyResult,
 } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { shortcutHint } from "@/lib/shortcutTable";
@@ -68,6 +73,7 @@ import {
 } from "@/lib/fileSelection";
 import { resolveRenameTarget } from "@/lib/renameTarget";
 import { appear, duration, ease } from "@/lib/motion";
+import { canResume, canVerify, resumeNoteText, verifyView } from "@/lib/transferResume";
 import { failureMessage, formatDuration, nextRate, secondsLeft, type Rate } from "@/lib/transferProgress";
 import { baseName, formatSize, locate, localName, parentPath, resolvePath, uploadConflicts } from "@/lib/remotePath";
 import { cn } from "@/lib/utils";
@@ -111,6 +117,16 @@ interface TransferItem {
   message?: string;
   /** Set when the transfer belongs to a file opened in an editor: the download that opens it or the upload of a save. */
   edit?: { key: string; step: "open" | "save" };
+  /** What was asked, to continue it: the remote directory (upload) or path (download). */
+  request: { upload: boolean; remote: string; local?: string };
+  /** The built-in engine keeps partial files, so a failed try can be continued and checked. */
+  resumable?: boolean;
+  /** How this try went on from an earlier one. */
+  note?: { note: "resumed" | "source_changed" | "part_missing"; resumedFrom?: number | null };
+  verify?: VerifyResult;
+  verifying?: boolean;
+  /** The check could not run (as opposed to saying "unavailable"). */
+  verifyError?: string;
 }
 
 type Editing = { kind: "mkdir"; value: string } | { kind: "rename"; from: string; value: string };
@@ -243,8 +259,42 @@ export function FilesPane({
       local: string | undefined,
       total: number | null,
       edit?: { key: string; step: "open" | "save" },
+      again?: { replace: string },
     ) => {
       const targetDir = cwdRef.current;
+      let request: TransferRequest = { hostId, upload, remote, local, verify: settings().filesVerifyTransfers };
+      if (again) {
+        request = { ...request, resume: true };
+      } else if (!edit) {
+        // An earlier try may have left partial files: offer to continue it.
+        const partial = await transferPartial(hostId, upload, remote, local).catch(() => null);
+        if (partial?.found) {
+          const name = localName(upload ? (local ?? remote) : remote);
+          const done = formatSize(partial.bytes ?? 0);
+          const all = formatSize(partial.size ?? 0);
+          if (
+            await confirm({
+              title: t.resumeFoundTitle.replace("{name}", name),
+              body: t.resumeFoundBody.replace("{done}", done).replace("{total}", all),
+              verb: t.resumeVerb,
+              destructive: false,
+            })
+          ) {
+            request = { ...request, resume: true, local: upload ? local : (partial.localPath ?? undefined) };
+          } else if (
+            await confirm({
+              title: t.restartTitle.replace("{name}", name),
+              body: t.restartBody,
+              verb: t.restartVerb,
+            })
+          ) {
+            await transferDiscard(hostId, upload, remote, local).catch(() => {});
+          } else {
+            return;
+          }
+        }
+      }
+      const asked = { upload, remote, local: request.local };
       let id = "";
       // Events can arrive before the start call returns; hold them until the item exists.
       let ready = false;
@@ -252,7 +302,12 @@ export function FilesPane({
       const onEvent = (event: TransferEvent) => (ready ? apply(event) : early.push(event));
       const apply = (event: TransferEvent) => {
         if (event.kind === "started") updateTransfer(id, { state: "running" });
-        else if (event.kind === "progress") {
+        else if (event.kind === "note") {
+          updateTransfer(id, { note: { note: event.note, resumedFrom: event.resumedFrom } });
+        } else if (event.kind === "verify") {
+          const { kind: _kind, ...result } = event;
+          updateTransfer(id, { verify: result });
+        } else if (event.kind === "progress") {
           // The backend sizes the work once it runs, so `total` can arrive after the row exists.
           setTransfers((all) =>
             all.map((item) =>
@@ -284,7 +339,7 @@ export function FilesPane({
         }
       };
       try {
-        const started = await startTransfer({ hostId, upload, remote, local }, onEvent);
+        const started = await startTransfer(request, onEvent);
         id = started.id;
         setTransfers((current) => [
           {
@@ -297,8 +352,10 @@ export function FilesPane({
             bytes: 0,
             total,
             edit,
+            request: asked,
+            resumable: started.resumable === true,
           },
-          ...current,
+          ...current.filter((item) => item.id !== again?.replace),
         ]);
         ready = true;
         early.forEach(apply);
@@ -307,7 +364,7 @@ export function FilesPane({
         if (edit) editEnded.current(edit, "failed");
       }
     },
-    [handle, hostId, navigate, updateTransfer],
+    [confirm, handle, hostId, navigate, updateTransfer],
   );
 
   const uploadPaths = useCallback(
@@ -910,10 +967,37 @@ export function FilesPane({
           <ul className="space-y-1">
             <AnimatePresence initial={false}>
             {transfers.map((item) => (
-              <TransferRow key={item.id} item={item} onCancel={() => {
-                void cancelTransfer(item.id);
-                updateTransfer(item.id, { state: "cancelled" });
-              }} />
+              <TransferRow
+                key={item.id}
+                item={item}
+                onCancel={() => {
+                  void cancelTransfer(item.id);
+                  updateTransfer(item.id, { state: "cancelled" });
+                }}
+                onResume={() =>
+                  void transfer(
+                    item.request.upload,
+                    item.request.remote,
+                    // A download goes back to the file the earlier try chose.
+                    item.request.upload ? item.request.local : item.local,
+                    item.total,
+                    undefined,
+                    { replace: item.id },
+                  )
+                }
+                onDiscard={() => {
+                  void transferDiscard(hostId, item.request.upload, item.request.remote, item.request.local).catch(
+                    (reason) => setActionError(String(reason)),
+                  );
+                  setTransfers((current) => current.filter((other) => other.id !== item.id));
+                }}
+                onVerify={() => {
+                  updateTransfer(item.id, { verifying: true, verifyError: undefined });
+                  transferVerify(hostId, item.local, item.remote)
+                    .then((verify) => updateTransfer(item.id, { verify, verifying: false }))
+                    .catch((reason) => updateTransfer(item.id, { verifying: false, verifyError: String(reason) }));
+                }}
+              />
             ))}
             </AnimatePresence>
           </ul>
@@ -1168,7 +1252,20 @@ function EditRow({
 /** Queued and running transfers can be cancelled and are kept in the list. */
 const isActive = (item: TransferItem) => item.state === "running" || item.state === "queued";
 
-function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => void }) {
+function TransferRow({
+  item,
+  onCancel,
+  onResume,
+  onDiscard,
+  onVerify,
+}: {
+  item: TransferItem;
+  onCancel: () => void;
+  onResume: () => void;
+  onDiscard: () => void;
+  onVerify: () => void;
+}) {
+  const verdict = item.verify ? verifyView(item.verify) : null;
   const progress = item.total ? Math.min(1, item.bytes / item.total) : null;
   const Direction = item.upload ? ArrowUp : ArrowDown;
   return (
@@ -1181,6 +1278,21 @@ function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => v
           <IconButton label={t.cancelTransfer} onClick={onCancel}>
             <X />
           </IconButton>
+        )}
+        {canResume(item) && (
+          <>
+            <Button variant="quiet" size="sm" onClick={onResume}>
+              {t.transferResume}
+            </Button>
+            <IconButton label={t.transferDiscard} onClick={onDiscard}>
+              <Trash2 />
+            </IconButton>
+          </>
+        )}
+        {canVerify(item) && !verdict && (
+          <Button variant="quiet" size="sm" disabled={item.verifying} onClick={onVerify}>
+            {item.verifying ? t.transferVerifying : t.transferVerify}
+          </Button>
         )}
         {item.state === "done" && !item.upload && isTauri && (
           <IconButton label={t.showInFolder} onClick={() => void revealLocal(item.local)}>
@@ -1197,9 +1309,31 @@ function TransferRow({ item, onCancel }: { item: TransferItem; onCancel: () => v
         </div>
       )}
       {item.state === "running" && <TransferDetail item={item} />}
+      {item.note && (
+        <p className="mt-1 text-callout text-label-3">{resumeNoteText(item.note.note, item.note.resumedFrom)}</p>
+      )}
       {item.state === "failed" && item.message && (
         <p className="selectable mt-1 text-callout break-all text-danger">{item.message}</p>
       )}
+      {(item.state === "failed" || item.state === "cancelled") && !item.resumable && (
+        <p className="mt-1 text-callout text-label-3">{t.transferNoResume}</p>
+      )}
+      {verdict && (
+        <div className="mt-1 text-callout">
+          <p className={verdict.tone === "success" ? "text-success" : verdict.tone === "danger" ? "text-danger" : "text-label-3"}>
+            {verdict.text}
+          </p>
+          {verdict.hashes && (
+            <dl className="selectable mt-0.5 grid grid-cols-[auto_1fr] gap-x-2 font-mono text-label-2 break-all">
+              <dt>{t.verifyLocal}</dt>
+              <dd>{verdict.hashes.local}</dd>
+              <dt>{t.verifyRemote}</dt>
+              <dd>{verdict.hashes.remote}</dd>
+            </dl>
+          )}
+        </div>
+      )}
+      {item.verifyError && <p className="selectable mt-1 text-callout break-all text-danger">{item.verifyError}</p>}
     </motion.li>
   );
 }

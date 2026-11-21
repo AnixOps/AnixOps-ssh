@@ -205,6 +205,12 @@ pub trait LinkHandler: Send + Sync + 'static {
     /// A queued transfer left the queue and runs.
     fn transfer_started(&self, _transfer_id: &str) {}
     fn transfer_progress(&self, _transfer_id: &str, _bytes: u64, _total: Option<u64>) {}
+    /// A transfer went on from an earlier try (`resumed`, from that many
+    /// bytes) or began again from zero (`source_changed`, `part_missing`).
+    fn transfer_note(&self, _transfer_id: &str, _note: &str, _resumed_from: Option<u64>) {}
+    /// The SHA-256 check of a transfer (`transfer.done.verify`), sent before
+    /// `transfer_done`.
+    fn transfer_verify(&self, _transfer_id: &str, _verify: &Value) {}
     /// `status` is `completed`, `failed` or `cancelled`.
     fn transfer_done(&self, _transfer_id: &str, _status: &str, _error: Option<&str>) {}
     fn tunnel_status(&self, _status: TunnelStatus) {}
@@ -358,16 +364,29 @@ impl Inner {
             Some("transfer.started") => self
                 .handler
                 .transfer_started(payload["transfer_id"].as_str().unwrap_or_default()),
-            Some("transfer.progress") => self.handler.transfer_progress(
-                payload["transfer_id"].as_str().unwrap_or_default(),
-                payload["bytes"].as_u64().unwrap_or(0),
-                payload["total"].as_u64(),
-            ),
-            Some("transfer.done") => self.handler.transfer_done(
-                payload["transfer_id"].as_str().unwrap_or_default(),
-                payload["status"].as_str().unwrap_or("failed"),
-                payload["error"].as_str(),
-            ),
+            Some("transfer.progress") => {
+                let id = payload["transfer_id"].as_str().unwrap_or_default();
+                if let Some(note) = payload["note"].as_str() {
+                    self.handler
+                        .transfer_note(id, note, payload["resumed_from"].as_u64());
+                }
+                self.handler.transfer_progress(
+                    id,
+                    payload["bytes"].as_u64().unwrap_or(0),
+                    payload["total"].as_u64(),
+                )
+            }
+            Some("transfer.done") => {
+                let id = payload["transfer_id"].as_str().unwrap_or_default();
+                if let Some(verify) = payload.get("verify") {
+                    self.handler.transfer_verify(id, verify);
+                }
+                self.handler.transfer_done(
+                    id,
+                    payload["status"].as_str().unwrap_or("failed"),
+                    payload["error"].as_str(),
+                )
+            }
             Some("tunnel.status") => self
                 .handler
                 .tunnel_status(TunnelStatus::from_payload(payload)),

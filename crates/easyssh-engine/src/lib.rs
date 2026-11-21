@@ -35,6 +35,7 @@ pub mod login;
 pub mod monitor;
 pub mod prompts;
 pub mod registry;
+pub mod resume;
 mod shell;
 pub mod supervisor;
 pub mod sync;

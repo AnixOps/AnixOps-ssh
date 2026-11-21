@@ -146,7 +146,10 @@ impl Files {
 fn is_final(event: &TransferEvent) -> bool {
     !matches!(
         event,
-        TransferEvent::Progress { .. } | TransferEvent::Started
+        TransferEvent::Progress { .. }
+            | TransferEvent::Started
+            | TransferEvent::Note { .. }
+            | TransferEvent::Verify { .. }
     )
 }
 
@@ -466,6 +469,24 @@ pub enum TransferEvent {
         bytes: u64,
         total: Option<u64>,
     },
+    /// How the transfer went on from an earlier try: `resumed`, or
+    /// `source_changed` / `part_missing` (it began again from zero).
+    Note {
+        note: String,
+        #[serde(rename = "resumedFrom")]
+        resumed_from: Option<u64>,
+    },
+    /// The SHA-256 check of the transfer, before its end.
+    Verify {
+        status: String,
+        files: u64,
+        path: Option<String>,
+        #[serde(rename = "localSha256")]
+        local_sha256: Option<String>,
+        #[serde(rename = "remoteSha256")]
+        remote_sha256: Option<String>,
+        detail: Option<String>,
+    },
     Done,
     Failed {
         message: String,
@@ -481,6 +502,9 @@ pub struct StartedTransfer {
     remote: String,
     /// Waits for others of the same host to finish first.
     queued: bool,
+    /// A failed or cancelled try can be continued (the built-in engine) and
+    /// its file can be checked with SHA-256.
+    resumable: bool,
 }
 
 /// Uploads `local` into the remote directory `remote`, or downloads the
@@ -496,8 +520,11 @@ pub async fn transfer_start(
     upload: bool,
     remote: String,
     local: Option<String>,
+    resume: Option<bool>,
+    verify: Option<bool>,
     events: Channel<TransferEvent>,
 ) -> Result<StartedTransfer, String> {
+    let resume = resume.unwrap_or(false);
     let (local, remote) = if upload {
         let local = PathBuf::from(local.ok_or("no local file was given")?);
         let name = local
@@ -515,7 +542,10 @@ pub async fn transfer_start(
         let target = match local {
             Some(path) => {
                 let path = PathBuf::from(path);
-                if !crate::edit::owns(&app, &path) {
+                // A resumed download goes back to the file an earlier try
+                // chose in Downloads.
+                let resumed_here = resume && path.parent() == dirs::download_dir().as_deref();
+                if !resumed_here && !crate::edit::owns(&app, &path) {
                     return Err("the download target is not allowed".to_owned());
                 }
                 path
@@ -536,6 +566,8 @@ pub async fn transfer_start(
                     "local_path": local.to_string_lossy(),
                     "remote_path": remote,
                     "recursive": true,
+                    "resume": resume,
+                    "verify": verify.unwrap_or(false),
                 }),
             )
             .await
@@ -559,6 +591,7 @@ pub async fn transfer_start(
                     local: local.to_string_lossy().into_owned(),
                     remote,
                     queued,
+                    resumable: true,
                 });
             }
             Err(error) if daemon::use_openssh(&error) => {}
@@ -678,7 +711,115 @@ pub async fn transfer_start(
         local: local.to_string_lossy().into_owned(),
         remote,
         queued,
+        // The `sftp` program writes straight to the final name and has no
+        // record of what it started from, so a try cannot be continued.
+        resumable: false,
     })
+}
+
+/// The final remote path of a transfer: an upload names the file in the
+/// directory `remote`, a download is `remote` itself.
+fn final_remote(upload: bool, remote: &str, local: Option<&str>) -> Result<String, String> {
+    if !upload {
+        return Ok(remote.to_owned());
+    }
+    let name = Path::new(local.ok_or("no local file was given")?)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("the local file name is not valid UTF-8")?
+        .to_owned();
+    Ok(sftp::join_remote(remote, &name))
+}
+
+/// Do partial files of an earlier try of this transfer exist? Reports
+/// `{found, files, bytes, size, localPath}`; nothing is found for a host on
+/// the OpenSSH engine.
+#[tauri::command]
+pub async fn transfer_partial(
+    daemon: State<'_, DaemonState>,
+    host_id: String,
+    upload: bool,
+    remote: String,
+    local: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let Some(link) = daemon::russh_link(&daemon, &host_id).await else {
+        return Ok(json!({ "found": false }));
+    };
+    let remote = final_remote(upload, &remote, local.as_deref())?;
+    let answer = link
+        .request(
+            "transfer.partial",
+            json!({
+                "host_id": host_id,
+                "direction": if upload { "upload" } else { "download" },
+                "local_path": if upload { local } else { None },
+                "remote_path": remote,
+            }),
+        )
+        .await
+        .map_err(|error| error.message)?;
+    Ok(json!({
+        "found": answer["found"].as_bool().unwrap_or(false),
+        "files": answer["files"].as_u64().unwrap_or(0),
+        "bytes": answer["bytes"].as_u64().unwrap_or(0),
+        "size": answer["size"].as_u64().unwrap_or(0),
+        "localPath": answer["local_path"],
+    }))
+}
+
+/// Removes the partial files of this transfer, here and on the server.
+#[tauri::command]
+pub async fn transfer_discard(
+    daemon: State<'_, DaemonState>,
+    host_id: String,
+    upload: bool,
+    remote: String,
+    local: Option<String>,
+) -> Result<(), String> {
+    let Some(link) = daemon::russh_link(&daemon, &host_id).await else {
+        return Ok(());
+    };
+    let remote = final_remote(upload, &remote, local.as_deref())?;
+    link.request(
+        "transfer.discard",
+        json!({
+            "host_id": host_id,
+            "direction": if upload { "upload" } else { "download" },
+            "local_path": if upload { local } else { None },
+            "remote_path": remote,
+        }),
+    )
+    .await
+    .map_err(|error| error.message)?;
+    Ok(())
+}
+
+/// Compares SHA-256 of a local file and the remote file `remote` (final
+/// paths). Reports `{status, files, path?, local_sha256?, remote_sha256?,
+/// detail?}`; `status` is `match`, `mismatch` or `unavailable`.
+#[tauri::command]
+pub async fn transfer_verify(
+    daemon: State<'_, DaemonState>,
+    host_id: String,
+    local: String,
+    remote: String,
+) -> Result<serde_json::Value, String> {
+    if Path::new(&local).is_dir() {
+        return Err("only a single file can be checked".to_owned());
+    }
+    let Some(link) = daemon::russh_link(&daemon, &host_id).await else {
+        return Ok(json!({
+            "status": "unavailable",
+            "files": 0,
+            "detail": "the host uses the OpenSSH engine",
+        }));
+    };
+    link.request(
+        "transfer.verify",
+        json!({ "host_id": host_id, "local_path": local, "remote_path": remote }),
+    )
+    .await
+    .map_err(|error| error.message)
 }
 
 /// Waits for the transfer, reporting the size of a download as it grows.

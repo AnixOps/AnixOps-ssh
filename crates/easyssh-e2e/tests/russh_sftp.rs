@@ -242,3 +242,190 @@ async fn rename_moves_a_file_into_another_folder() {
     })
     .await;
 }
+
+// ---- resuming, odd names, many small files, SHA-256 -------------------------
+
+fn sha_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn an_interrupted_upload_continues_at_the_offset_and_ends_byte_identical() {
+    use tokio::io::AsyncWriteExt;
+    let e2e = E2e::new();
+    let (session, sftp) = open(&e2e).await;
+    let data = sample_bytes(1_500_000);
+    let remote = format!("/home/keyuser/{}.part", unique_name("e2e-resume-up"));
+    within("resume upload", async {
+        // The first try gets 400 000 bytes there and stops.
+        let mut file = sftp.create(&remote).await.expect("create");
+        file.write_all(&data[..400_000]).await.expect("write");
+        file.shutdown().await.expect("close");
+        drop(file);
+        let there = sftp.stat(&remote).await.expect("stat").size;
+        assert_eq!(there, 400_000);
+        // The second goes on from there without truncating.
+        let mut source = &data[there as usize..];
+        let mut file = sftp.open_write_at(&remote, there).await.expect("reopen");
+        tokio::io::copy(&mut source, &mut file).await.expect("copy");
+        file.shutdown().await.expect("close");
+        drop(file);
+        assert_eq!(sftp.stat(&remote).await.unwrap().size, 1_500_000);
+        let back = sftp.read_file(&remote).await.expect("read");
+        assert_eq!(sha_hex(&back), sha_hex(&data), "content SHA-256");
+        // The server's own sha256sum agrees.
+        let remote_sha = session.remote_sha256(&remote).await.expect("sha256sum");
+        assert_eq!(remote_sha.as_deref(), Some(sha_hex(&data).as_str()));
+        // Writing at an offset of a file that is not there fails.
+        let missing = format!("{remote}.nope");
+        assert!(sftp.open_write_at(&missing, 10).await.is_err());
+        sftp.remove_file(&remote).await.expect("rm");
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn an_interrupted_download_continues_at_the_offset_and_ends_byte_identical() {
+    use tokio::io::AsyncWriteExt;
+    let e2e = E2e::new();
+    let (_session, sftp) = open(&e2e).await;
+    let data = sample_bytes(1_500_000);
+    let remote = format!("/home/keyuser/{}.bin", unique_name("e2e-resume-down"));
+    let local = e2e.dir.path().join("partial.bin");
+    within("resume download", async {
+        sftp.write_file(&remote, &data).await.expect("write");
+        // The first try keeps 700 000 bytes.
+        std::fs::write(&local, &data[..700_000]).unwrap();
+        let mut file = sftp.open_read_at(&remote, 700_000).await.expect("open");
+        let mut sink = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&local)
+            .await
+            .unwrap();
+        let copied = tokio::io::copy(&mut file, &mut sink).await.expect("copy");
+        sink.flush().await.unwrap();
+        assert_eq!(copied, 800_000);
+        sftp.remove_file(&remote).await.expect("rm");
+    })
+    .await;
+    assert_eq!(sha_hex(&std::fs::read(&local).unwrap()), sha_hex(&data));
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn an_empty_file_goes_there_and_back_and_has_the_empty_hash() {
+    let e2e = E2e::new();
+    let (session, sftp) = open(&e2e).await;
+    let remote = format!("/home/keyuser/{}.empty", unique_name("e2e-empty"));
+    within("empty file", async {
+        sftp.write_file(&remote, b"").await.expect("write");
+        assert_eq!(sftp.stat(&remote).await.unwrap().size, 0);
+        assert!(sftp.read_file(&remote).await.unwrap().is_empty());
+        // Resuming at 0 of a file that is 0 long is fine.
+        let mut file = sftp.open_write_at(&remote, 0).await.expect("reopen");
+        tokio::io::AsyncWriteExt::shutdown(&mut file).await.unwrap();
+        drop(file);
+        assert_eq!(
+            session.remote_sha256(&remote).await.unwrap().as_deref(),
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        );
+        sftp.remove_file(&remote).await.expect("rm");
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn names_with_chinese_spaces_and_quotes_survive_and_are_hashed_safely() {
+    let e2e = E2e::new();
+    let (session, sftp) = open(&e2e).await;
+    let dir = format!("/home/keyuser/{}", unique_name("e2e-names"));
+    within("odd names", async {
+        sftp.mkdir(&dir).await.expect("mkdir");
+        let names = [
+            "季度 报告 终稿.txt",
+            "it's a \"test\" $(id) `id`; rm -x.txt",
+            "-leading-dash.txt",
+            "tab\there.txt",
+        ];
+        for (index, name) in names.iter().enumerate() {
+            let remote = format!("{dir}/{name}");
+            let data = sample_bytes(10_000 + index);
+            sftp.write_file(&remote, &data).await.expect("write");
+            assert_eq!(sftp.read_file(&remote).await.unwrap(), data, "{name}");
+            let listed = sftp.list(&dir).await.unwrap();
+            assert!(listed.iter().any(|e| e.name == *name), "{name} is listed");
+            assert_eq!(
+                session.remote_sha256(&remote).await.expect(name).as_deref(),
+                Some(sha_hex(&data).as_str()),
+                "{name}"
+            );
+        }
+        // Nothing the names contained ran as a command.
+        let probe = session.exec(&format!("ls '{dir}' | wc -l")).await.unwrap();
+        assert_eq!(probe.stdout_text().trim(), names.len().to_string());
+        sftp.remove_dir_all(&dir).await.expect("cleanup");
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+async fn a_thousand_small_files_round_trip_with_the_same_content() {
+    const COUNT: usize = 1000;
+    let e2e = E2e::new();
+    let (_session, sftp) = open(&e2e).await;
+    let dir = format!("/home/keyuser/{}", unique_name("e2e-small"));
+    let file_data = |index: usize| -> Vec<u8> {
+        (0..4096usize)
+            .map(|i| (i * 7 + index * 13 + i / 5) as u8)
+            .collect()
+    };
+    sftp.mkdir(&dir).await.expect("mkdir");
+    let started = std::time::Instant::now();
+    within("upload 1000", async {
+        for index in 0..COUNT {
+            sftp.write_file(&format!("{dir}/f{index:04}.dat"), &file_data(index))
+                .await
+                .expect("write");
+        }
+    })
+    .await;
+    let up = started.elapsed();
+    let listed = sftp.list(&dir).await.expect("list");
+    assert_eq!(listed.len(), COUNT, "every file arrived");
+    assert!(listed.iter().all(|e| e.stat.size == 4096));
+    let started = std::time::Instant::now();
+    let mut wrong = Vec::new();
+    within("download 1000", async {
+        for index in 0..COUNT {
+            let back = sftp
+                .read_file(&format!("{dir}/f{index:04}.dat"))
+                .await
+                .expect("read");
+            if sha_hex(&back) != sha_hex(&file_data(index)) {
+                wrong.push(index);
+            }
+        }
+    })
+    .await;
+    let down = started.elapsed();
+    println!(
+        "small files: {COUNT} x 4 KiB up {:.0} files/s ({:.1} s), down {:.0} files/s ({:.1} s)",
+        COUNT as f64 / up.as_secs_f64(),
+        up.as_secs_f64(),
+        COUNT as f64 / down.as_secs_f64(),
+        down.as_secs_f64()
+    );
+    assert!(
+        wrong.is_empty(),
+        "files with a different SHA-256: {wrong:?}"
+    );
+    sftp.remove_dir_all(&dir).await.expect("cleanup");
+}

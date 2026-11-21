@@ -224,19 +224,55 @@ function pageBridge({ downloads }) {
         },
       };
     },
-    async transfer({ upload, remote, local }, onEvent) {
+    async transfer({ upload, remote, local, resume, verify }, onEvent) {
       const name = (path) => path.split("/").filter(Boolean).pop();
       const localPath = upload ? local : (local ?? `${downloads}/${name(remote)}`);
       const remotePath = upload ? `${remote.replace(/\/$/, "")}/${name(local)}` : remote;
       const started = await request(
         "transfer.enqueue",
-        { direction: upload ? "upload" : "download", local_path: localPath, remote_path: remotePath, recursive: true },
+        {
+          direction: upload ? "upload" : "download",
+          local_path: localPath,
+          remote_path: remotePath,
+          recursive: true,
+          resume: resume ?? false,
+          verify: verify ?? false,
+        },
         true,
       );
       transfers.set(started.transfer_id, onEvent);
       for (const event of early.get(started.transfer_id) ?? []) onEvent(event);
       early.delete(started.transfer_id);
-      return { id: started.transfer_id, local: localPath, remote: remotePath, queued: started.queued ?? false };
+      return { id: started.transfer_id, local: localPath, remote: remotePath, queued: started.queued ?? false, resumable: true };
+    },
+    async partial(_host, upload, remote, local) {
+      const name = (path) => path.split("/").filter(Boolean).pop();
+      const found = await request(
+        "transfer.partial",
+        {
+          direction: upload ? "upload" : "download",
+          local_path: upload ? local : undefined,
+          remote_path: upload ? `${remote.replace(/\/$/, "")}/${name(local)}` : remote,
+        },
+        true,
+      );
+      return { found: found.found, files: found.files, bytes: found.bytes, size: found.size, localPath: found.local_path };
+    },
+    async discard(_host, upload, remote, local) {
+      const name = (path) => path.split("/").filter(Boolean).pop();
+      await request(
+        "transfer.discard",
+        {
+          direction: upload ? "upload" : "download",
+          local_path: upload ? local : undefined,
+          remote_path: upload ? `${remote.replace(/\/$/, "")}/${name(local)}` : remote,
+        },
+        true,
+      );
+    },
+    async verify(_host, local, remote) {
+      const r = await request("transfer.verify", { local_path: local, remote_path: remote }, true);
+      return { status: r.status, files: r.files, path: r.path, localSha256: r.local_sha256, remoteSha256: r.remote_sha256, detail: r.detail };
     },
     cancel: (id) => request("transfer.cancel", { transfer_id: id }).then(() => {}),
     pickUploads: async () => window.__anixopsE2eUploads.splice(0),
@@ -345,28 +381,30 @@ async function openHost(page, name = "prod-web-01") {
 }
 
 /** Text of the active terminal's viewport (or the whole buffer). */
-function screen(page, { all = false, index = -1 } = {}) {
+function screen(page, { all = false, index = -1, normal = false } = {}) {
   return page.evaluate(
-    ({ all, index }) => {
+    ({ all, index, normal }) => {
       const terminals = [...window.__anixopsE2eTerminals.values()];
       const terminal = terminals.at(index);
       if (!terminal) return "";
-      const buffer = terminal.buffer.active;
+      // `normal`: the main screen even while a full-screen program (tmux)
+      // shows the alternate one.
+      const buffer = normal ? terminal.buffer.normal : terminal.buffer.active;
       const start = all ? 0 : buffer.viewportY;
       const end = all ? buffer.length : buffer.viewportY + terminal.rows;
       const lines = [];
       for (let y = start; y < end; y++) lines.push(buffer.getLine(y)?.translateToString(true) ?? "");
       return lines.join("\n");
     },
-    { all, index },
+    { all, index, normal },
   );
 }
 
-async function waitScreen(page, pattern, { timeout = 15000, all = true, index = -1 } = {}) {
+async function waitScreen(page, pattern, { timeout = 15000, all = true, index = -1, normal = false } = {}) {
   const deadline = Date.now() + timeout;
   let text = "";
   while (Date.now() < deadline) {
-    text = await screen(page, { all, index });
+    text = await screen(page, { all, index, normal });
     if (pattern.test(text)) return text;
     await page.waitForTimeout(100);
   }
@@ -1070,7 +1108,8 @@ check("会话", "keep-session-tmux", "保留会话（tmux）：断开后重连�
   await page.locator(".xterm-screen").last().click();
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => window.__anixopsE2eOpened.length >= 2, null, { timeout: 15000 });
-  await waitScreen(page, /已回到主机上的 tmux 会话/);
+  // tmux switches to the alternate screen at once; the divider stays on the main one.
+  await waitScreen(page, /已回到主机上的 tmux 会话/, { normal: true });
   await waitScreen(page, new RegExp(mark), { all: false });
   await run(page, "tmux kill-session -t anixops");
   return "重连回到同一个 tmux 会话，之前的输出还在";
@@ -1336,6 +1375,58 @@ check("文件", "sftp-cancel", "大文件传输可以取消，状态显示已取
   await pane.getByRole("button", { name: "取消传输" }).click({ timeout: 5000 });
   await pane.getByText("已取消").waitFor({ timeout: 10000 });
   return "取消后显示“已取消”";
+});
+
+check("文件", "sftp-resume", "传输中途取消后点“继续”，从断点接着传，最终文件与服务器一致", async (page) => {
+  try {
+    await openHost(page);
+    const dir = await remoteFixture(page);
+    await runAndWait(page, `seq 1 45000000 > ${dir}/resume.txt`, null, { timeout: 90000 });
+    const pane = await openFilesAt(page, dir);
+    const row = fileRow(pane, "resume.txt");
+    await row.hover();
+    await row.getByRole("button", { name: "下载" }).click();
+    // Cancel once some of it has arrived.
+    await pane.getByText(/\d+%/).first().waitFor({ timeout: 15000 });
+    await pane.getByRole("button", { name: "取消传输" }).click({ timeout: 5000 });
+    await pane.getByText("已取消").waitFor({ timeout: 10000 });
+    await pane.getByRole("button", { name: "继续" }).click({ timeout: 5000 });
+    await pane.getByText("完成", { exact: true }).first().waitFor({ timeout: 120000 });
+    const { createHash } = await import("node:crypto");
+    const { readFile, rm } = await import("node:fs/promises");
+    const localFile = join(downloadsDir, "resume.txt");
+    let local;
+    try {
+      local = createHash("sha256").update(await readFile(localFile)).digest("hex");
+    } finally {
+      // ~375 MB: never left in the results that CI publishes.
+      await rm(localFile, { force: true });
+    }
+    const remote = await remoteOutput(page, `sha256sum < ${dir}/resume.txt | cut -c1-64`);
+    await run(page, `rm -f ${dir}/resume.txt`);
+    if (local !== remote) throw new Error(`继续后本地 sha256 ${local}，服务器 ${remote}`);
+    const noted = await pane.getByText(/已从 .* 继续|已从头开始/).count();
+    return `继续后 sha256 一致${noted ? "（行内显示了续传说明）" : ""}`;
+  } finally {
+    // The download is ~375 MB: never leave it or its partial in the results CI publishes.
+    const { readdir, rm } = await import("node:fs/promises");
+    for (const name of await readdir(downloadsDir).catch(() => [])) {
+      if (name.includes("resume.txt")) await rm(join(downloadsDir, name), { force: true });
+    }
+  }
+});
+
+check("文件", "sftp-verify", "传输完成后可点“校验”比较本地与服务器的 SHA-256，显示一致", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  const row = fileRow(pane, "a.txt");
+  await row.hover();
+  await row.getByRole("button", { name: "下载" }).click();
+  await pane.getByText("完成", { exact: true }).first().waitFor({ timeout: 20000 });
+  await pane.getByRole("button", { name: "校验" }).click();
+  await pane.getByText("SHA-256 一致").waitFor({ timeout: 15000 });
+  return "校验显示“SHA-256 一致”";
 });
 
 check("文件", "sftp-context-menu", "在文件上右键弹出菜单：下载、重命名、属性、删除、复制路径（FinalShell、MobaXterm）", async (page) => {
