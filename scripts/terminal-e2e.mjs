@@ -109,6 +109,8 @@ const ready = new Promise((resolve, reject) => {
       if (message.op === "data") {
         const seen = sessionOutput.get(message.id) ?? { chars: 0, tail: "" };
         seen.chars += message.data.length;
+        // The shell integration's prompt mark: its script is in place.
+        if (message.data.includes("\u001b]6973;A")) seen.integrated = true;
         seen.tail = (seen.tail + message.data).slice(-120);
         sessionOutput.set(message.id, seen);
       }
@@ -436,6 +438,17 @@ async function outputReport(page) {
   const pending = [...pendingOpens.values()].filter((open) => open.page === page).length;
   if (pending) sessions.push(`opens with no answer from the bridge: ${pending}`);
   return [...sessions, `buffers: ${state.buffers.join(", ")}; failed deliveries: ${failedDeliveries}`].join("\n");
+}
+
+/** Waits until the newest session of the page shows the shell integration's prompt mark. */
+async function waitIntegrated(page, timeout = 20000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const id = (await page.evaluate(() => window.__anixopsE2eOpened)).at(-1);
+    if (id && sessionOutput.get(id)?.integrated) return;
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`shell integration did not start:\n${await outputReport(page)}`);
 }
 
 /** Types a command and presses Enter, as a person would. */
@@ -1320,6 +1333,9 @@ check("文件", "sftp-follow-integration", "没开 Shell 集成时点“跟随�
   await page.evaluate(() => (window.__anixopsE2eIntegration = true));
   await page.getByRole("button", { name: "关闭标签页" }).first().click();
   await openHost(page);
+  // Typing before the integration script is in place makes the session skip
+  // it (as for a person who starts typing at once), so wait for its mark.
+  await waitIntegrated(page);
   await openFilesAt(page, dir);
   const pane2 = page.getByRole("complementary", { name: "文件" });
   await page.locator(".xterm-screen").last().click();
