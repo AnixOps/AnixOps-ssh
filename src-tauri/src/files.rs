@@ -480,6 +480,9 @@ pub enum TransferEvent {
     Verify {
         status: String,
         files: u64,
+        #[serde(rename = "skippedVerified")]
+        skipped_verified: u64,
+        unverified: u64,
         path: Option<String>,
         #[serde(rename = "localSha256")]
         local_sha256: Option<String>,
