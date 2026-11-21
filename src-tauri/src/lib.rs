@@ -44,7 +44,11 @@ mod tunnels;
 #[cfg(desktop)]
 mod update;
 #[cfg(desktop)]
+mod update_flow;
+#[cfg(desktop)]
 mod update_install;
+#[cfg(desktop)]
+mod update_swap;
 #[cfg(desktop)]
 mod vault;
 #[cfg(desktop)]
@@ -137,6 +141,7 @@ fn desktop_run() {
             update::update_open,
             update::update_install,
             update::update_cancel,
+            update::update_restart,
             backup::config_export,
             backup::config_import,
             backup::sync_get,

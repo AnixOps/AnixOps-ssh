@@ -28,6 +28,33 @@ pub const DEFAULT_SCROLLBACK: usize = 1024 * 1024;
 /// prints a few bytes at a time still replays in a modest number of events.
 const MERGE_LIMIT: usize = 8 * 1024;
 
+/// How long output waits for a client that is behind and not catching up
+/// before it is let through anyway (and, if the client's queue then fills,
+/// the client is dropped and can reconnect). A client that drains at all,
+/// however slowly, resets the wait.
+const STALL_LIMIT: Duration = Duration::from_secs(15);
+
+/// While output waits for a client to catch up, how often it looks again.
+const CONGESTION_POLL: Duration = Duration::from_millis(5);
+
+/// Flow control for one session's output: whether to hold back reading
+/// because a client is behind, for at most [`STALL_LIMIT`] without progress.
+#[derive(Default)]
+struct Backpressure {
+    since: Option<Instant>,
+}
+
+impl Backpressure {
+    fn hold(&mut self, congested: bool) -> bool {
+        if !congested {
+            self.since = None;
+            return false;
+        }
+        let since = *self.since.get_or_insert_with(Instant::now);
+        since.elapsed() < STALL_LIMIT
+    }
+}
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
@@ -418,9 +445,14 @@ impl TermSession {
         mut commands: async_mpsc::UnboundedReceiver<RemoteCmd>,
     ) -> ExitStatus {
         let mut decoder = Utf8Stream::default();
+        let mut backpressure = Backpressure::default();
         loop {
+            // A client that is behind holds back reading, so the SSH window
+            // fills and the server slows the program down; keystrokes still go.
+            let hold = backpressure.hold(self.congested());
             tokio::select! {
-                chunk = shell.read() => match chunk {
+                () = tokio::time::sleep(CONGESTION_POLL), if hold => {}
+                chunk = shell.read(), if !hold => match chunk {
                     Some(bytes) => {
                         let text = decoder.push(&bytes);
                         if !text.is_empty() {
@@ -487,7 +519,9 @@ impl TermSession {
         // The blocking read runs on its own thread so a held-back lead byte
         // can be released after a quiet moment (a binary transfer must not
         // wait on it).
-        let (chunks, incoming) = mpsc::channel::<Vec<u8>>();
+        // Bounded, so a client that is behind (see `Backpressure`) stops the
+        // reads and the program blocks on a full PTY, as in a terminal.
+        let (chunks, incoming) = mpsc::sync_channel::<Vec<u8>>(16);
         std::thread::spawn(move || {
             let mut buffer = [0u8; 16 * 1024];
             while let Ok(read) = reader.read(&mut buffer) {
@@ -497,7 +531,11 @@ impl TermSession {
             }
         });
         let mut decoder = Utf8Stream::default();
+        let mut backpressure = Backpressure::default();
         loop {
+            while backpressure.hold(self.congested()) {
+                std::thread::sleep(CONGESTION_POLL);
+            }
             let wait = if decoder.has_pending() {
                 Duration::from_millis(25)
             } else {
@@ -550,6 +588,14 @@ impl TermSession {
         }
         // A serial line has no exit status.
         self.finish(ExitStatus::Unknown);
+    }
+
+    /// Whether any attached client is behind on this session's output.
+    fn congested(&self) -> bool {
+        lock(&self.state)
+            .subscribers
+            .iter()
+            .any(|s| s.outbox.is_congested())
     }
 
     fn output(&self, text: &str) {

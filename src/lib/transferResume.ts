@@ -13,6 +13,8 @@ type Strings = Pick<
   | "verifyMismatch"
   | "verifyNoTool"
   | "verifyUnavailable"
+  | "verifySkipped"
+  | "verifyUnverifiedSome"
   | "transferResumedFrom"
   | "transferRestartChanged"
   | "transferRestartMissing"
@@ -24,15 +26,22 @@ export const NO_HASH_TOOL = "no sha256sum on the server";
 export interface VerifyView {
   tone: "success" | "danger" | "muted";
   text: string;
+  /** Files left out as already complete, and files that could not be checked. */
+  note?: string;
   /** Both hashes of a difference, to read and copy. */
   hashes?: { local: string; remote: string };
 }
 
 export function verifyView(result: VerifyResult, strings: Strings = t): VerifyView {
   if (result.status === "match") {
+    const notes = [
+      result.skippedVerified ? strings.verifySkipped.replace("{n}", String(result.skippedVerified)) : "",
+      result.unverified ? strings.verifyUnverifiedSome.replace("{n}", String(result.unverified)) : "",
+    ].filter(Boolean);
     return {
       tone: "success",
       text: result.files > 1 ? strings.verifyMatchMany.replace("{n}", String(result.files)) : strings.verifyMatch,
+      ...(notes.length > 0 && { note: notes.join("；") }),
     };
   }
   if (result.status === "mismatch") {

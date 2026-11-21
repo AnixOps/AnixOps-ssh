@@ -25,6 +25,7 @@ import {
   previewUpdateCancel,
   previewUpdateCheck,
   previewUpdateInstall,
+  previewUpdateRestart,
   previewUpdateSetAuto,
   previewUpdateStatus,
 } from "./previewUpdate";
@@ -529,6 +530,10 @@ export interface TransferRequest {
 export interface VerifyResult {
   status: "match" | "mismatch" | "unavailable";
   files: number;
+  /** Of `files`, those already there with the same content and so not sent again. */
+  skippedVerified?: number;
+  /** Files the server could not hash. */
+  unverified?: number;
   path?: string | null;
   localSha256?: string | null;
   remoteSha256?: string | null;
@@ -1337,6 +1342,13 @@ export async function updateOpen(): Promise<void> {
 export async function updateInstall(): Promise<void> {
   if (!isTauri) return previewUpdateInstall();
   await invoke("update_install");
+}
+
+/** After a failed restart: starts the installed version again. Installs
+ *  nothing; resolves only when the app did not restart. */
+export async function updateRestart(): Promise<void> {
+  if (!isTauri) return previewUpdateRestart();
+  await invoke("update_restart");
 }
 
 export async function updateCancel(): Promise<void> {
