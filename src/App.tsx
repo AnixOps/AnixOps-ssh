@@ -1,5 +1,5 @@
 import { AnimatePresence, MotionConfig } from "motion/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AskpassDialog } from "@/components/app/AskpassDialog";
 import { HostKeyDialog } from "@/components/app/HostKeyDialog";
 import { VaultUnlockDialog } from "@/components/app/VaultUnlockDialog";
@@ -42,7 +42,9 @@ import {
   type SshStatus,
 } from "@/lib/backend";
 import { adhocId, formatTarget, parseAdhocId, type Target } from "@/lib/quickConnect";
-import { participants, scopeOf, setBroadcastScope, setPanes, toggleGlobalBroadcast, toggleTabBroadcast, useBroadcast } from "@/lib/broadcast";
+import { BroadcastGuardBridge, guardedToggleGlobal, guardedToggleTab } from "@/components/app/useBroadcastGuard";
+import { participants, scopeOf, setBroadcastScope, setPanes, setProductionTabs, useBroadcast } from "@/lib/broadcast";
+import { environmentsById, isProduction } from "@/lib/environment";
 import { onHostEditRequested } from "@/lib/hostEditUi";
 import { t } from "@/lib/i18n";
 import { serialHosts } from "@/lib/serialUi";
@@ -272,6 +274,7 @@ export function App() {
       groupId: host.groupId,
       tags: host.tags,
       color: host.color,
+      environment: host.environment ?? null,
     });
     setNewSerial(false);
     setEditing(null);
@@ -383,6 +386,17 @@ export function App() {
   useEffect(() => {
     setPanes(new Map(tabs.map((tab) => [tab.key, leaves(tab.panes.tree)])));
   }, [tabs]);
+  // The environment of each tab's saved host, so a change in the editor shows at once.
+  const environments = useMemo(() => environmentsById(snapshot.hosts), [snapshot.hosts]);
+  const viewTabs = useMemo(
+    () => tabs.map((tab) => (tab.hostId && environments.has(tab.hostId) ? { ...tab, environment: environments.get(tab.hostId) } : tab)),
+    [tabs, environments],
+  );
+  useEffect(() => {
+    setProductionTabs(
+      new Map(viewTabs.filter((tab) => isProduction(tab.environment)).map((tab) => [tab.key, tab.title])),
+    );
+  }, [viewTabs]);
   const broadcast = useBroadcast();
 
   const closeTab = useCallback(
@@ -500,8 +514,8 @@ export function App() {
       else if (action === "focus-next") updatePanes(activeTab.key, (state) => cycleFocus(state, 1));
       else if (action === "focus-previous") updatePanes(activeTab.key, (state) => cycleFocus(state, -1));
       else if (action === "toggle-maximise") updatePanes(activeTab.key, toggleMaximise);
-      else if (action === "toggle-broadcast-tab") toggleTabBroadcast(activeTab.key);
-      else toggleGlobalBroadcast();
+      else if (action === "toggle-broadcast-tab") guardedToggleTab(activeTab.key);
+      else guardedToggleGlobal(activeTab.key);
     },
     [activeTab, splitActive, closePane, updatePanes],
   );
@@ -557,6 +571,7 @@ export function App() {
     <MotionConfig reducedMotion="user">
     <TooltipProvider delayDuration={500}>
     <ConfirmProvider>
+      <BroadcastGuardBridge />
       <div className="flex h-full">
         <FirstRunPrompt />
         {!focused && (
@@ -622,7 +637,7 @@ export function App() {
         <main className="flex min-w-0 flex-1 flex-col bg-bg" inert={settingsOpen}>
           {tabs.length > 0 && (
             <TabBar
-              tabs={tabs}
+              tabs={viewTabs}
               activeKey={activeKey}
               onSelect={setActiveKey}
               onClose={closeTab}
@@ -685,6 +700,8 @@ export function App() {
                 <PaneArea
                   tabKey={tab.key}
                   hostId={tab.hostId}
+                  environment={tab.hostId ? environments.get(tab.hostId) ?? null : null}
+                  hostName={tab.title}
                   state={tab.panes}
                   restored={tab.restored}
                   active={tab.key === activeKey}

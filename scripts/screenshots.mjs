@@ -29,6 +29,7 @@ const scenes = [
   // The app's own right-click menus (never the web view's), at the narrowest window.
   { name: "menu-terminal", query: "", size: { width: 860, height: 520 }, open: ["prod-web-01"], type: ["ls"], rightClick: { css: ".xterm-screen", at: { x: 0.95, y: 0.7 } } },
   { name: "menu-tab", query: "", size: { width: 860, height: 520 }, open: ["prod-db", "staging-api"], rightClick: { role: "tab", name: "prod-db" } },
+  { name: "broadcast-production", query: "", size: { width: 860, height: 520 }, open: ["staging-api", "prod-db"], keys: "Control+Shift+B" },
   { name: "menu-host", query: "", size: { width: 860, height: 520 }, rightClick: { role: "button", name: "prod-web-01" } },
   { name: "menu-field", query: "lang=en", size: { width: 860, height: 520 }, search: "prod", rightClick: { role: "textbox" } },
   { name: "askpass", query: "askpass=1" },

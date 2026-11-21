@@ -11,8 +11,8 @@ use crate::daemon::DaemonState;
 use easyssh_core::security::{validate_alias, validate_connection};
 use easyssh_core::{
     scan_default_ssh_config, AppConfig, ConfigStore, Connection, ConnectionTarget,
-    EnginePreference, ExternalTerminal, Group, OpenSsh, ProxySettings, SerialFlowControl,
-    SerialParity, SerialSettings, SshInvocation,
+    EnginePreference, ExternalTerminal, Group, HostEnvironment, OpenSsh, ProxySettings,
+    SerialFlowControl, SerialParity, SerialSettings, SshInvocation,
 };
 use easyssh_store::{open_app_store_with, Store};
 use easysshd::link::{Link, LinkError};
@@ -46,6 +46,8 @@ pub struct HostView {
     pub tags: Vec<String>,
     pub favorite: bool,
     pub color: Option<String>,
+    /// `production`, `staging`, `testing`, `development`; `None` is unmarked.
+    pub environment: Option<HostEnvironment>,
     pub source: HostSource,
     /// The editable values, for the host editor.
     pub fields: HostFields,
@@ -145,6 +147,7 @@ impl HostView {
             tags: connection.tags.clone(),
             favorite: connection.favorite,
             color: connection.color.clone(),
+            environment: connection.environment,
             source: HostSource::Saved,
             fields: fields_of(connection),
         }
@@ -163,6 +166,7 @@ impl HostView {
             tags: Vec::new(),
             favorite: false,
             color: None,
+            environment: None,
             source: HostSource::SshConfig,
             fields: HostFields {
                 alias: Some(alias.to_owned()),
@@ -211,6 +215,8 @@ pub struct HostInput {
     pub tags: Vec<String>,
     pub favorite: bool,
     pub color: Option<String>,
+    #[serde(default)]
+    pub environment: Option<HostEnvironment>,
     pub fields: HostFields,
 }
 
@@ -268,6 +274,7 @@ fn apply(
     connection.tags = tags;
     connection.favorite = input.favorite;
     connection.color = trimmed(input.color.as_deref());
+    connection.environment = input.environment;
     connection.proxy_jump = trimmed(fields.proxy_jump.as_deref());
     connection.notes = fields.notes.trim().to_owned();
     connection.engine = fields
@@ -632,6 +639,7 @@ mod tests {
             tags: vec!["web".to_owned(), " web ".to_owned(), String::new()],
             favorite: true,
             color: Some("chart-3".to_owned()),
+            environment: Some(HostEnvironment::Production),
             fields,
         }
     }

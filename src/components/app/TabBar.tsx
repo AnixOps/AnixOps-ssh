@@ -5,14 +5,16 @@ import { ContextMenu, Menu, type MenuEntry } from "@/components/ui/menu";
 import type { SessionStatus } from "@/components/app/TerminalView";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
-import { scopeOf, setBroadcastScope, useBroadcast } from "@/lib/broadcast";
+import { EnvBadge } from "@/components/app/EnvBadge";
+import { useBroadcastGuard } from "@/components/app/useBroadcastGuard";
+import { scopeOf, useBroadcast } from "@/lib/broadcast";
 import { failureText } from "@/lib/connectFailureText";
 import { t } from "@/lib/i18n";
 import { exitTitle } from "@/lib/terminalSession";
 import { appear } from "@/lib/motion";
 import type { Axis, PaneState } from "@/lib/panes";
 import { shortcutHint } from "@/lib/shortcutTable";
-import { hostColor, type Host } from "@/lib/backend";
+import { hostColor, type Host, type HostEnvironment } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
 /** The drag data type of a tab being reordered. */
@@ -24,6 +26,8 @@ export interface Tab {
   hostId: string | null;
   title: string;
   color: string | null;
+  /** The host's environment, filled in by the app from the saved host; absent for a local shell. */
+  environment?: HostEnvironment | null;
   /** The focused pane's status. */
   status: SessionStatus;
   /** The pane layout; every pane is its own session. */
@@ -199,6 +203,7 @@ export function TabBar({
                 {tab.hostId !== null && tab.status.state === "connected" && tab.status.engine && (
                   <EngineBadge engine={tab.status.engine.engine} reason={tab.status.engine.reason} />
                 )}
+                {tab.environment && <EnvBadge environment={tab.environment} shrink />}
                 {scopeOf(broadcast, tab.key) && (
                   <Radio className="size-4 shrink-0 text-warning" strokeWidth={1.5} aria-label={t.broadcastingTab} />
                 )}
@@ -380,11 +385,12 @@ function TabIcon({ tab }: { tab: Tab }) {
  *  one terminal, since there is nowhere else to send to. */
 function BroadcastMenu({ tabKey }: { tabKey: string }) {
   const broadcast = useBroadcast();
+  const guard = useBroadcastGuard();
   const scope = scopeOf(broadcast, tabKey);
   const inTab = broadcast.panes.get(tabKey)?.length ?? 0;
   const total = [...broadcast.panes.values()].reduce((sum, ids) => sum + ids.length, 0);
   const items: MenuEntry[] = [
-    { key: "off", label: t.broadcastOff, hint: t.broadcastOffHint, checked: scope === null, onSelect: () => setBroadcastScope(tabKey, null) },
+    { key: "off", label: t.broadcastOff, hint: t.broadcastOffHint, checked: scope === null, onSelect: () => void guard.setScope(tabKey, null) },
     {
       key: "tab",
       label: t.broadcastTabItem.replace("{n}", String(inTab)),
@@ -392,7 +398,7 @@ function BroadcastMenu({ tabKey }: { tabKey: string }) {
       shortcut: shortcutHint("toggle-broadcast"),
       checked: scope === "tab",
       disabled: inTab < 2 && scope !== "tab",
-      onSelect: () => setBroadcastScope(tabKey, "tab"),
+      onSelect: () => void guard.setScope(tabKey, "tab"),
     },
     {
       key: "global",
@@ -400,7 +406,7 @@ function BroadcastMenu({ tabKey }: { tabKey: string }) {
       hint: t.broadcastAllHint,
       checked: scope === "global",
       disabled: total < 2 && scope !== "global",
-      onSelect: () => setBroadcastScope(tabKey, "global"),
+      onSelect: () => void guard.setScope(tabKey, "global"),
     },
   ];
   return (

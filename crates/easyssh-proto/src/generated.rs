@@ -206,6 +206,9 @@ pub struct Connection {
     ///Absent means auto.
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub engine: ::std::option::Option<EnginePreference>,
+    ///What the host is for. Absent means unmarked.
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub environment: ::std::option::Option<HostEnvironment>,
     pub favorite: bool,
     ///X11 forwarding (ssh -X); the host runs on the OpenSSH engine. Absent means off.
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
@@ -591,6 +594,69 @@ pub struct Group {
     pub name: ::std::string::String,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub parent_id: ::std::option::Option<::std::string::String>,
+}
+///Rust: domain::HostEnvironment. A production host is marked in the UI and asks before broadcast input and multi-line paste.
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum HostEnvironment {
+    #[serde(rename = "production")]
+    Production,
+    #[serde(rename = "staging")]
+    Staging,
+    #[serde(rename = "testing")]
+    Testing,
+    #[serde(rename = "development")]
+    Development,
+}
+impl ::std::fmt::Display for HostEnvironment {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Production => f.write_str("production"),
+            Self::Staging => f.write_str("staging"),
+            Self::Testing => f.write_str("testing"),
+            Self::Development => f.write_str("development"),
+        }
+    }
+}
+impl ::std::str::FromStr for HostEnvironment {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "production" => Ok(Self::Production),
+            "staging" => Ok(Self::Staging),
+            "testing" => Ok(Self::Testing),
+            "development" => Ok(Self::Development),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for HostEnvironment {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for HostEnvironment {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
 }
 ///A value of one host field that an edit or a merge replaced.
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]

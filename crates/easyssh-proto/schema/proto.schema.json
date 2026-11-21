@@ -259,6 +259,10 @@
         "proxy": {
           "$ref": "#/$defs/ProxySettings",
           "description": "An outbound proxy for the first hop. Absent means a direct connection. The proxy password is a saved secret, not part of the record."
+        },
+        "environment": {
+          "$ref": "#/$defs/HostEnvironment",
+          "description": "What the host is for. Absent means unmarked."
         }
       },
       "required": [
@@ -3137,6 +3141,16 @@
         "openssh"
       ],
       "description": "Rust: domain::EnginePreference. Per-host override of the global engine; `auto` follows the global setting."
+    },
+    "HostEnvironment": {
+      "type": "string",
+      "enum": [
+        "production",
+        "staging",
+        "testing",
+        "development"
+      ],
+      "description": "Rust: domain::HostEnvironment. A production host is marked in the UI and asks before broadcast input and multi-line paste."
     },
     "ProxyKind": {
       "type": "string",

@@ -11,7 +11,8 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { deleteSnippet, loadSnippets, saveSnippet, type Snippet } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { appear } from "@/lib/motion";
-import { targetsFor, toggleGlobalBroadcast, useBroadcast } from "@/lib/broadcast";
+import { useBroadcastGuard } from "@/components/app/useBroadcastGuard";
+import { targetsFor, useBroadcast } from "@/lib/broadcast";
 import { terminalFor } from "@/lib/terminals";
 
 type Draft = { id: string | null; name: string; content: string };
@@ -26,6 +27,7 @@ export function SnippetsPanel({ activeKey }: { activeKey: string | null }) {
   const broadcast = useBroadcast().global;
   const [error, setError] = useState<string | null>(null);
   const confirm = useConfirm();
+  const guard = useBroadcastGuard();
 
   const reload = useCallback(() => {
     loadSnippets()
@@ -153,7 +155,7 @@ export function SnippetsPanel({ activeKey }: { activeKey: string | null }) {
         <div className="flex items-center gap-2 px-2 py-1 text-callout text-label-1">
           <Radio className="size-4 shrink-0 text-label-2" strokeWidth={1.5} />
           <span className="min-w-0 flex-1">{t.broadcastAll}</span>
-          <Switch on={broadcast} label={t.broadcastAll} onClick={toggleGlobalBroadcast} />
+          <Switch on={broadcast} label={t.broadcastAll} onClick={() => void guard.toggleGlobal("")} />
         </div>
         <p className="mt-1.5 flex items-center gap-1 px-2 text-callout text-label-3">
           <CornerDownLeft className="size-4 shrink-0" strokeWidth={1.5} />

@@ -1,3 +1,4 @@
+import type { HostEnvironment } from "@/lib/backend";
 import { Maximize2, Minimize2, X } from "lucide-react";
 import { useRef, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { TerminalView, type SessionStatus } from "@/components/app/TerminalView";
@@ -32,6 +33,8 @@ const percent = (rect: Rect): CSSProperties => ({
 export function PaneArea({
   tabKey,
   hostId,
+  environment = null,
+  hostName = "",
   state,
   restored,
   active,
@@ -45,6 +48,9 @@ export function PaneArea({
 }: {
   tabKey: string;
   hostId: string | null;
+  /** The host's environment, for the production marks and confirmations. */
+  environment?: HostEnvironment | null;
+  hostName?: string;
   state: PaneState;
   /** Daemon sessions to reattach, by pane (from a restored layout). */
   restored: Record<string, string>;
@@ -80,6 +86,8 @@ export function PaneArea({
             <TerminalView
               tabKey={id}
               hostId={hostId}
+              environment={environment}
+              hostName={hostName}
               sessionId={restored[id]}
               active={active && focused && Boolean(rect)}
               broadcast={scope}

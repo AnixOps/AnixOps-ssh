@@ -81,6 +81,9 @@ pub struct SyncConnection {
     /// Absent in files written before outbound proxies existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<crate::domain::ProxySettings>,
+    /// Absent in files written before host environments existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<crate::domain::HostEnvironment>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind")]
@@ -226,6 +229,7 @@ impl From<&Connection> for SyncConnection {
             remote_forwards: c.remote_forwards.clone(),
             dynamic_forwards: c.dynamic_forwards.clone(),
             proxy: c.proxy.clone(),
+            environment: c.environment,
         }
     }
 }
@@ -268,6 +272,7 @@ impl SyncConnection {
             engine: None,
             forward_x11: false,
             proxy: self.proxy.clone(),
+            environment: self.environment,
         }
     }
 }

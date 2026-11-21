@@ -251,7 +251,9 @@ mod tests {
         std::fs::write(&file, "one").unwrap();
         let count = Arc::new(AtomicUsize::new(0));
         let seen = count.clone();
-        let _watch = watch(&file, Duration::from_millis(200), move || {
+        // The quiet time is long enough that a busy CI runner pausing
+        // between the two writes of the burst still counts them as one.
+        let _watch = watch(&file, Duration::from_millis(1000), move || {
             seen.fetch_add(1, Ordering::SeqCst);
         })
         .unwrap();
@@ -263,7 +265,7 @@ mod tests {
         std::fs::write(&file, "two!").unwrap();
         std::fs::write(&file, "three").unwrap();
         assert!(wait_for(&count, 1));
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(1500));
         assert_eq!(count.load(Ordering::SeqCst), 1);
         let swap = dir.path().join(".a.conf.swp");
         std::fs::write(&swap, "four, longer").unwrap();

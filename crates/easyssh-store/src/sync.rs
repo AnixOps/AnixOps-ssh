@@ -129,6 +129,7 @@ impl Syncable for Host {
         take(fields, "engine", &mut c.engine)?;
         take(fields, "forward_x11", &mut c.forward_x11)?;
         take(fields, "proxy", &mut c.proxy)?;
+        take(fields, "environment", &mut c.environment)?;
         take(fields, "tags", &mut c.tags)?;
         take(fields, "notes_secret", &mut host.notes_secret)?;
         Ok(host)
@@ -1134,5 +1135,38 @@ mod engine_field_tests {
         older.remove("proxy");
         let kept = Host::from_fields(Some(&received), &connection.id, &older).unwrap();
         assert_eq!(kept.connection.proxy, connection.proxy);
+    }
+
+    #[test]
+    fn a_hosts_environment_travels_and_an_older_record_keeps_it() {
+        use easyssh_core::HostEnvironment;
+        let mut connection = Connection::alias("prod", "prod");
+        connection.id = uuid::Uuid::new_v4().to_string();
+        connection.environment = Some(HostEnvironment::Production);
+        let fields: std::collections::BTreeMap<String, serde_json::Value> =
+            Host::new(connection.clone())
+                .fields()
+                .into_iter()
+                .map(|(name, field)| (name.to_owned(), field.value))
+                .collect();
+        assert_eq!(fields["environment"], serde_json::json!("production"));
+        let received = Host::from_fields(None, &connection.id, &fields).unwrap();
+        assert_eq!(
+            received.connection.environment,
+            Some(HostEnvironment::Production)
+        );
+        // A record from a build without the field leaves the host as it is.
+        let mut older = fields.clone();
+        older.remove("environment");
+        let kept = Host::from_fields(Some(&received), &connection.id, &older).unwrap();
+        assert_eq!(
+            kept.connection.environment,
+            Some(HostEnvironment::Production)
+        );
+        // Clearing it syncs as null.
+        let mut cleared = fields;
+        cleared.insert("environment".into(), serde_json::Value::Null);
+        let none = Host::from_fields(Some(&received), &connection.id, &cleared).unwrap();
+        assert_eq!(none.connection.environment, None);
     }
 }

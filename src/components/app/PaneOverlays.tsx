@@ -45,15 +45,20 @@ export function BroadcastBar({ scope, count, onStop }: { scope: Exclude<Broadcas
 export function PasteConfirm({
   count,
   lines,
+  production,
   onChoose,
 }: {
   count: number;
   /** How many lines the paste has; named when it goes to this pane only. */
   lines: number;
+  /** The name of the production host this goes to; the question names it. */
+  production?: string;
   onChoose: (all: boolean | null) => void;
 }) {
   const title =
-    count === 0
+    count === 0 && production !== undefined
+      ? t.pasteProdTitle.replace("{n}", String(lines)).replace("{host}", production)
+      : count === 0
       ? t.pasteMultilineTitle.replace("{n}", String(lines))
       : t.pasteConfirmTitle.replace("{n}", String(count + 1));
   useEffect(() => {

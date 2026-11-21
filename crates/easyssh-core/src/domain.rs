@@ -245,6 +245,42 @@ pub struct Connection {
     /// the vault and never in this record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxySettings>,
+    /// What the host is for, so that a production host is hard to mistake for
+    /// a test one. Absent means unmarked; old data and sync payloads without
+    /// it stay valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<HostEnvironment>,
+}
+
+/// The kind of environment a host belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostEnvironment {
+    Production,
+    Staging,
+    Testing,
+    Development,
+}
+
+impl HostEnvironment {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Production => "production",
+            Self::Staging => "staging",
+            Self::Testing => "testing",
+            Self::Development => "development",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "production" => Some(Self::Production),
+            "staging" => Some(Self::Staging),
+            "testing" => Some(Self::Testing),
+            "development" => Some(Self::Development),
+            _ => None,
+        }
+    }
 }
 
 /// The protocol of an outbound proxy.
@@ -324,6 +360,7 @@ impl Connection {
             engine: None,
             forward_x11: false,
             proxy: None,
+            environment: None,
         }
     }
 }
