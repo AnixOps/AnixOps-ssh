@@ -864,7 +864,17 @@ export function App() {
               </div>
               );
             })}
-            {!activeTab && <EmptyWorkspace onOpenLocal={openLocal} status={status} />}
+            {!activeTab && <EmptyWorkspace
+                onOpenLocal={openLocal}
+                onNewHost={() => {
+                  setPrefill(undefined);
+                  setNewSerial(false);
+                  setEditing(null);
+                }}
+                onImport={() => setImporting(true)}
+                hostCount={snapshot.hosts.length}
+                status={status}
+              />}
           </div>
         </main>
         </div>

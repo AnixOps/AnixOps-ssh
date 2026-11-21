@@ -1,5 +1,5 @@
 import { Cable, ChevronRight, Copy, CopyPlus, Download, Pencil, Plus, Search, Server, Star, Trash2, SquarePlus, Zap } from "lucide-react";
-import { useMemo, useState, type KeyboardEvent, type Ref } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { hostColor, isTauri, type Group, type Host } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { findSavedHost, formatTarget, parseTarget, type Target } from "@/lib/quickConnect";
 import { shortcutHint } from "@/lib/shortcutTable";
+import { onSettings, settings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 
 interface Section {
@@ -102,6 +103,14 @@ export function HostList({
       return next;
     });
 
+  // A click picks a host and a double-click (or Enter) connects, as in
+  // Termius, FinalShell and MobaXterm, so a stray click never opens a
+  // session (on a production host least of all). Settings can make a single
+  // click connect.
+  const [singleClick, setSingleClick] = useState(() => settings().hostsSingleClick);
+  useEffect(() => onSettings((next) => setSingleClick(next.hostsSingleClick)), []);
+  const [picked, setPicked] = useState<string | null>(null);
+
   // The list is one Tab stop; arrows move between rows (K7). The selected host, or
   // the first row, is the stop.
   const visible = normalized
@@ -140,6 +149,9 @@ export function HostList({
       host={host}
       tabStop={isStop(host)}
       selected={host.id === selectedId}
+      picked={host.id === picked}
+      singleClick={singleClick}
+      onPick={setPicked}
       onOpen={onOpen}
       onOpenNew={onOpenNew}
       onDuplicate={onDuplicate}
@@ -202,7 +214,9 @@ export function HostList({
             <p className="text-callout font-medium text-label-1">{t.noHosts}</p>
             <p className="mt-1 text-callout text-label-2">{t.noHostsHint}</p>
             <div className="mt-4 flex items-center justify-center gap-2">
-              <Button variant="primary" size="sm" onClick={() => onEdit(null)}>
+              {/* Secondary: the window's one primary action is the same
+                  "新建主机" on the empty workspace beside this list (A1). */}
+              <Button variant="secondary" size="sm" onClick={() => onEdit(null)}>
                 <Plus />
                 {t.newHost}
               </Button>
@@ -278,6 +292,9 @@ function HostRow({
   host,
   tabStop,
   selected,
+  picked,
+  singleClick,
+  onPick,
   onOpen,
   onOpenNew,
   onDuplicate,
@@ -288,6 +305,10 @@ function HostRow({
   host: Host;
   tabStop: boolean;
   selected: boolean;
+  /** Clicked once: highlighted, not connected. */
+  picked: boolean;
+  singleClick: boolean;
+  onPick: (id: string) => void;
   onOpen: (host: Host) => void;
   onOpenNew?: (host: Host) => void;
   onDuplicate?: (host: Host) => void;
@@ -351,11 +372,14 @@ function HostRow({
         type="button"
         data-host-row
         tabIndex={tabStop ? 0 : -1}
-        onClick={() => onOpen(host)}
+        // Enter on a focused row arrives as a click without a pointer (detail 0).
+        onClick={(event) => (singleClick || event.detail === 0 ? onOpen(host) : onPick(host.id))}
+        onDoubleClick={() => !singleClick && onOpen(host)}
         aria-current={selected ? "true" : undefined}
+        aria-description={singleClick ? undefined : t.hostDoubleClickHint}
         className={cn(
-          "relative flex w-full items-center gap-3 rounded-sm py-1.5 pr-16 pl-2 text-left",
-          selected ? "bg-accent-soft" : "hover:bg-fill-1",
+          "relative flex w-full items-center gap-3 rounded-sm py-1.5 pr-16 pl-2 text-left select-none",
+          selected ? "bg-accent-soft" : picked ? "bg-fill-2" : "hover:bg-fill-1",
         )}
       >
         <HostTile host={host} selected={selected} />
@@ -364,7 +388,7 @@ function HostRow({
             <span className="min-w-0 truncate text-callout font-medium text-label-1" title={host.name}>
               {host.name}
             </span>
-            <EnvBadge environment={host.environment} />
+            <EnvBadge environment={host.environment} iconOnly />
           </span>
           <span className="block truncate font-mono text-callout text-label-2" title={host.target}>
             {host.target}
@@ -408,17 +432,12 @@ export function HostTile({ host, selected = false, large = false }: { host: Host
         selected ? "bg-bg-elevated text-(--accent) shadow-1" : "bg-fill-2 text-label-2",
       )}
     >
+      {/* The host's colour tints its icon: a dot on the corner read as
+          "online", which it never meant. */}
       {host.fields.serial ? (
-        <Cable className={large ? "size-6" : "size-4"} strokeWidth={1.5} />
+        <Cable className={large ? "size-6" : "size-4"} strokeWidth={host.color ? 2 : 1.5} style={host.color ? { color: hostColor(host.color) } : undefined} />
       ) : (
-        <Server className={large ? "size-6" : "size-4"} strokeWidth={1.5} />
-      )}
-      {host.color && (
-        <span
-          aria-hidden
-          className="absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-(--bg-grouped)"
-          style={{ backgroundColor: hostColor(host.color) }}
-        />
+        <Server className={large ? "size-6" : "size-4"} strokeWidth={host.color ? 2 : 1.5} style={host.color ? { color: hostColor(host.color) } : undefined} />
       )}
     </span>
   );

@@ -69,6 +69,10 @@ pub struct Settings {
     /// Compare SHA-256 of a file here and on the server after each transfer.
     #[serde(default)]
     files_verify_transfers: bool,
+    /// A single click on a host connects (off: a click selects, a
+    /// double-click or Enter connects, as in Termius and FinalShell).
+    #[serde(default)]
+    hosts_single_click: bool,
 }
 
 /// A double-click on a file: open it in the editor (FinalShell, MobaXterm,
@@ -139,6 +143,22 @@ fn files_behaviour() -> FilesBehaviour {
 /// The configured editor command, empty for the system default.
 pub fn editor_command() -> String {
     files_behaviour().editor_command
+}
+
+/// Host list behaviour, under its own key like `FilesBehaviour`.
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
+#[serde(default)]
+struct HostsBehaviour {
+    single_click: bool,
+}
+
+const HOSTS_BEHAVIOUR: &str = "hosts_behaviour";
+
+fn hosts_behaviour() -> HostsBehaviour {
+    open_store()
+        .ok()
+        .and_then(|store| store.get_setting_as(HOSTS_BEHAVIOUR).ok().flatten())
+        .unwrap_or_default()
 }
 
 /// Terminal behaviour only the app's terminal view reads. Kept under its own
@@ -221,6 +241,7 @@ pub fn settings_get() -> Result<Settings, String> {
         follow_terminal_folder: files.follow_terminal_folder,
         files_double_click: files.double_click,
         files_verify_transfers: files.verify_transfers,
+        hosts_single_click: hosts_behaviour().single_click,
     })
 }
 
@@ -287,6 +308,14 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     if files != files_behaviour() {
         store
             .set_setting_as(FILES_BEHAVIOUR, &files)
+            .map_err(stored)?;
+    }
+    let hosts = HostsBehaviour {
+        single_click: settings.hosts_single_click,
+    };
+    if hosts != hosts_behaviour() {
+        store
+            .set_setting_as(HOSTS_BEHAVIOUR, &hosts)
             .map_err(stored)?;
     }
     let mut telemetry = load_config()?.telemetry;

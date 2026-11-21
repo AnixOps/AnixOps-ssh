@@ -44,6 +44,8 @@ export interface Settings {
   filesDoubleClick: "edit" | "download";
   /** Compare SHA-256 of a file here and on the server after each transfer. */
   filesVerifyTransfers: boolean;
+  /** A single click on a host connects; off, a click selects and a double-click or Enter connects. */
+  hostsSingleClick: boolean;
   /** The SSH engine for hosts that follow the global setting: the built-in
    * engine unless OpenSSH was chosen (an advanced option kept for compatibility). */
   sshEngine: SshEngine;
@@ -74,6 +76,7 @@ let current: Settings = {
   followTerminalFolder: false,
   filesDoubleClick: "edit",
   filesVerifyTransfers: false,
+  hostsSingleClick: false,
   sshEngine: "russh",
   crashReports: null,
   usageStats: false,

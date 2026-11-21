@@ -258,6 +258,15 @@ export function SettingsPage({
                 </Select>
               </SettingsRow>
             </SettingsGroup>
+            <SettingsGroup title={t.hostsTitle}>
+              <SettingsRow label={t.hostsSingleClick} hint={t.hostsSingleClickHint}>
+                <Switch
+                  on={current.hostsSingleClick}
+                  label={t.hostsSingleClick}
+                  onClick={() => update({ hostsSingleClick: !current.hostsSingleClick })}
+                />
+              </SettingsRow>
+            </SettingsGroup>
             <SettingsGroup title={t.updatesTitle}>
               <UpdatesSection version={version} />
             </SettingsGroup>

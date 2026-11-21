@@ -193,7 +193,7 @@ async function playScene(context, scene, { en = false } = {}) {
     // With a session open the host list has made way; the rail brings it back.
     if (!(await page.getByRole("button", { name: new RegExp(host) }).first().isVisible()))
       await page.getByRole("button", { name: /^(?:主机|Hosts)$/ }).click();
-    await page.getByRole("button", { name: new RegExp(host) }).first().click();
+    await page.getByRole("button", { name: new RegExp(host) }).first().dblclick();
     await page.waitForTimeout(300);
   }
   if (scene.local) await page.getByRole("button", { name: name("打开本地终端") }).click();
