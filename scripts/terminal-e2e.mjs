@@ -1761,6 +1761,30 @@ check("设置", "settings-live", "改字号立刻作用到已打开的终端，�
   return `字号 ${before} → ${after}，会话不断`;
 });
 
+check("设置", "terminal-scheme", "浅色应用里终端默认深色，可改浅色或跟随应用，立刻生效（iTerm2、Windows Terminal、Termius）", async (page) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await openHost(page);
+  const luminance = (hex) => {
+    const full = hex.length === 4 ? `#${[...hex.slice(1)].map((c) => c + c).join("")}` : hex;
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(full.slice(i, i + 2), 16));
+    if ([r, g, b].some(Number.isNaN)) throw new Error(`读不出颜色 ${hex}`);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const terminalBg = () => term(page, (t) => t.options.theme.background);
+  const paneBg = () =>
+    page.evaluate(() => getComputedStyle(document.querySelector(".xterm").closest(".bg-bg")).backgroundColor);
+  const dark = await terminalBg();
+  if (luminance(dark) > 60) throw new Error(`浅色应用里终端背景是 ${dark}`);
+  if (!/rgb\(0, 0, 0\)/.test(await paneBg())) throw new Error(`终端四周留白不是深色：${await paneBg()}`);
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.locator('[data-settings-nav="terminal"]').click();
+  await page.getByRole("radio", { name: "跟随应用" }).click();
+  await page.waitForTimeout(300);
+  const app = await terminalBg();
+  if (luminance(app) < 200) throw new Error(`选了跟随应用，终端背景仍是 ${app}`);
+  return `默认 ${dark}，跟随应用后 ${app}`;
+});
+
 // ---- Run -----------------------------------------------------------------
 
 const results = [];
