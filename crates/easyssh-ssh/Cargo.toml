@@ -24,7 +24,7 @@ russh-sftp = "3.0.1"
 sha1 = "0.10"
 socket2 = "0.6"
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "sync"] }
 tracing = "0.1"
 zeroize = "1"
 ed25519-dalek = { version = "3", optional = true }

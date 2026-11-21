@@ -480,6 +480,9 @@ pub enum TransferEvent {
     Verify {
         status: String,
         files: u64,
+        #[serde(rename = "skippedVerified")]
+        skipped_verified: u64,
+        unverified: u64,
         path: Option<String>,
         #[serde(rename = "localSha256")]
         local_sha256: Option<String>,
@@ -941,12 +944,23 @@ fn safe_file_name(name: &str) -> String {
     }
 }
 
+/// Whether `candidate` is free: no file under it and no download of it under
+/// way (its `.name.easyssh-part` is there). The engine also refuses a second
+/// writer of one part, so a race between two picks is an error, not a mixed
+/// file.
+fn name_is_free(candidate: &Path) -> bool {
+    let mut part = std::ffi::OsString::from(".");
+    part.push(candidate.file_name().unwrap_or_default());
+    part.push(".easyssh-part");
+    !candidate.exists() && !candidate.with_file_name(part).exists()
+}
+
 fn unique_download_path(name: &str) -> Result<PathBuf, String> {
     let dir = dirs::download_dir()
         .or_else(dirs::home_dir)
         .ok_or("no Downloads folder was found")?;
     let candidate = dir.join(name);
-    if !candidate.exists() {
+    if name_is_free(&candidate) {
         return Ok(candidate);
     }
     let path = Path::new(name);
@@ -961,7 +975,7 @@ fn unique_download_path(name: &str) -> Result<PathBuf, String> {
             None => format!("{stem} ({number})"),
         };
         let candidate = dir.join(file);
-        if !candidate.exists() {
+        if name_is_free(&candidate) {
             return Ok(candidate);
         }
     }
@@ -971,8 +985,21 @@ fn unique_download_path(name: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        mode_string, newest_file, remote_file, remove_partial, safe_file_name, RemoteFileKind,
+        mode_string, name_is_free, newest_file, remote_file, remove_partial, safe_file_name,
+        RemoteFileKind,
     };
+
+    #[test]
+    fn a_name_with_a_download_under_way_is_not_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = dir.path().join("a.iso");
+        assert!(name_is_free(&name));
+        std::fs::write(dir.path().join(".a.iso.easyssh-part"), b"half").unwrap();
+        assert!(!name_is_free(&name));
+        std::fs::remove_file(dir.path().join(".a.iso.easyssh-part")).unwrap();
+        std::fs::write(&name, b"done").unwrap();
+        assert!(!name_is_free(&name));
+    }
 
     #[test]
     fn daemon_entries_look_like_ls_listings() {

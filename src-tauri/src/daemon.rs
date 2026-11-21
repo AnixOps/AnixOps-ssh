@@ -155,6 +155,8 @@ impl LinkHandler for Handler {
             crate::files::TransferEvent::Verify {
                 status: text("status").unwrap_or_else(|| "unavailable".to_owned()),
                 files: verify["files"].as_u64().unwrap_or(0),
+                skipped_verified: verify["skipped_verified"].as_u64().unwrap_or(0),
+                unverified: verify["unverified"].as_u64().unwrap_or(0),
                 path: text("path"),
                 local_sha256: text("local_sha256"),
                 remote_sha256: text("remote_sha256"),
