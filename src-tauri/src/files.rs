@@ -106,6 +106,45 @@ impl Gate {
     fn wake(&self) {
         self.changed.notify_all();
     }
+
+    /// Gives up a place in the queue that never ran.
+    fn cancel(&self, ticket: u64) {
+        self.state().waiting.retain(|t| *t != ticket);
+        self.changed.notify_all();
+    }
+}
+
+/// A running slot of a [`Gate`], released when dropped, so an early return
+/// between taking the slot and handing it to the transfer thread cannot
+/// leak it.
+struct Slot {
+    gate: Arc<Gate>,
+    held: bool,
+}
+
+impl Slot {
+    fn new(gate: Arc<Gate>) -> Self {
+        Slot { gate, held: true }
+    }
+
+    /// Hands the release over to whoever runs the transfer.
+    fn keep(mut self) {
+        self.held = false;
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        if self.held {
+            self.gate.leave();
+        }
+    }
+}
+
+/// Stops a child that was started but will not be watched.
+fn reap(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Transfers the daemon runs (built-in engine): where their events go.
@@ -480,6 +519,9 @@ pub enum TransferEvent {
     Verify {
         status: String,
         files: u64,
+        #[serde(rename = "skippedVerified")]
+        skipped_verified: u64,
+        unverified: u64,
         path: Option<String>,
         #[serde(rename = "localSha256")]
         local_sha256: Option<String>,
@@ -607,25 +649,45 @@ pub async fn transfer_start(
     // `sftp` process is a session on the host (OpenSSH's `MaxSessions`).
     let queued = !gate.try_enter(ticket);
     let mut first = None;
+    let mut slot = None;
     if !queued {
+        // From here the slot is released on any early return.
+        let held = Slot::new(gate.clone());
         match sftp::spawn_transfer(&OpenSsh, &connection, upload, &local, &remote, &env) {
             Ok(child) => first = Some(child),
-            Err(error) => {
-                gate.leave();
-                return Err(error.to_string());
-            }
+            Err(error) => return Err(error.to_string()),
         }
+        slot = Some(held);
     }
     let transfer = Arc::new(RunningTransfer {
         child: Mutex::new(first),
         cancelled: AtomicBool::new(false),
         gate: gate.clone(),
     });
-    files
-        .transfers
-        .lock()
-        .map_err(lock_error)?
-        .insert(id.clone(), transfer.clone());
+    match files.transfers.lock() {
+        Ok(mut transfers) => {
+            transfers.insert(id.clone(), transfer.clone());
+        }
+        Err(error) => {
+            if let Some(child) = transfer
+                .child
+                .lock()
+                .ok()
+                .and_then(|mut c| c.take())
+                .as_mut()
+            {
+                reap(child);
+            }
+            if queued {
+                gate.cancel(ticket);
+            }
+            // `slot` drops here and gives the running place back.
+            return Err(lock_error(error));
+        }
+    }
+    if let Some(slot) = slot {
+        slot.keep();
+    }
 
     let local_path = local.clone();
     let remote_path = remote.clone();
@@ -941,12 +1003,23 @@ fn safe_file_name(name: &str) -> String {
     }
 }
 
+/// Whether `candidate` is free: no file under it and no download of it under
+/// way (its `.name.easyssh-part` is there). The engine also refuses a second
+/// writer of one part, so a race between two picks is an error, not a mixed
+/// file.
+fn name_is_free(candidate: &Path) -> bool {
+    let mut part = std::ffi::OsString::from(".");
+    part.push(candidate.file_name().unwrap_or_default());
+    part.push(".easyssh-part");
+    !candidate.exists() && !candidate.with_file_name(part).exists()
+}
+
 fn unique_download_path(name: &str) -> Result<PathBuf, String> {
     let dir = dirs::download_dir()
         .or_else(dirs::home_dir)
         .ok_or("no Downloads folder was found")?;
     let candidate = dir.join(name);
-    if !candidate.exists() {
+    if name_is_free(&candidate) {
         return Ok(candidate);
     }
     let path = Path::new(name);
@@ -961,7 +1034,7 @@ fn unique_download_path(name: &str) -> Result<PathBuf, String> {
             None => format!("{stem} ({number})"),
         };
         let candidate = dir.join(file);
-        if !candidate.exists() {
+        if name_is_free(&candidate) {
             return Ok(candidate);
         }
     }
@@ -971,8 +1044,60 @@ fn unique_download_path(name: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        mode_string, newest_file, remote_file, remove_partial, safe_file_name, RemoteFileKind,
+        mode_string, name_is_free, newest_file, remote_file, remove_partial, safe_file_name, Gate,
+        RemoteFileKind, Slot,
     };
+
+    #[test]
+    fn a_slot_is_released_on_early_return() {
+        use std::sync::Arc;
+        let gate = Arc::new(Gate::new(1));
+        let attempt = |gate: &Arc<Gate>| -> Result<(), String> {
+            let ticket = gate.join();
+            assert!(gate.try_enter(ticket));
+            let _slot = Slot::new(gate.clone());
+            Err("the transfer map is unavailable".to_owned())
+        };
+        assert!(attempt(&gate).is_err());
+        assert_eq!(gate.state().running, 0);
+        // The place is free again for the next transfer.
+        let ticket = gate.join();
+        assert!(gate.try_enter(ticket));
+        Slot::new(gate.clone()).keep();
+        assert_eq!(gate.state().running, 1);
+    }
+
+    #[test]
+    fn a_cancelled_ticket_does_not_block_the_queue() {
+        let gate = Gate::new(1);
+        let first = gate.join();
+        let second = gate.join();
+        gate.cancel(first);
+        assert!(gate.try_enter(second));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reap_kills_and_waits_for_the_child() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        super::reap(&mut child);
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn a_name_with_a_download_under_way_is_not_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = dir.path().join("a.iso");
+        assert!(name_is_free(&name));
+        std::fs::write(dir.path().join(".a.iso.easyssh-part"), b"half").unwrap();
+        assert!(!name_is_free(&name));
+        std::fs::remove_file(dir.path().join(".a.iso.easyssh-part")).unwrap();
+        std::fs::write(&name, b"done").unwrap();
+        assert!(!name_is_free(&name));
+    }
 
     #[test]
     fn daemon_entries_look_like_ls_listings() {

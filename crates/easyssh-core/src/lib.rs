@@ -5,6 +5,7 @@
 //! and the system SSH agent inherited by their child processes.
 
 pub mod adhoc;
+pub mod atomic_file;
 pub mod config;
 pub mod domain;
 pub mod edit;

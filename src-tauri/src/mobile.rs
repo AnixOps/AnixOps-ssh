@@ -19,7 +19,7 @@ use crate::mobile_vault;
 use easyssh_engine::events::{ui_event_name, Events};
 use easyssh_engine::hosts::{save_host, save_tunnel, snapshot, target_for, NewHost, NewTunnel};
 use easyssh_engine::known_hosts::StoreKnownHosts;
-use easyssh_engine::local_files::{sweep, unique_path, Staging};
+use easyssh_engine::local_files::{reserve_unique_path, sweep, Staging};
 use easyssh_engine::prompts::Prompts;
 use easyssh_engine::supervisor::{
     Attach, ReconnectPolicy, SessionOptions, Status, SupervisedSink, Supervisor,
@@ -531,11 +531,22 @@ async fn transfer_start(
             .rsplit('/')
             .find(|part| !part.is_empty())
             .ok_or("the remote path has no file name")?;
-        let local = unique_path(&state.downloads, name)?;
+        let local = reserve_unique_path(&state.downloads, name)?;
         (local, remote)
     };
 
-    let target = state.target(&host_id).await?;
+    // A download's name is reserved by an empty file; it goes again when the
+    // transfer does not complete.
+    let reserved = (!upload).then(|| local.clone());
+    let target = match state.target(&host_id).await {
+        Ok(target) => target,
+        Err(error) => {
+            if let Some(path) = &reserved {
+                let _ = std::fs::remove_file(path);
+            }
+            return Err(error);
+        }
+    };
     let staging = state.staging.clone();
     let staged = upload.then(|| local.clone());
     let sink: Events = Arc::new(move |name: &str, payload: Value| {
@@ -559,7 +570,15 @@ async fn transfer_start(
                             .to_owned(),
                     },
                 };
+                let completed = matches!(event, TransferEvent::Done);
                 let _ = events.send(event);
+                if let Some(path) = reserved.as_ref().filter(|_| !completed) {
+                    // Only the empty reservation: a partly written file is
+                    // never under this name (it is renamed when complete).
+                    if std::fs::metadata(path).is_ok_and(|meta| meta.len() == 0) {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
                 // The staged copy is not needed any more.
                 if let Some(id) = staged.as_ref().and_then(|path| staging.id_of(path)) {
                     staging.discard(&id);
@@ -623,12 +642,13 @@ fn stage_chunk(state: State<'_, Mobile>, request: Request<'_>) -> Result<u64, St
     state.staging.append(&id, offset, bytes)
 }
 
-/// The path of a staged file, to hand to `transfer_start`.
+/// The path of a staged file, to hand to `transfer_start`. `total` is the
+/// file's size; a staged copy of any other length is refused.
 #[tauri::command]
-fn stage_finish(state: State<'_, Mobile>, id: String) -> Result<String, String> {
+fn stage_finish(state: State<'_, Mobile>, id: String, total: u64) -> Result<String, String> {
     state
         .staging
-        .path(&id)
+        .finish(&id, total)
         .map(|path| path.to_string_lossy().into_owned())
 }
 

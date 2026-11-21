@@ -475,6 +475,43 @@ fn transfer_command(upload: bool, local: &str, remote: &str) -> Result<String, O
     })
 }
 
+/// A file upload in two steps: `put` to a hidden name in the same folder,
+/// then `rename` over `remote` (see [`spawn_transfer`]).
+fn file_upload_command(local: &str, remote: &str, suffix: &str) -> Result<String, OpenSshError> {
+    let (folder, name) = match remote.rfind('/') {
+        Some(at) => (&remote[..=at], &remote[at + 1..]),
+        None => ("", remote),
+    };
+    if name.is_empty() {
+        return Err(OpenSshError::Failed(format!(
+            "{remote} names a folder, not a file"
+        )));
+    }
+    let part = format!("{folder}.{name}.easyssh-part-{suffix}");
+    Ok(format!(
+        "put -p {} {}\nrename {} {}\n",
+        quote(local)?,
+        quote(&part)?,
+        quote(&part)?,
+        quote(remote)?
+    ))
+}
+
+/// Different for every upload, so two uploads of one file never share a temporary name.
+fn part_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!(
+        "{}-{}-{nanos:x}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// Calls `line` for every line of `stream`, without the line break, until the
 /// stream ends or `line` returns false. Bytes that are not UTF-8 (a name in
 /// Latin-1, say) are replaced rather than ending the stream, which would
@@ -498,6 +535,15 @@ fn each_line(stream: impl Read, mut line: impl FnMut(String) -> bool) {
 
 /// Starts a transfer in its own `sftp -oBatchMode=no -b -` process. The caller waits on or
 /// kills the returned child; standard error carries the failure reason.
+///
+/// A file upload never writes over `remote` directly: it is put to a hidden
+/// temporary name next to it and then renamed into place. OpenSSH's `sftp`
+/// renames with `posix-rename@openssh.com` when the server offers it, which
+/// replaces an existing file atomically; a server without it refuses the
+/// rename when `remote` exists, and the transfer fails with the original
+/// untouched (the hidden `.<name>.easyssh-part-…` file is left beside it). A
+/// failed or cancelled upload never leaves a partial file at `remote`.
+/// Folder uploads (`put -r`) merge into the remote folder as before.
 pub fn spawn_transfer(
     openssh: &OpenSsh,
     connection: &Connection,
@@ -509,7 +555,11 @@ pub fn spawn_transfer(
     let local = local
         .to_str()
         .ok_or_else(|| OpenSshError::Failed("local path is not valid UTF-8".into()))?;
-    let command = transfer_command(upload, local, remote)?;
+    let command = if upload && Path::new(local).is_file() {
+        file_upload_command(local, remote, &part_suffix())?
+    } else {
+        transfer_command(upload, local, remote)?
+    };
     let mut child = hide_window(&mut Command::new(openssh.sftp_path()?))
         .args(sftp_args(connection, true)?)
         .envs(env.iter().cloned())
@@ -537,6 +587,21 @@ mod tests {
             transfer_command(false, "/tmp/x", "/srv/run.sh").unwrap(),
             "get -pr \"/srv/run.sh\" \"/tmp/x\"\n"
         );
+    }
+
+    #[test]
+    fn a_file_upload_goes_to_a_hidden_name_then_is_renamed_over_the_target() {
+        assert_eq!(
+            file_upload_command("/tmp/a b", "/srv/x.txt", "7").unwrap(),
+            "put -p \"/tmp/a b\" \"/srv/.x.txt.easyssh-part-7\"\nrename \"/srv/.x.txt.easyssh-part-7\" \"/srv/x.txt\"\n"
+        );
+        // A relative target stays in the starting folder.
+        assert_eq!(
+            file_upload_command("/tmp/a", "x", "7").unwrap(),
+            "put -p \"/tmp/a\" \".x.easyssh-part-7\"\nrename \".x.easyssh-part-7\" \"x\"\n"
+        );
+        assert!(file_upload_command("/tmp/a", "/srv/", "7").is_err());
+        assert_ne!(part_suffix(), part_suffix());
     }
 
     #[test]

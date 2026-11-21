@@ -124,6 +124,34 @@ fn upload_and_download_through_sftp_transfer() {
 
 #[test]
 #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+fn an_upload_over_an_existing_file_replaces_it_and_leaves_no_temporary_file() {
+    // The upload goes to a hidden name and is renamed over the target
+    // (posix-rename on OpenSSH), so the folder ends with just the new file.
+    let e2e = E2e::new();
+    let mut session = connect(&e2e, "e2e-target");
+    let dir = join_remote(session.home(), &unique_name("e2e-replace"));
+    session.mkdir(&dir).expect("mkdir");
+    let remote = join_remote(&dir, "same.bin");
+    let first = e2e.dir.path().join("first.bin");
+    std::fs::write(&first, sample_bytes(5000)).unwrap();
+    upload(&e2e, "e2e-target", &first, &remote);
+    let second = e2e.dir.path().join("second.bin");
+    let data: Vec<u8> = sample_bytes(7000).into_iter().rev().collect();
+    std::fs::write(&second, &data).unwrap();
+    upload(&e2e, "e2e-target", &second, &remote);
+
+    let files = session.list(&dir).expect("list");
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert_eq!(files[0].size, data.len() as u64);
+    let back = e2e.dir.path().join("back.bin");
+    download(&e2e, "e2e-target", &remote, &back);
+    assert_eq!(std::fs::read(&back).unwrap(), data);
+    session.remove(&remote, false).expect("rm");
+    session.remove(&dir, true).expect("rmdir");
+}
+
+#[test]
+#[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
 fn download_of_a_missing_file_fails_with_a_reason() {
     let e2e = E2e::new();
     let connection = e2e.alias("e2e-target");

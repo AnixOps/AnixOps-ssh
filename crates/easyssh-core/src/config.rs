@@ -67,9 +67,7 @@ impl ConfigStore {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let temporary = self.path.with_extension("json.tmp");
-        fs::write(&temporary, serde_json::to_vec_pretty(&value)?)?;
-        fs::rename(temporary, &self.path)?;
+        crate::atomic_file::write(&self.path, &serde_json::to_vec_pretty(&value)?)?;
         Ok(())
     }
     pub fn path(&self) -> &Path {
@@ -153,6 +151,34 @@ impl ConfigStore {
 mod tests {
     use super::*;
     use crate::domain::Connection;
+    #[test]
+    fn concurrent_saves_leave_one_whole_config_and_no_temporary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConfigStore::at(dir.path().join("connections.json"));
+        let mut a = AppConfig::new();
+        a.connections.push(Connection::alias("A", "a-host"));
+        let mut b = AppConfig::new();
+        b.connections.push(Connection::alias("B", "b-host"));
+        std::thread::scope(|scope| {
+            for config in [&a, &b] {
+                let store = &store;
+                scope.spawn(move || {
+                    for _ in 0..20 {
+                        let _ = store.save(config);
+                    }
+                });
+            }
+        });
+        store.save(&a).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.connections.len(), 1);
+        let names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+    }
+
     #[test]
     fn saved_schema_has_no_sensitive_property_names() {
         let mut config = AppConfig::new();

@@ -110,6 +110,16 @@ pub enum Error {
     #[error("sftp error: {0}")]
     Sftp(String),
 
+    /// The server said "permission denied" to an SFTP operation.
+    #[error("sftp error: {0}")]
+    PermissionDenied(String),
+
+    /// The server answered an SFTP operation with the generic `Failure`
+    /// status. OpenSSH uses it when a plain rename finds the target already
+    /// there; it can mean other things too, so callers check before acting.
+    #[error("sftp error: {0}")]
+    SftpFailure(String),
+
     /// An SFTP path does not exist.
     #[error("not found: {0}")]
     NotFound(String),
@@ -202,6 +212,12 @@ impl From<russh_sftp::client::error::Error> for Error {
         match error {
             S::Status(status) if status.status_code == StatusCode::NoSuchFile => {
                 Error::NotFound(status.error_message)
+            }
+            S::Status(status) if status.status_code == StatusCode::PermissionDenied => {
+                Error::PermissionDenied(S::Status(status).to_string())
+            }
+            S::Status(status) if status.status_code == StatusCode::Failure => {
+                Error::SftpFailure(S::Status(status).to_string())
             }
             other => Error::Sftp(other.to_string()),
         }

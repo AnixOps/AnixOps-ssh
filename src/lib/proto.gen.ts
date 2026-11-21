@@ -2052,6 +2052,14 @@ export interface TransferVerifyOutcome {
    */
   files?: number;
   /**
+   * Of `files`, those already complete (same size and time) that were found equal and so not sent again.
+   */
+  skipped_verified?: number;
+  /**
+   * Files that could not be checked because the server cannot hash them, including files left out as already complete without a check.
+   */
+  unverified?: number;
+  /**
    * Remote path of the first file that differs.
    */
   path?: string;

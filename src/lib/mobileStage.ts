@@ -23,7 +23,7 @@ export async function stageFile(file: File, onProgress: (bytes: number) => void,
       await invoke("stage_chunk", bytes, { headers: { "x-upload-id": id, "x-offset": String(start) } });
       onProgress(end);
     }
-    return await invoke<string>("stage_finish", { id });
+    return await invoke<string>("stage_finish", { id, total: file.size });
   } catch (reason) {
     void invoke("stage_discard", { id }).catch(() => {});
     throw reason;

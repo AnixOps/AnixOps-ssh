@@ -35,6 +35,10 @@ jobs:
             [ "$actual" = "$version" ] || { echo "::error file=$file::version $actual does not match tag $TAG"; exit 1; }
           done
           grep -q "^version = \"$version\"" Cargo.toml || { echo "::error file=Cargo.toml::workspace version does not match tag $TAG"; exit 1; }
+      - name: Lockfiles match the manifests
+        run: |
+          cargo metadata --locked --format-version 1 > /dev/null
+          npm ci --ignore-scripts --dry-run > /dev/null
       - name: Create draft release
         env:
           MAC_SIGNED: ${{ secrets.APPLE_CERTIFICATE != '' }}
