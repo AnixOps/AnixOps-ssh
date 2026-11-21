@@ -38,9 +38,21 @@ const scenes = [
   { name: "forwards", query: "", nav: "端口转发" },
   { name: "tunnel-editor", query: "", nav: "端口转发", click: "新建隧道" },
   { name: "palette", query: "", open: ["prod-web-01"], keys: "Control+Shift+K", typeText: "prod" },
+  // Settings: one page per section beside the list (`section` picks it).
   { name: "settings", query: "", nav: "设置" },
-  // Settings next to a session: the monitor takes its share of the width.
-  { name: "settings-session", query: "", open: ["prod-web-01"], wait: 4000, nav: "设置", scrollEnd: true },
+  { name: "settings-terminal", query: "", nav: "设置", section: "terminal" },
+  { name: "settings-files", query: "", nav: "设置", section: "files" },
+  { name: "settings-connections", query: "", nav: "设置", section: "connections", scrollEnd: true },
+  { name: "settings-security", query: "", nav: "设置", section: "security" },
+  { name: "settings-ai", query: "", nav: "设置", section: "ai" },
+  { name: "settings-logs", query: "", nav: "设置", section: "logs" },
+  { name: "settings-sync", query: "", nav: "设置", section: "sync", scrollEnd: true },
+  { name: "settings-privacy", query: "", nav: "设置", section: "privacy" },
+  { name: "settings-search", query: "", nav: "设置", settingsSearch: "字" },
+  // Over a session (the session keeps running underneath), and with the
+  // sidebar hidden: the page header then carries the section picker.
+  { name: "settings-session", query: "", open: ["prod-web-01"], wait: 4000, nav: "设置", section: "terminal" },
+  { name: "settings-collapsed", query: "", open: ["prod-web-01"], nav: "设置", section: "general", keys: "Control+b" },
   { name: "settings-update", query: "update=found", nav: "设置", waitText: "有新版本" },
   { name: "settings-update-installing", query: "update=installing", nav: "设置", waitText: "正在下载" },
   { name: "settings-update-package", query: "update=package", nav: "设置", waitText: "打开下载页" },
@@ -207,6 +219,8 @@ async function playScene(context, scene, { en = false } = {}) {
   if (scene.wait) await page.waitForTimeout(scene.wait);
   if (scene.search) await page.getByRole("textbox").first().fill(scene.search);
   if (scene.nav) await page.getByRole("button", { name: name(scene.nav) }).click();
+  if (scene.section) await page.locator(`[data-settings-nav="${scene.section}"]`).click();
+  if (scene.settingsSearch) await page.getByRole("textbox").first().fill(scene.settingsSearch);
   if (scene.run) await page.getByRole("button", { name: new RegExp(en ? (scene.runEn ?? englishName(scene.run)) : scene.run) }).first().click();
   if (scene.keys) {
     await page.keyboard.press(scene.keys);
@@ -222,7 +236,7 @@ async function playScene(context, scene, { en = false } = {}) {
     await page.getByRole(click.role ?? "button", { name: click.regex ? new RegExp(click.name) : click.name, exact: click.regex ? undefined : (click.exact ?? true) }).first().click();
   if (scene.waitText) await page.getByText(scene.query.includes("lang=en") || !en ? scene.waitText : (scene.waitTextEn ?? new RegExp(englishName(scene.waitText)))).first().waitFor();
   if (scene.click) await page.getByRole("button", { name: name(scene.click), exact: true }).first().click();
-  if (scene.scrollEnd) await page.evaluate(() => document.querySelectorAll("aside .overflow-y-auto").forEach((element) => (element.scrollTop = element.scrollHeight)));
+  if (scene.scrollEnd) await page.evaluate(() => document.querySelectorAll("aside .overflow-y-auto, [data-settings-page]").forEach((element) => (element.scrollTop = element.scrollHeight)));
   if (scene.rightClick) {
     const { css, role, name: target, at } = scene.rightClick;
     const element = css ? page.locator(css).last() : page.getByRole(role, target ? { name: new RegExp(target) } : undefined).first();

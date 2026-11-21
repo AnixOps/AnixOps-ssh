@@ -936,6 +936,7 @@ check("字体", "ctrl-wheel-zoom", "Ctrl+滚轮缩放字号（Windows Terminal�
 
 check("字体", "ligatures", "连字：Fira Code、Cascadia Code 等字体把 => != 显示成连字（Windows Terminal、WezTerm、iTerm2）", async (page) => {
   await page.getByRole("button", { name: "设置" }).click();
+  await page.locator('[data-settings-nav="terminal"]').click();
   await page.getByRole("switch", { name: "连字" }).click();
   await page.getByRole("button", { name: "主机", exact: true }).click();
   await openHost(page);
@@ -1521,6 +1522,7 @@ check("设置", "settings-live", "改字号立刻作用到已打开的终端，�
   await openHost(page);
   const before = await term(page, (t) => t.options.fontSize);
   await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.locator('[data-settings-nav="terminal"]').click();
   await page.getByRole("button", { name: "字号 +" }).click();
   await page.getByRole("button", { name: "字号 +" }).click();
   await page.waitForTimeout(300);

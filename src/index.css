@@ -227,7 +227,11 @@
   font-feature-settings: "liga" 1, "calt" 1;
 }
 
-/* The settings search found nothing (SettingsPanel). */
-.settings-list:not(:has([data-settings-row])) > .settings-empty {
+/* The settings search found nothing (SettingsPage): say so, and drop the
+   pages that kept no row and no group whose title matched. */
+.settings-list.searching:not(:has([data-settings-row], [data-settings-match])) > .settings-empty {
   display: block;
+}
+.settings-list.searching > [data-settings-section]:not(:has([data-settings-row], [data-settings-match])) {
+  display: none;
 }
