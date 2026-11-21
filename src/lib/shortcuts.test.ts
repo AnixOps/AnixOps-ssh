@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveGlobalShortcut, resolveShortcut, type KeyInput } from "./shortcuts";
 
 const key = (init: Partial<KeyInput> & { key: string }): KeyInput => ({
@@ -116,6 +116,27 @@ describe("reserved app shortcuts", () => {
     expect(pc({ key: "?", code: "Slash" }, true)).toBe("shortcut-list");
     expect(pc({ key: "<", code: "Comma" }, true)).toBe("settings");
     expect(pc({ key: "!", code: "Digit1" }, true)).toBe("go-hosts");
+  });
+
+  it("takes the Ctrl+Shift form outside the terminal too, so the shown shortcut works everywhere", () => {
+    const shift = (init: Partial<KeyInput> & { key: string }) =>
+      resolveGlobalShortcut(key({ ctrlKey: true, shiftKey: true, ...init }), false, false);
+    expect(shift({ key: "?", code: "Slash" })).toBe("shortcut-list");
+    expect(shift({ key: "<", code: "Comma" })).toBe("settings");
+    expect(shift({ key: "!", code: "Digit1" })).toBe("go-hosts");
+    expect(shift({ key: "N" })).toBe("new-host");
+    expect(shift({ key: "S", code: "KeyS" })).toBe("toggle-sidebar");
+    // The palette's Ctrl+Shift+K is a terminal command, so it works everywhere.
+    expect(resolveShortcut(key({ key: "K", ctrlKey: true, shiftKey: true }), false)).toBe("search-hosts");
+  });
+
+  it("shows one shortcut per command, the form that works everywhere", async () => {
+    vi.stubGlobal("window", { location: { search: "?lang=en" } });
+    const { shortcutTable } = await import("./shortcutTable");
+    for (const row of shortcutTable) {
+      if (row.pcOutside) expect(row.pc).toMatch(/^Ctrl\+Shift\+/);
+    }
+    expect(shortcutTable.find((row) => row.id === "search-hosts")).toMatchObject({ pc: "Ctrl+Shift+K", mac: "⌘⇧K" });
   });
 
   it("clears the terminal with Cmd+K on macOS and moves the palette to Cmd+Shift+K there", () => {

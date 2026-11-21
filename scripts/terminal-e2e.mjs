@@ -627,6 +627,27 @@ check("窗口", "sidebar-toggle", "打开会话后主机列表让位给终端（
   return `终端 ${cols} 列；浮出时不变，Esc 收回回到终端；固定后 ${pinned} 列`;
 });
 
+check("窗口", "shortcuts-everywhere", "界面上显示的快捷键在哪里按都生效：终端外和终端内同一组（Windows Terminal）", async (page) => {
+  if (isMacRun) return "macOS 用 ⌘，本来就同一组";
+  const hint = await page.getByText(/Ctrl\+Shift\+K/).count();
+  if (!hint) throw new Error("首页没有显示 Ctrl+Shift+K");
+  if (await page.getByText(/^Ctrl\+K$/).count()) throw new Error("首页仍显示 Ctrl+K");
+  await page.keyboard.press("Control+Shift+K");
+  await page.getByRole("dialog").waitFor({ timeout: 2000 }).catch(() => { throw new Error("终端外 Ctrl+Shift+K 没有打开命令面板"); });
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({ state: "detached", timeout: 2000 });
+  await page.keyboard.press("Control+Shift+Comma");
+  await page.locator('[data-settings-nav="terminal"]').waitFor({ timeout: 2000 }).catch(() => { throw new Error("终端外 Ctrl+Shift+, 没有打开设置"); });
+  await page.waitForTimeout(200);
+  await page.keyboard.press("Escape");
+  await page.locator('[data-settings-nav="terminal"]').waitFor({ state: "detached", timeout: 2000 });
+  await openHost(page);
+  await page.keyboard.press("Control+Shift+K");
+  await page.getByRole("dialog").waitFor({ timeout: 2000 }).catch(() => { throw new Error("终端内 Ctrl+Shift+K 没有打开命令面板"); });
+  await page.keyboard.press("Escape");
+  return "首页提示 Ctrl+Shift+K；终端内外都打开命令面板，Ctrl+Shift+, 终端外也打开设置";
+});
+
 check("窗口", "focus-returns", "关掉命令面板、快捷键列表、设置、文件面板、监控后，直接打字仍进终端（Windows Terminal、iTerm2）", async (page) => {
   await openHost(page);
   const mod = isMacRun ? "Meta" : "Control";

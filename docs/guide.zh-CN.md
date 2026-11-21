@@ -32,7 +32,7 @@ Windows 10/11 在“设置 → 系统 → 可选功能 → 添加 OpenSSH 客户
 - `Ctrl+Shift+T` 打开本地终端（Windows 上优先用 PowerShell 7）。
 - 复制粘贴 `Ctrl+Shift+C / V`，查找 `Ctrl+Shift+F`。查找支持区分大小写、全字匹配和正则表达式。字体、行高、光标样式、字号和滚动缓冲在设置里调。
 - 连接断开后，底部会出现“重新连接”和“在系统终端中打开”。
-- 应用快捷键都带 Shift（macOS 用 ⌘），所以 `Ctrl+W`、`Ctrl+K` 这些仍然交给 shell。
+- 应用快捷键都带 Shift（macOS 用 ⌘），在哪里按都一样；`Ctrl+W`、`Ctrl+K` 这些仍然交给 shell。
 
 ## 文件
 
@@ -140,14 +140,15 @@ Windows 10/11 在“设置 → 系统 → 可选功能 → 添加 OpenSSH 客户
 
 | 操作 | Windows / Linux | macOS |
 |---|---|---|
-| 命令面板 | Ctrl+Shift+K | ⌘⇧K（终端外为 ⌘K） |
+| 命令面板 | Ctrl+Shift+K（终端外也可 Ctrl+K） | ⌘⇧K（终端外也可 ⌘K） |
 | 清屏并清除回滚 | — | ⌘K |
 | 本地终端 | Ctrl+Shift+T | ⌘T |
 | 关闭标签页 | Ctrl+Shift+W | ⌘W |
 | 文件面板 | Ctrl+Shift+E | ⌘E |
 | 终端内查找 | Ctrl+Shift+F | ⌘F |
 | 复制 / 粘贴 | Ctrl+Shift+C / V | ⌘C / ⌘V |
-| 查看全部快捷键 | Ctrl+/（终端内 Ctrl+Shift+/） | ⌘/ |
+| 设置 | Ctrl+Shift+,（终端外也可 Ctrl+,） | ⌘, |
+| 查看全部快捷键 | Ctrl+Shift+/（终端外也可 Ctrl+/） | ⌘/ |
 
 ## 遇到问题
 
