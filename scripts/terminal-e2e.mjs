@@ -1344,26 +1344,42 @@ check("文件", "sftp-cancel", "大文件传输可以取消，状态显示已取
 });
 
 check("文件", "sftp-resume", "传输中途取消后点“继续”，从断点接着传，最终文件与服务器一致", async (page) => {
-  await openHost(page);
-  const dir = await remoteFixture(page);
-  await runAndWait(page, `seq 1 45000000 > ${dir}/resume.txt`, null, { timeout: 90000 });
-  const pane = await openFilesAt(page, dir);
-  const row = fileRow(pane, "resume.txt");
-  await row.hover();
-  await row.getByRole("button", { name: "下载" }).click();
-  // Cancel once some of it has arrived.
-  await pane.getByText(/\d+%/).first().waitFor({ timeout: 15000 });
-  await pane.getByRole("button", { name: "取消传输" }).click({ timeout: 5000 });
-  await pane.getByText("已取消").waitFor({ timeout: 10000 });
-  await pane.getByRole("button", { name: "继续" }).click({ timeout: 5000 });
-  await pane.getByText("完成", { exact: true }).first().waitFor({ timeout: 120000 });
-  const { createHash } = await import("node:crypto");
-  const { readFile } = await import("node:fs/promises");
-  const local = createHash("sha256").update(await readFile(join(downloadsDir, "resume.txt"))).digest("hex");
-  const remote = await remoteOutput(page, `sha256sum < ${dir}/resume.txt | cut -c1-64`);
-  if (local !== remote) throw new Error(`继续后本地 sha256 ${local}，服务器 ${remote}`);
-  const noted = await pane.getByText(/已从 .* 继续|已从头开始/).count();
-  return `继续后 sha256 一致${noted ? "（行内显示了续传说明）" : ""}`;
+  try {
+    await openHost(page);
+    const dir = await remoteFixture(page);
+    await runAndWait(page, `seq 1 45000000 > ${dir}/resume.txt`, null, { timeout: 90000 });
+    const pane = await openFilesAt(page, dir);
+    const row = fileRow(pane, "resume.txt");
+    await row.hover();
+    await row.getByRole("button", { name: "下载" }).click();
+    // Cancel once some of it has arrived.
+    await pane.getByText(/\d+%/).first().waitFor({ timeout: 15000 });
+    await pane.getByRole("button", { name: "取消传输" }).click({ timeout: 5000 });
+    await pane.getByText("已取消").waitFor({ timeout: 10000 });
+    await pane.getByRole("button", { name: "继续" }).click({ timeout: 5000 });
+    await pane.getByText("完成", { exact: true }).first().waitFor({ timeout: 120000 });
+    const { createHash } = await import("node:crypto");
+    const { readFile, rm } = await import("node:fs/promises");
+    const localFile = join(downloadsDir, "resume.txt");
+    let local;
+    try {
+      local = createHash("sha256").update(await readFile(localFile)).digest("hex");
+    } finally {
+      // ~375 MB: never left in the results that CI publishes.
+      await rm(localFile, { force: true });
+    }
+    const remote = await remoteOutput(page, `sha256sum < ${dir}/resume.txt | cut -c1-64`);
+    await run(page, `rm -f ${dir}/resume.txt`);
+    if (local !== remote) throw new Error(`继续后本地 sha256 ${local}，服务器 ${remote}`);
+    const noted = await pane.getByText(/已从 .* 继续|已从头开始/).count();
+    return `继续后 sha256 一致${noted ? "（行内显示了续传说明）" : ""}`;
+  } finally {
+    // The download is ~375 MB: never leave it or its partial in the results CI publishes.
+    const { readdir, rm } = await import("node:fs/promises");
+    for (const name of await readdir(downloadsDir).catch(() => [])) {
+      if (name.includes("resume.txt")) await rm(join(downloadsDir, name), { force: true });
+    }
+  }
 });
 
 check("文件", "sftp-verify", "传输完成后可点“校验”比较本地与服务器的 SHA-256，显示一致", async (page) => {
