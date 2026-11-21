@@ -35,6 +35,7 @@ import {
 } from "@/lib/backend";
 import { logHostSet, logSettingsGet } from "@/lib/aiBackend";
 import { t } from "@/lib/i18n";
+import { hostKeepSession, setHostKeepSession, type KeepSession } from "@/lib/keepSession";
 import { choiceValue, hostChoice, type HostChoice } from "@/lib/sessionLogs";
 import { BAUD_RATES, defaultSerial, serialReady } from "@/lib/serialUi";
 import { cleanProxy, proxyReady } from "@/lib/proxyUi";
@@ -106,6 +107,7 @@ export function HostEditor({
   });
   const [keyNote, setKeyNote] = useState<string | null>(null);
   const [logChoice, setLogChoice] = useState<HostChoice>("default");
+  const [keep, setKeep] = useState<KeepSession>(host ? hostKeepSession(host.id) : "off");
   const [logLoaded, setLogLoaded] = useState<HostChoice | null>(null);
 
   useEffect(() => firstRef.current?.focus(), []);
@@ -200,6 +202,7 @@ export function HostEditor({
           return;
         }
       }
+      setHostKeepSession(id, keep);
       onDone();
     } catch (reason) {
       setError(String(reason));
@@ -504,6 +507,16 @@ export function HostEditor({
 
           {saved && host && <HostVault hostId={host.id} onMoved={onDone} />}
           {saved && host && <HostHistory hostId={host.id} onRestored={onDone} />}
+          {!serialOn && (
+            <Field label={t.keepSession}>
+              <Select aria-label={t.keepSession} value={keep} onChange={(event) => setKeep(event.target.value as KeepSession)}>
+                <option value="off">{t.keepSessionOff}</option>
+                <option value="tmux">tmux</option>
+                <option value="screen">screen</option>
+              </Select>
+              <span className="mt-1 block text-callout text-label-3">{t.keepSessionHint}</span>
+            </Field>
+          )}
           <Field label={t.logsHost} hint={t.logsHostHint}>
             <Segmented
               size="sm"

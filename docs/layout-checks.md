@@ -38,7 +38,8 @@ looking up the Chinese name's key in `src/lib/i18n.ts`.
 
 Content that is meant to be clipped or stacked (a terminal, a chart) can opt
 out with `data-layout-ignore` on its container; terminals (`.xterm`), SVG,
-canvas and `aria-hidden` content are skipped already.
+canvas and `aria-hidden` content are skipped already, and so is `inert`
+content (the sessions under the Settings page, which covers them).
 
 ## Layout rules that keep the checks green
 

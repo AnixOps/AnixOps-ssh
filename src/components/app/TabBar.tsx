@@ -8,6 +8,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { EnvBadge } from "@/components/app/EnvBadge";
 import { useBroadcastGuard } from "@/components/app/useBroadcastGuard";
 import { scopeOf, useBroadcast } from "@/lib/broadcast";
+import { failureText } from "@/lib/connectFailureText";
 import { t } from "@/lib/i18n";
 import { exitTitle } from "@/lib/terminalSession";
 import { appear } from "@/lib/motion";
@@ -363,7 +364,7 @@ function TabIcon({ tab }: { tab: Tab }) {
     );
   }
   if (tab.status.state === "exited") {
-    const label = tab.status.error ? t.sessionFailed : exitTitle(tab.status);
+    const label = tab.status.error ? failureText(tab.status.error).title : exitTitle(tab.status);
     return <Unplug className={cn(icon, "text-label-3")} strokeWidth={1.5} aria-label={label} />;
   }
   if (tab.hostId === null) {
