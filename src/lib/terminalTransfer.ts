@@ -103,37 +103,90 @@ class Outbox {
   }
 }
 
-/** Writes a received file in the background, merging chunks that arrive while a write is running. */
-class Sink {
+/** One write call carries at most this much. */
+export const WRITE_BATCH = 1024 * 1024;
+/** Received bytes waiting for the disk may not grow beyond this; the terminal's data source cannot be paused,
+ *  so a disk that falls this far behind ends the transfer with a clear error. */
+export const MAX_PENDING = 16 * 1024 * 1024;
+
+/** The disk could not keep up with the sender. */
+export class SinkOverflow extends Error {
+  constructor() {
+    super(t.transferBufferFull);
+  }
+}
+
+/** Writes a received file in the background, in order, in batches of at most `WRITE_BATCH` bytes. */
+export class Sink {
   private pending: Uint8Array[] = [];
+  private pendingBytes = 0;
   private busy: Promise<void> | null = null;
   private waiting: (() => void)[] = [];
+  /** The most bytes ever waiting (not counting the batch being written). */
+  peakPending = 0;
   error: unknown = null;
 
   constructor(
     private readonly files: TransferFiles,
     readonly id: number,
+    private readonly onError?: (error: unknown) => void,
+    private readonly maxPending = MAX_PENDING,
   ) {}
 
   push(chunk: Uint8Array): void {
+    if (this.error) return;
+    if (this.pendingBytes + chunk.length > this.maxPending) {
+      this.fail(new SinkOverflow());
+      return;
+    }
     this.pending.push(chunk);
+    this.pendingBytes += chunk.length;
+    this.peakPending = Math.max(this.peakPending, this.pendingBytes);
     if (!this.busy) this.pump();
   }
 
-  private pump(): void {
-    const size = this.pending.reduce((sum, chunk) => sum + chunk.length, 0);
-    const bytes = new Uint8Array(size);
-    let at = 0;
-    for (const chunk of this.pending) {
-      bytes.set(chunk, at);
-      at += chunk.length;
-    }
+  private fail(error: unknown): void {
+    if (this.error) return;
+    this.error = error;
     this.pending = [];
-    this.busy = this.files
-      .write(this.id, bytes)
-      .catch((error) => {
-        this.error = error;
-      })
+    this.pendingBytes = 0;
+    this.onError?.(error);
+  }
+
+  /** The next batch: whole chunks up to the limit, a chunk split where it crosses it. */
+  private take(): Uint8Array {
+    const first = this.pending[0];
+    if (first.length >= WRITE_BATCH) {
+      const batch = first.subarray(0, WRITE_BATCH);
+      if (first.length > WRITE_BATCH) this.pending[0] = first.subarray(WRITE_BATCH);
+      else this.pending.shift();
+      this.pendingBytes -= batch.length;
+      return batch;
+    }
+    const bytes = new Uint8Array(Math.min(WRITE_BATCH, this.pendingBytes));
+    let at = 0;
+    while (this.pending.length > 0 && at < bytes.length) {
+      const chunk = this.pending[0];
+      const room = bytes.length - at;
+      if (chunk.length <= room) {
+        bytes.set(chunk, at);
+        at += chunk.length;
+        this.pending.shift();
+      } else {
+        bytes.set(chunk.subarray(0, room), at);
+        at += room;
+        this.pending[0] = chunk.subarray(room);
+      }
+    }
+    this.pendingBytes -= bytes.length;
+    return bytes;
+  }
+
+  private pump(): void {
+    const bytes = this.take();
+    this.busy = Promise.resolve()
+      .then(() => this.files.write(this.id, bytes))
+      .catch((error) => this.fail(error))
       .finally(() => {
         this.busy = null;
         if (this.pending.length > 0 && !this.error) this.pump();
@@ -447,7 +500,7 @@ export class TerminalTransfer {
       }
       // A file opened after a cancel is closed and removed as soon as it shows up.
       const opened = await this.race(files.openWrite(name, path), (late) => files.close(late.id, false));
-      const current = new Sink(files, opened.id);
+      const current = new Sink(files, opened.id, (error) => this.fail(messageOf(error)));
       sink = current;
       closeOnce = (keep) => {
         if (closed) return Promise.resolve();
