@@ -1479,7 +1479,7 @@ mod resume {
     /// Runs one transfer to its end; `cancel_at` cancels it once that many
     /// bytes have been reported.
     async fn run(
-        engine: &Engine,
+        engine: &Arc<Engine>,
         entry: &Arc<SftpEntry>,
         upload: bool,
         local: &Path,
@@ -1488,7 +1488,19 @@ mod resume {
         cancel_at: Option<u64>,
     ) -> Run {
         let (sender, mut receiver) = mpsc::unbounded_channel::<(String, Value)>();
+        // Cancelled from inside the progress event, before the transfer
+        // moves on: cancelling from the receiving end raced a fast runner,
+        // which finished all 30 MB before the 10 MB event was read.
+        let started = Arc::new(Mutex::new(None::<String>));
+        let (cancel_engine, cancel_id) = (engine.clone(), started.clone());
         let sink: easyssh_engine::Events = Arc::new(move |name: &str, payload: Value| {
+            if let (Some(at), "transfer.progress") = (cancel_at, name) {
+                if payload["bytes"].as_u64().unwrap_or(0) >= at {
+                    if let Some(id) = cancel_id.lock().unwrap().clone() {
+                        cancel_engine.files().cancel_transfer(&id);
+                    }
+                }
+            }
             let _ = sender.send((name.to_owned(), payload));
             1usize
         });
@@ -1501,15 +1513,11 @@ mod resume {
             options,
             sink,
         );
+        *started.lock().unwrap() = Some(id.clone());
         let mut events = Vec::new();
         let status = within("transfer", async {
             loop {
                 let (name, payload) = receiver.recv().await.expect("events");
-                if let (Some(at), "transfer.progress") = (cancel_at, name.as_str()) {
-                    if payload["bytes"].as_u64().unwrap_or(0) >= at {
-                        engine.files().cancel_transfer(&id);
-                    }
-                }
                 let done = name == "transfer.done";
                 let status = payload["status"].as_str().map(str::to_owned);
                 events.push((name, payload));
