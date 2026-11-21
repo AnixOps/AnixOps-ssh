@@ -29,7 +29,7 @@ import {
   Trash2,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -201,13 +201,24 @@ export function SettingsPage({
   ];
 
 
+  // Opening the page takes the keyboard from the terminal under it (K6).
+  const pageRef = useRef<HTMLDivElement>(null);
+  // (Left on the rail's gear, Esc would only close the gear's tooltip.)
+  useEffect(() => pageRef.current?.focus({ preventScroll: true }), []);
+
   // Esc goes back to the sessions, unless a field, menu or dialog takes it.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest("input, textarea, select, [contenteditable]")) return;
-      if (document.querySelector("[role=dialog], [role=alertdialog], [role=menu], [role=listbox]")) return;
+      // A field keeps its Esc (the terminal under the page is not a field).
+      if (target?.closest("input, textarea, select, [contenteditable]") && !target.classList.contains("xterm-helper-textarea")) return;
+      // Only one that is showing counts: a file list stays mounted (hidden,
+      // or under this page) once the files panel has been opened.
+      const open = [...document.querySelectorAll<HTMLElement>("[role=dialog], [role=alertdialog], [role=menu], [role=listbox]")].some(
+        (element) => !element.closest("[inert], [hidden]") && element.getClientRects().length > 0,
+      );
+      if (open) return;
       event.preventDefault();
       onClose();
     };
@@ -606,7 +617,7 @@ export function SettingsPage({
   };
 
   return (
-    <div data-settings-page className="absolute inset-0 z-10 overflow-y-auto bg-bg">
+    <div ref={pageRef} tabIndex={-1} data-settings-page className="absolute inset-0 z-10 overflow-y-auto bg-bg outline-none">
       <SettingsFilter query={query}>
         <div className={cn("settings-list mx-auto w-full max-w-[692px] space-y-8 px-6 pt-5 pb-10", searching && "searching")}>
           {!searching && (

@@ -626,6 +626,28 @@ check("窗口", "sidebar-toggle", "打开会话后主机列表让位给终端（
   return `终端 ${cols} 列；浮出时不变，Esc 收回回到终端；固定后 ${pinned} 列`;
 });
 
+check("窗口", "focus-returns", "关掉命令面板、快捷键列表、设置、文件面板、监控后，直接打字仍进终端（Windows Terminal、iTerm2）", async (page) => {
+  await openHost(page);
+  const mod = isMacRun ? "Meta" : "Control";
+  const steps = [
+    ["命令面板", async () => { await page.keyboard.press(isMacRun ? "Meta+Shift+K" : "Control+Shift+K"); await page.waitForTimeout(300); await page.keyboard.press("Escape"); }],
+    ["设置（齿轮 + Esc）", async () => { await page.getByRole("button", { name: "设置", exact: true }).click(); await page.waitForTimeout(300); await page.keyboard.press("Escape"); }],
+    ["文件面板（按钮开关）", async () => { await page.getByRole("button", { name: "文件", exact: true }).click(); await page.waitForTimeout(500); await page.getByRole("button", { name: "文件", exact: true }).click(); }],
+    ["设置（打开过文件面板之后）", async () => { await page.keyboard.press(`${mod}+Shift+Comma`); await page.waitForTimeout(300); await page.keyboard.press("Escape"); }],
+    ["点标签", async () => { await page.getByRole("tab").first().click(); }],
+  ];
+  for (const [what, act] of steps) {
+    await act();
+    await page.waitForTimeout(300);
+    const marker = `F${Math.random().toString(36).slice(2, 8)}`;
+    await page.keyboard.type(`echo ${marker}\n`);
+    await waitScreen(page, new RegExp(`^${marker}$`, "m"), { timeout: 4000 }).catch(() => {
+      throw new Error(`${what}之后打的字没有进终端`);
+    });
+  }
+  return steps.map(([what]) => what).join("、") + "之后打字都进了终端";
+});
+
 check("窗口", "focus-mode", "突出终端：打开会话后侧栏让位，终端里 Ctrl+Shift+S 浮出主机列表；专注模式（F11，macOS ⌃⌘Z）只留标签和终端，重开后记住", async (page) => {
   await openHost(page);
   const cols = () => term(page, (t) => t.cols);

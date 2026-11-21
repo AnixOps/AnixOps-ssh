@@ -137,6 +137,7 @@ export function App() {
   const [peek, setPeek] = useState(false);
   // Read by the callbacks below, which are made before the tabs exist.
   const hasTabsRef = useRef(false);
+  const activePaneRef = useRef<string | null>(null);
   // Focus mode leaves only the tabs and the terminal (no rail, no sidebar);
   // going to a section ends it.
   const [focusMode, setFocusModeState] = useState(focusModeByDefault);
@@ -175,6 +176,8 @@ export function App() {
   const closeSettings = useCallback(() => {
     setNavKey(previousNav.current);
     if (hasTabsRef.current && !sidebarPinned) hideSidebar(true);
+    // Back to typing where the user was (K6), not on the rail's gear.
+    focusTerminal(activePaneRef.current);
   }, [hideSidebar, sidebarPinned]);
   /** Ctrl+B and choosing the open section: a docked sidebar folds away; a
    *  hidden one comes back over the terminal while sessions are open (beside
@@ -543,12 +546,17 @@ export function App() {
 
   const toggleMonitor = useCallback(() => {
     const tab = tabs.find((candidate) => candidate.key === activeKey);
-    if (tab) setMonitorOpen(tab.key, !tab.monitorOpen);
+    if (!tab) return;
+    setMonitorOpen(tab.key, !tab.monitorOpen);
+    // The monitor only shows things: the keyboard stays with the terminal.
+    focusTerminal(tab.panes.focused);
   }, [tabs, activeKey, setMonitorOpen]);
 
   const toggleFiles = useCallback(() => {
     const tab = tabs.find((candidate) => candidate.key === activeKey);
-    if (tab) setFilesOpen(tab.key, !tab.filesOpen);
+    if (!tab) return;
+    setFilesOpen(tab.key, !tab.filesOpen);
+    if (tab.filesOpen) focusTerminal(tab.panes.focused);
   }, [tabs, activeKey, setFilesOpen]);
 
   const activeTab = tabs.find((tab) => tab.key === activeKey);
@@ -557,9 +565,27 @@ export function App() {
   const settingsOpen = nav === "settings" && !focused;
   const hasTabs = tabs.length > 0;
   hasTabsRef.current = hasTabs;
+  activePaneRef.current = activeTab?.panes.focused ?? null;
+  const modalOpenRef = useRef(false);
+  // When the control that had the keyboard goes away (a palette, a panel or a
+  // menu closes) and nothing else takes it, it goes back to the terminal, as
+  // in Windows Terminal and iTerm2, instead of to nowhere.
+  useEffect(() => {
+    const onFocusOut = (event: FocusEvent) => {
+      if (event.relatedTarget) return;
+      window.requestAnimationFrame(() => {
+        if (document.activeElement && document.activeElement !== document.body) return;
+        if (modalOpenRef.current || document.querySelector("[aria-modal='true']")) return;
+        terminalFor(activePaneRef.current)?.focus();
+      });
+    };
+    document.addEventListener("focusout", onFocusOut);
+    return () => document.removeEventListener("focusout", onFocusOut);
+  }, []);
   // Beside the workspace, or over it (peek), or not at all.
   const sidebarDocked = !focused && (!sidebarHidden || !hasTabs);
   const peeking = !focused && !sidebarDocked && peek;
+  modalOpenRef.current = settingsOpen || peeking;
   // A new session hides an unpinned sidebar; closing the last one shows it.
   const tabCount = useRef(tabs.length);
   useEffect(() => {
@@ -750,6 +776,7 @@ export function App() {
               tabs={viewTabs}
               activeKey={activeKey}
               onSelect={setActiveKey}
+              onPick={(key) => focusTerminal(tabs.find((tab) => tab.key === key)?.panes.focused ?? null)}
               onClose={closeTab}
               onCloseMany={closeTabs}
               onDuplicate={duplicateTab}

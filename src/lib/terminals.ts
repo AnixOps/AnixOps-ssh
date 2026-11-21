@@ -32,6 +32,14 @@ export function connectedTerminals(): TerminalTarget[] {
 
 /** Puts the keyboard back in a terminal (after a panel or overlay closes). */
 export function focusTerminal(key: string | null): void {
-  // After the closing panel has left the page and its own focus handling ran.
-  window.requestAnimationFrame(() => terminalFor(key)?.focus());
+  // After the closing panel has left the page (and the page under it stopped
+  // being inert) and its own focus handling ran: two frames.
+  window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+    // Someone is typing elsewhere (a rename field, a search box that opened
+    // meanwhile): leave them there.
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.isContentEditable) return;
+    if ((active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) && !active.classList.contains("xterm-helper-textarea")) return;
+    terminalFor(key)?.focus();
+  }));
 }

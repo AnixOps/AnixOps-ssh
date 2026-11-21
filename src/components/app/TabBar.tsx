@@ -46,6 +46,7 @@ export function TabBar({
   tabs,
   activeKey,
   onSelect,
+  onPick,
   onClose,
   onCloseMany,
   onDuplicate,
@@ -64,6 +65,8 @@ export function TabBar({
   tabs: Tab[];
   activeKey: string | null;
   onSelect: (key: string) => void;
+  /** A tab chosen with the pointer or from the list: its terminal takes the keyboard. */
+  onPick?: (key: string) => void;
   onClose: (key: string) => void;
   /** Close several tabs at once; `keep` stays open and becomes active if the active one closes. */
   onCloseMany: (keys: string[], keep: string) => void;
@@ -215,7 +218,10 @@ export function TabBar({
                   event.preventDefault();
                   if (from !== tab.key) onMove(from, tab.key);
                 }}
-                onClick={() => onSelect(tab.key)}
+                onClick={() => {
+                  onSelect(tab.key);
+                  if (renaming !== tab.key) onPick?.(tab.key);
+                }}
                 onAuxClick={(event) => event.button === 1 && onClose(tab.key)}
                 onContextMenu={(event) => {
                   event.preventDefault();
@@ -290,7 +296,10 @@ export function TabBar({
               label: tab.title,
               icon: <TabIcon tab={tab} />,
               checked: tab.key === activeKey,
-              onSelect: () => onSelect(tab.key),
+              onSelect: () => {
+                onSelect(tab.key);
+                onPick?.(tab.key);
+              },
             }),
           )}
         />
