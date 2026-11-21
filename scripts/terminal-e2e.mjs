@@ -1044,6 +1044,37 @@ check("会话", "exit-reconnect", "会话结束后显示原因，按回车重新
   return "回车后重新连上，屏幕干净";
 });
 
+check("会话", "reconnect-divider", "重新连接后出现一行淡色分隔线，说明这是新的 shell；首次连接没有", async (page) => {
+  await openHost(page);
+  if (/重新连接/.test(await screen(page, { all: true }))) throw new Error("首次连接不该有分隔线");
+  await run(page, "exit");
+  await page.waitForTimeout(800);
+  await page.locator(".xterm-screen").last().click();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => window.__anixopsE2eOpened.length >= 2, null, { timeout: 15000 });
+  await waitScreen(page, /── 已重新连接 · \d\d:\d\d · 这是新的 shell，之前运行的程序已结束 ──\s*\n[\s\S]*keyuser@/);
+  return "重连后有分隔线";
+});
+
+check("会话", "keep-session-tmux", "保留会话（tmux）：断开后重连回到同一屏幕，之前的输出还在", async (page) => {
+  await page.evaluate(() => localStorage.setItem("anixops.keepSession.v1", JSON.stringify({ 1: "tmux" })));
+  await openHost(page);
+  const mark = `kept-${Date.now() % 100000}`;
+  await waitScreen(page, /\[anixops\]/, { all: false });
+  await runAndWait(page, `echo ${mark.slice(0, 5)}''${mark.slice(5)}`, mark);
+  // Detach: the shell the attach replaced ends, the tmux session stays.
+  await page.keyboard.press("Control+B");
+  await page.keyboard.type("d");
+  await page.waitForTimeout(800);
+  await page.locator(".xterm-screen").last().click();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => window.__anixopsE2eOpened.length >= 2, null, { timeout: 15000 });
+  await waitScreen(page, /已回到主机上的 tmux 会话/);
+  await waitScreen(page, new RegExp(mark), { all: false });
+  await run(page, "tmux kill-session -t anixops");
+  return "重连回到同一个 tmux 会话，之前的输出还在";
+});
+
 check("性能", "bulk-output", "大量输出（20 万行）不卡死，几秒内结束", async (page) => {
   await openHost(page);
   const started = Date.now();
