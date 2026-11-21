@@ -17,7 +17,7 @@ import { HostList } from "@/components/app/HostList";
 import { ImportDialog } from "@/components/app/ImportDialog";
 import { IconRail, type NavKey } from "@/components/app/IconRail";
 import { EmptyWorkspace } from "@/components/app/Placeholders";
-import { SettingsPanel } from "@/components/app/SettingsPanel";
+import { SettingsNav, SettingsPage, type SettingsSection } from "@/components/app/SettingsPanel";
 import { SnippetsPanel } from "@/components/app/SnippetsPanel";
 import { TeamVaults } from "@/components/app/TeamVaults";
 import { TabBar, type Tab } from "@/components/app/TabBar";
@@ -104,6 +104,11 @@ const focusShortcuts: Partial<Record<AppShortcut, Direction>> = {
 
 export function App() {
   const [nav, setNavKey] = useState<NavKey>("hosts");
+  // Settings is a page over the workspace (its list in the sidebar); Esc on
+  // it goes back to the section that was open before.
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
+  const [settingsQuery, setSettingsQuery] = useState("");
+  const previousNav = useRef<NavKey>("hosts");
   // The sidebar can be hidden so the terminal gets the whole window; going to
   // a section shows it again, and choosing the section that is open hides it.
   const [sidebarHidden, setSidebarHidden] = useState(sidebarHiddenByDefault);
@@ -120,7 +125,10 @@ export function App() {
   }, []);
   const setNav = useCallback(
     (key: NavKey) => {
-      setNavKey(key);
+      setNavKey((current) => {
+        if (current !== "settings") previousNav.current = current;
+        return key;
+      });
       hideSidebar(false);
       setFocusMode(false);
     },
@@ -461,6 +469,7 @@ export function App() {
   const activeTab = tabs.find((tab) => tab.key === activeKey);
   // Without a tab there is nothing to focus on: the window shows as usual.
   const focused = focusMode && tabs.length > 0;
+  const settingsOpen = nav === "settings" && !focused;
   /** The SSH host a tab's monitor reads; null for local shells and serial ports. */
   const monitorHost = (hostId: string | null): Host | null => {
     const host = hostId ? snapshot.hosts.find((candidate) => candidate.id === hostId) : undefined;
@@ -573,10 +582,30 @@ export function App() {
         ) : nav === "team" ? (
           <TeamVaults />
         ) : (
-          <SettingsPanel status={status} onRecheck={checkSsh} onDataChanged={reload} />
+          <SettingsNav
+            section={settingsSection}
+            query={settingsQuery}
+            onSection={setSettingsSection}
+            onQuery={setSettingsQuery}
+          />
         )}
         </div>
-        <main className="flex min-w-0 flex-1 flex-col bg-bg">
+        <div className="relative flex min-w-0 flex-1">
+        {settingsOpen && (
+          <SettingsPage
+            section={settingsSection}
+            query={settingsQuery}
+            showPicker={sidebarHidden}
+            onSection={setSettingsSection}
+            onClose={() => setNav(previousNav.current)}
+            status={status}
+            onRecheck={checkSsh}
+            onDataChanged={reload}
+          />
+        )}
+        {/* Under the settings page the sessions keep their size and output,
+            but take no focus or keys. */}
+        <main className="flex min-w-0 flex-1 flex-col bg-bg" inert={settingsOpen}>
           {tabs.length > 0 && (
             <TabBar
               tabs={tabs}
@@ -670,6 +699,7 @@ export function App() {
             {!activeTab && <EmptyWorkspace onOpenLocal={openLocal} status={status} />}
           </div>
         </main>
+        </div>
       </div>
       <AnimatePresence>
       {editing !== undefined && (

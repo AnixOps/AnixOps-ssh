@@ -17,7 +17,8 @@ function audit() {
     const label = where?.getAttribute("aria-label") || where?.querySelector("h1,h2,h3")?.textContent?.trim() || where?.tagName.toLowerCase() || "";
     return `"${name}"${label ? ` in ${label.slice(0, 30)}` : ""}`;
   };
-  const ignored = (element) => Boolean(element.closest("[data-layout-ignore], .xterm, [aria-hidden=true], svg, canvas"));
+  // `inert` content sits under a page that covers it (the sessions under Settings).
+  const ignored = (element) => Boolean(element.closest("[data-layout-ignore], [inert], .xterm, [aria-hidden=true], svg, canvas"));
   const visible = (element) => {
     const style = getComputedStyle(element);
     if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return false;
