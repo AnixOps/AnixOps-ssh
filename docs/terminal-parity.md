@@ -56,6 +56,7 @@ OpenSSH 服务器、真实的会话守护进程和内置 SSH 引擎、应用自�
 | 字体 | `ligatures` | Fira Code、Cascadia Code 等字体的连字（Windows Terminal、WezTerm、iTerm2；Termius 没有） | ❌ 没有 | 🔧 设置 → 终端 → 连字；开启后改用 DOM 渲染（WebGL 逐格绘制，无法连字） |
 | 字体 | `ctrl-wheel-zoom` | Ctrl+滚轮缩放 | ❌ 没有（#109 只拦掉了网页缩放） | 🔧 |
 | 标签与分屏 | `split` | 分屏后新窗格也连上 | ✅ | ✅ |
+| 标签与分屏 | `split-active-pane` | 分屏时一眼看出活动窗格（Windows Terminal 窗格边框、iTerm2 非活动窗格变暗） | ❌ 活动窗格的蓝色顶边和生产主机的红色顶边在同一位置，分不清 | 🔧 活动窗格加强调色边框、其余窗格变暗；分屏时生产标记只放在标签上 |
 | 标签与分屏 | `tab-switch` | Ctrl+Tab / Ctrl+Shift+Tab 切换标签 | ❌ 没有 | 🔧 另有 macOS ⌘⇧] / ⌘⇧[；已写进快捷键列表 |
 | 标签与分屏 | `duplicate-tab` | 标签右键"复制标签" | ❌ 没有；而且单击主机只会跳到已开的标签，同一主机想开第二个会话只能分屏 | 🔧 |
 | 标签与分屏 | `open-host-new-tab` | 同一主机再开一个标签 | ❌ 同上 | 🔧 主机右键"在新标签中打开" |

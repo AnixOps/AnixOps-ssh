@@ -112,6 +112,7 @@ export function TerminalView({
   broadcast = null,
   environment = null,
   hostName = "",
+  split,
 }: {
   tabKey: string;
   hostId: string | null;
@@ -126,6 +127,10 @@ export function TerminalView({
   onSession?: (key: string, sessionId: string) => void;
   /** Set while this pane receives broadcast input; shows the indicator. */
   broadcast?: BroadcastScope;
+  /** One of several panes in a tab: "active" gets an accent border, "inactive"
+   *  is dimmed (Windows Terminal, iTerm2). The environment then shows on the
+   *  tab only, so its edge is never taken for the active pane. */
+  split?: "active" | "inactive";
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -942,7 +947,11 @@ export function TerminalView({
         style={{ right: askOpen ? ASK_AI_WIDTH : 0 }}
       />
       {broadcast && <BroadcastBadge scope={broadcast} />}
-      {tone && (
+      {split === "inactive" && <div aria-hidden data-pane-dim className="pointer-events-none absolute inset-0 z-sticky bg-bg/40" />}
+      {split === "active" && (
+        <div aria-hidden data-pane-active className="pointer-events-none absolute inset-0 z-sticky ring-2 ring-(--accent) ring-inset" />
+      )}
+      {tone && !split && (
         <div
           role="img"
           aria-label={t.envBadgeAria.replace("{env}", environmentName(environment!))}
