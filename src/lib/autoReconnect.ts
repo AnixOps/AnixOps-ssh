@@ -1,4 +1,5 @@
 import type { SessionEnd } from "./terminalSession";
+import { classifyStage } from "./connectFailure";
 import { exitReason } from "./terminalSession";
 
 /** The first wait, and the longest one: 1 s, 2 s, 4 s ... then every 30 s. */
@@ -51,22 +52,12 @@ export function secondsLeft(plan: RetryPlan, now: number): number {
 
 export type FailureKind = "network" | "auth" | "hostkey" | "vault" | "cancelled" | "other";
 
-const PATTERNS: [FailureKind, RegExp][] = [
-  ["vault", /vault is locked/i],
-  ["cancelled", /cancel/i],
-  ["hostkey", /host key|hostkey|known_hosts|fingerprint/i],
-  ["auth", /auth|permission denied|password|passphrase|publickey|no supported methods|access denied/i],
-  [
-    "network",
-    /timed? ?out|connection (refused|reset|closed|aborted|lost)|unreachable|no route|network|broken pipe|resolve|name or service|lookup|not known|disconnected|eof|keepalive/i,
-  ],
-];
-
 /** Sorts the message of a failed connect. Only "network" is worth retrying:
  *  the others need the user (credentials, a host key decision, the vault). */
 export function classifyFailure(message: string): FailureKind {
-  for (const [kind, pattern] of PATTERNS) if (pattern.test(message)) return kind;
-  return "other";
+  const stage = classifyStage(message);
+  if (stage === "dns" || stage === "connect") return "network";
+  return stage === "session" ? "other" : stage;
 }
 
 /** What the view knows when a session ends. */
