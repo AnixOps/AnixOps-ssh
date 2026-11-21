@@ -9,8 +9,10 @@
 //! (share sheet, Downloads) is the platform's business and happens after the
 //! transfer, on a path the app produced.
 
-use std::io::Write;
+use std::collections::HashMap;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 /// Remote names come from the server, so they must not point outside the
@@ -115,11 +117,23 @@ pub fn sweep(root: &Path, age: Duration) {
 #[derive(Debug, Clone)]
 pub struct Staging {
     root: PathBuf,
+    /// One lock per upload id: the length check and the write of a chunk
+    /// happen under it, so overlapping calls for one upload cannot both pass
+    /// the check. Uploads with different ids never wait for each other.
+    locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 impl Staging {
     pub fn new(root: PathBuf) -> Staging {
-        Staging { root }
+        Staging {
+            root,
+            locks: Arc::default(),
+        }
+    }
+
+    fn lock_for(&self, id: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
+        locks.entry(id.to_owned()).or_default().clone()
     }
 
     fn dir(&self, id: &str) -> Result<PathBuf, String> {
@@ -152,27 +166,50 @@ impl Staging {
     }
 
     /// Appends the next chunk. `offset` must be where the file ends, so a
-    /// repeated or reordered chunk is an error rather than a corrupt file.
-    /// Returns the new length.
+    /// repeated or reordered chunk is an error rather than a corrupt file. The
+    /// check and the write are one step per upload id: of several overlapping
+    /// calls with the same offset at most one is accepted. Returns the new
+    /// length.
     pub fn append(&self, id: &str, offset: u64, bytes: &[u8]) -> Result<u64, String> {
+        self.dir(id)?;
+        let lock = self.lock_for(id);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         let path = self.file(id)?;
-        let length = std::fs::metadata(&path)
-            .map_err(|error| error.to_string())?
-            .len();
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .map_err(|error| error.to_string())?;
+        let length = file.metadata().map_err(|error| error.to_string())?.len();
         if length != offset {
             return Err(format!(
                 "the upload is {length} bytes long, a chunk for {offset} arrived"
             ));
         }
-        let mut file = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
+        file.seek(SeekFrom::Start(offset))
             .map_err(|error| error.to_string())?;
         file.write_all(bytes).map_err(|error| error.to_string())?;
         Ok(length + bytes.len() as u64)
     }
 
-    /// The staged file, once it is complete.
+    /// The staged file, once it is complete. `total` is the size the sender
+    /// promised; a file of any other length is refused.
+    pub fn finish(&self, id: &str, total: u64) -> Result<PathBuf, String> {
+        self.dir(id)?;
+        let lock = self.lock_for(id);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let path = self.file(id)?;
+        let length = std::fs::metadata(&path)
+            .map_err(|error| error.to_string())?
+            .len();
+        if length != total {
+            return Err(format!(
+                "the upload is {length} bytes long, {total} were expected"
+            ));
+        }
+        Ok(path)
+    }
+
+    /// The staged file's path.
     pub fn path(&self, id: &str) -> Result<PathBuf, String> {
         self.file(id)
     }
@@ -180,7 +217,15 @@ impl Staging {
     /// Removes a staged file (the transfer ended, or the person gave up).
     pub fn discard(&self, id: &str) {
         if let Ok(dir) = self.dir(id) {
-            let _ = std::fs::remove_dir_all(dir);
+            let lock = self.lock_for(id);
+            {
+                let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            self.locks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(id);
         }
     }
 
@@ -272,6 +317,71 @@ mod tests {
         assert!(!path.exists());
         assert!(staging.path(&id).is_err());
         staging.discard(&id); // twice is fine
+    }
+
+    #[test]
+    fn overlapping_chunks_for_one_offset_are_accepted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let staging = Staging::new(dir.path().to_path_buf());
+        for round in 0..20 {
+            let id = staging.begin("big.bin").unwrap();
+            let gate = Arc::new(std::sync::Barrier::new(8));
+            let payload = vec![round as u8; 256 * 1024];
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let (staging, id, gate, payload) =
+                        (staging.clone(), id.clone(), gate.clone(), payload.clone());
+                    std::thread::spawn(move || {
+                        gate.wait();
+                        staging.append(&id, 0, &payload).is_ok()
+                    })
+                })
+                .collect();
+            let accepted = handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .filter(|ok| *ok)
+                .count();
+            assert_eq!(accepted, 1, "round {round}");
+            let path = staging.path(&id).unwrap();
+            assert_eq!(std::fs::metadata(path).unwrap().len(), payload.len() as u64);
+            assert!(staging.finish(&id, payload.len() as u64).is_ok());
+        }
+    }
+
+    #[test]
+    fn finish_checks_the_promised_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let staging = Staging::new(dir.path().to_path_buf());
+        let id = staging.begin("a.txt").unwrap();
+        staging.append(&id, 0, b"abc").unwrap();
+        assert!(staging.finish(&id, 4).is_err());
+        assert!(staging.finish(&id, 3).is_ok());
+    }
+
+    #[test]
+    fn different_uploads_do_not_wait_for_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let staging = Staging::new(dir.path().to_path_buf());
+        let a = staging.begin("a").unwrap();
+        let b = staging.begin("b").unwrap();
+        assert!(!Arc::ptr_eq(&staging.lock_for(&a), &staging.lock_for(&b)));
+        assert!(Arc::ptr_eq(&staging.lock_for(&a), &staging.lock_for(&a)));
+        // With A's lock held, B still makes progress; A itself waits.
+        let held = staging.lock_for(&a);
+        let guard = held.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        for (id, name) in [(b.clone(), "b"), (a.clone(), "a")] {
+            let (staging, tx) = (staging.clone(), tx.clone());
+            std::thread::spawn(move || {
+                staging.append(&id, 0, b"x").unwrap();
+                tx.send(name).unwrap();
+            });
+        }
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), "b");
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        drop(guard);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), "a");
     }
 
     #[test]
