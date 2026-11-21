@@ -68,7 +68,7 @@ import { shortcutHint } from "@/lib/shortcutTable";
 import { capabilityReply, mouseTrackingRequest, parseOsc52, sanitizeTitle, shouldOpenLink } from "@/lib/terminalInput";
 import { binaryInput } from "@/lib/terminalBytes";
 import { registerTerminal, terminalFor } from "@/lib/terminals";
-import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
+import { disposeTerminal, liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { attachCommand, claimSlot, hostKeepSession, keepSessionName, reconnectDivider } from "@/lib/keepSession";
 import { exitTitle, RESIZE_DEBOUNCE_MS, TERMINAL_RESET, trailingDebounce, type SessionEnd } from "@/lib/terminalSession";
 import { searchDecorations, terminalFont, terminalTheme, useTerminalScheme } from "@/lib/terminalTheme";
@@ -722,6 +722,13 @@ export function TerminalView({
       paste: (text) => terminal.paste(text),
       connected: () => sessionRef.current !== null,
       focus: () => terminal.focus(),
+      busy() {
+        if (!sessionRef.current) return null;
+        const command = integrationRef.current?.running();
+        if (command) return command.length > 40 ? `${command.slice(0, 39)}…` : command;
+        // vim, htop, less, tmux: the alternate screen means a program owns the terminal.
+        return terminal.buffer.active.type === "alternate" ? "" : null;
+      },
       close() {
         closing = true;
         stopTimer();
@@ -810,7 +817,7 @@ export function TerminalView({
       sessionRef.current?.detach();
       sessionRef.current = null;
       e2eTerminals?.delete(tabKey);
-      terminal.dispose();
+      disposeTerminal(terminal);
       terminalRef.current = null;
     };
   }, [hostId, onSession, report, sessionId, tabKey, transfer, updateMeta]);

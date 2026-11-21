@@ -27,6 +27,7 @@ import {
   type SessionLogEntry,
 } from "@/lib/sessionLogs";
 import { settings as appSettings } from "@/lib/settings";
+import { disposeTerminal } from "@/lib/terminalOptions";
 import { terminalFont, terminalTheme, useTerminalScheme } from "@/lib/terminalTheme";
 import { requestVaultUnlock, vaultErrorText } from "@/lib/vaultUi";
 
@@ -188,7 +189,7 @@ function LogViewer({ entry, onClose }: { entry: SessionLogEntry; onClose: () => 
     return () => {
       observer.disconnect();
       searchRef.current = null;
-      terminal.dispose();
+      disposeTerminal(terminal);
     };
   }, [log]);
 
