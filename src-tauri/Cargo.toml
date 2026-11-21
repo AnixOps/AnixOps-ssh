@@ -53,6 +53,10 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 uuid.workspace = true
 zeroize = "1"
 
+# macOS: the atomic bundle swap in update_swap.rs (renamex_np).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
+
 # Windows release builds turn off WebView2's own context menu and browser keys
 # (reload, print, find, zoom) in webview_chrome.rs; same versions as wry uses.
 [target.'cfg(windows)'.dependencies]

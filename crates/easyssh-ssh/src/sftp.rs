@@ -2,7 +2,7 @@
 
 use crate::error::{Error, Result};
 use crate::session::Session;
-use russh_sftp::client::{Config as SftpConfig, SftpSession};
+use russh_sftp::client::{Config as SftpConfig, RawSftpSession, SftpSession};
 use std::time::SystemTime;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 
@@ -69,8 +69,40 @@ fn pipelined_config() -> SftpConfig {
     }
 }
 
+/// How to reach a second SFTP session used only for `posix-rename`.
+type AuxOpener = Box<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<RawSftpSession>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// The OpenSSH extension that renames over an existing file in one step.
+pub const POSIX_RENAME: &str = "posix-rename@openssh.com";
+
 pub struct Sftp {
     session: SftpSession,
+    /// `russh-sftp`'s high-level session hides the raw requests and the list
+    /// of extensions the server advertises, so `posix-rename@openssh.com` is
+    /// sent on a raw session of its own, opened on the first use. The cell
+    /// holds `None` once tried and the server does not advertise it (or the
+    /// channel could not be opened).
+    aux: Option<(AuxOpener, tokio::sync::OnceCell<Option<RawSftpSession>>)>,
+}
+
+/// A raw session over `stream` if the server advertises `posix-rename`.
+async fn raw_with_posix_rename<S>(stream: S) -> Option<RawSftpSession>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let raw = RawSftpSession::new_with_config(stream, pipelined_config());
+    let version = raw.init().await.ok()?;
+    (version.extensions.get(POSIX_RENAME).map(String::as_str) == Some("1")).then_some(raw)
+}
+
+/// An SSH string: a length and the bytes.
+fn ssh_string(out: &mut Vec<u8>, text: &str) {
+    out.extend_from_slice(&(text.len() as u32).to_be_bytes());
+    out.extend_from_slice(text.as_bytes());
 }
 
 impl Session {
@@ -78,7 +110,20 @@ impl Session {
     pub async fn sftp(&self) -> Result<Sftp> {
         let channel = self.open_session_channel().await?;
         channel.request_subsystem(true, "sftp").await?;
-        Sftp::over(channel.into_stream()).await
+        let mut sftp = Sftp::over(channel.into_stream()).await?;
+        let session = self.clone();
+        sftp.aux = Some((
+            Box::new(move || {
+                let session = session.clone();
+                Box::pin(async move {
+                    let channel = session.open_session_channel().await.ok()?;
+                    channel.request_subsystem(true, "sftp").await.ok()?;
+                    raw_with_posix_rename(channel.into_stream()).await
+                })
+            }),
+            tokio::sync::OnceCell::new(),
+        ));
+        Ok(sftp)
     }
 }
 
@@ -92,7 +137,56 @@ impl Sftp {
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let session = SftpSession::new_with_config(stream, pipelined_config()).await?;
-        Ok(Sftp { session })
+        Ok(Sftp { session, aux: None })
+    }
+
+    /// Like [`Sftp::over`], with a second stream (a second SFTP channel) on
+    /// which `posix-rename` is sent when the server has it.
+    pub async fn over_with_rename_channel<S, A>(stream: S, aux: A) -> Result<Sftp>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        A: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let mut sftp = Sftp::over(stream).await?;
+        let aux = std::sync::Mutex::new(Some(aux));
+        sftp.aux = Some((
+            Box::new(move || {
+                let stream = aux.lock().ok().and_then(|mut slot| slot.take());
+                Box::pin(async move { raw_with_posix_rename(stream?).await })
+            }),
+            tokio::sync::OnceCell::new(),
+        ));
+        Ok(sftp)
+    }
+
+    async fn posix_session(&self) -> Option<&RawSftpSession> {
+        let (open, cell) = self.aux.as_ref()?;
+        cell.get_or_init(open).await.as_ref()
+    }
+
+    /// Does the server replace an existing file in one atomic step
+    /// (`posix-rename@openssh.com`)? The first call may open a channel.
+    pub async fn supports_posix_rename(&self) -> bool {
+        self.posix_session().await.is_some()
+    }
+
+    /// Renames `from` to `to`, replacing `to` if it exists, atomically: the
+    /// old `to` stays whole until the new one is in its place. Check
+    /// [`Sftp::supports_posix_rename`] first.
+    pub async fn posix_rename(&self, from: &str, to: &str) -> Result<()> {
+        use russh_sftp::protocol::{Packet, StatusCode};
+        let raw = self
+            .posix_session()
+            .await
+            .ok_or_else(|| Error::Unsupported("the server has no posix-rename".into()))?;
+        let mut data = Vec::new();
+        ssh_string(&mut data, from);
+        ssh_string(&mut data, to);
+        match raw.extended(POSIX_RENAME, data).await? {
+            Packet::Status(status) if status.status_code == StatusCode::Ok => Ok(()),
+            Packet::Status(status) => Err(russh_sftp::client::error::Error::from(status).into()),
+            _ => Err(Error::Sftp("unexpected answer to posix-rename".into())),
+        }
     }
 
     /// The user's home directory.
@@ -334,6 +428,8 @@ mod tests {
     use std::time::Duration;
     use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt, DuplexStream};
 
+    type Seen = Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+
     const FILE_LEN: usize = 1_000_003;
 
     fn content() -> Vec<u8> {
@@ -512,5 +608,99 @@ mod tests {
             result.is_err(),
             "the error is reported, not read as the end"
         );
+    }
+
+    /// A server on `stream` that answers Init with `extensions` and records
+    /// what each `posix-rename` asks for; it answers with `code`.
+    fn serve_extended(
+        mut stream: DuplexStream,
+        extensions: &'static [(&'static str, &'static str)],
+        code: StatusCode,
+        seen: Seen,
+    ) {
+        tokio::spawn(async move {
+            while let Some(request) = read_request(&mut stream).await {
+                match request {
+                    Packet::Init(_) => {
+                        let mut version = Version::new();
+                        for (name, value) in extensions {
+                            version.extensions.insert((*name).into(), (*value).into());
+                        }
+                        send(&mut stream, Packet::Version(version)).await
+                    }
+                    Packet::Extended(extended) => {
+                        seen.lock().unwrap().push((extended.request, extended.data));
+                        send(&mut stream, Packet::error(extended.id, code)).await
+                    }
+                    other => {
+                        send(
+                            &mut stream,
+                            Packet::error(other.get_request_id(), StatusCode::OpUnsupported),
+                        )
+                        .await
+                    }
+                }
+            }
+        });
+    }
+
+    async fn sftp_with_aux(
+        extensions: &'static [(&'static str, &'static str)],
+        code: StatusCode,
+    ) -> (Sftp, Seen) {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (client, server) = duplex(1 << 16);
+        serve_extended(server, &[], StatusCode::Ok, Arc::default());
+        let (aux_client, aux_server) = duplex(1 << 16);
+        serve_extended(aux_server, extensions, code, seen.clone());
+        let sftp = Sftp::over_with_rename_channel(client, aux_client)
+            .await
+            .unwrap();
+        (sftp, seen)
+    }
+
+    #[tokio::test]
+    async fn posix_rename_is_sent_as_the_openssh_extension_when_advertised() {
+        let (sftp, seen) = sftp_with_aux(&[(POSIX_RENAME, "1")], StatusCode::Ok).await;
+        assert!(sftp.supports_posix_rename().await);
+        sftp.posix_rename("/a/.x.part", "/a/x").await.unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, "posix-rename@openssh.com");
+        let mut want = Vec::new();
+        ssh_string(&mut want, "/a/.x.part");
+        ssh_string(&mut want, "/a/x");
+        assert_eq!(seen[0].1, want);
+    }
+
+    #[tokio::test]
+    async fn without_the_extension_posix_rename_is_not_offered_or_sent() {
+        let (sftp, seen) = sftp_with_aux(&[], StatusCode::Ok).await;
+        assert!(!sftp.supports_posix_rename().await);
+        assert!(matches!(
+            sftp.posix_rename("/a", "/b").await,
+            Err(Error::Unsupported(_))
+        ));
+        assert!(seen.lock().unwrap().is_empty());
+        // A session with no second channel at all behaves the same.
+        let (client, server) = duplex(1 << 16);
+        serve_extended(server, &[], StatusCode::Ok, Arc::default());
+        assert!(
+            !Sftp::over(client)
+                .await
+                .unwrap()
+                .supports_posix_rename()
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_posix_rename_keeps_its_reason() {
+        let (sftp, _) = sftp_with_aux(&[(POSIX_RENAME, "1")], StatusCode::PermissionDenied).await;
+        let error = sftp.posix_rename("/a", "/b").await.unwrap_err();
+        assert!(matches!(error, Error::PermissionDenied(_)), "{error:?}");
+        let (sftp, _) = sftp_with_aux(&[(POSIX_RENAME, "1")], StatusCode::Failure).await;
+        let error = sftp.posix_rename("/a", "/b").await.unwrap_err();
+        assert!(matches!(error, Error::SftpFailure(_)), "{error:?}");
     }
 }
