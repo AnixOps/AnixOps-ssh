@@ -1094,14 +1094,10 @@ async fn upload_file(job: &mut Job<'_>, local_path: &Path, remote: &str) -> Resu
     if mode.is_some() || modified.is_some() {
         let _ = sftp.set_stat(&part, mode, modified).await;
     }
-    // A plain SFTP rename does not replace an existing file on OpenSSH.
-    if let Err(error) = sftp.rename(&part, &target).await {
-        if existing.is_none() {
-            return at(Err(error), "renaming to", &target);
-        }
-        at(sftp.remove_file(&target).await, "replacing", &target)?;
-        at(sftp.rename(&part, &target).await, "renaming to", &target)?;
-    }
+    // The original is never deleted before the new file is in place (see
+    // `commit`); a plain SFTP rename does not replace a file on OpenSSH.
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    crate::commit::commit(sftp, &part, &target, &token[..12]).await?;
     job.writing(None);
     verify_file(job, local_path, &target).await
 }
