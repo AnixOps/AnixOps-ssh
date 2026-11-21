@@ -42,6 +42,15 @@ import { cn } from "@/lib/utils";
 
 const COLORS = ["chart-1", "chart-2", "chart-3", "chart-4", "chart-5", "chart-6", "chart-7", "chart-8"];
 
+/** Values for a new host: the connection a tab was opened with, or a copy of another host. */
+export interface HostPrefill {
+  name: string;
+  fields: HostFields;
+  groupId?: string | null;
+  tags?: string[];
+  color?: string | null;
+}
+
 const emptyFields: HostFields = { alias: null, hostname: "", username: null, port: 22, proxyJump: null, notes: "", shellIntegration: false };
 
 type SecretName = keyof SecretsStatus;
@@ -64,20 +73,20 @@ export function HostEditor({
   groups: Group[];
   serial?: boolean;
   /** Values for a new host, such as the connection a tab was opened with. */
-  prefill?: { name: string; fields: HostFields };
+  prefill?: HostPrefill;
   onDone: () => void;
   onCancel: () => void;
 }) {
   const saved = host?.source === "saved";
   const [name, setName] = useState(host?.name ?? prefill?.name ?? "");
-  const [byAlias, setByAlias] = useState(Boolean(host?.fields.alias));
+  const [byAlias, setByAlias] = useState(Boolean((host ?? prefill)?.fields.alias));
   const [fields, setFields] = useState<HostFields>(host?.fields ?? prefill?.fields ?? emptyFields);
-  const [serialOn, setSerialOn] = useState(Boolean(host?.fields.serial) || (startSerial && !host));
-  const [serial, setSerial] = useState<SerialFields>(host?.fields.serial ?? defaultSerial());
+  const [serialOn, setSerialOn] = useState(Boolean((host ?? prefill)?.fields.serial) || (startSerial && !host));
+  const [serial, setSerial] = useState<SerialFields>((host ?? prefill)?.fields.serial ?? defaultSerial());
   const [ports, setPorts] = useState<SerialPortInfo[] | null>(null);
-  const [group, setGroup] = useState(groups.find((candidate) => candidate.id === host?.groupId)?.name ?? "");
-  const [tags, setTags] = useState(host?.tags.join(", ") ?? "");
-  const [color, setColor] = useState<string | null>(host?.color ?? null);
+  const [group, setGroup] = useState(groups.find((candidate) => candidate.id === (host ?? prefill)?.groupId)?.name ?? "");
+  const [tags, setTags] = useState((host ?? prefill)?.tags?.join(", ") ?? "");
+  const [color, setColor] = useState<string | null>((host ?? prefill)?.color ?? null);
   const [favorite, setFavorite] = useState(host?.favorite ?? false);
   const [error, setError] = useState<string | null>(null);
   const confirm = useConfirm();

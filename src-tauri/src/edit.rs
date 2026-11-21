@@ -60,6 +60,11 @@ pub fn edit_open(app: AppHandle, local: String) -> Result<(), String> {
     if !owns(&app, &path) {
         return Err("not a file of the editor cache".to_owned());
     }
+    // A binary hangs a text editor; the window downloads it instead. The
+    // window looks for these words (remoteEdit.ts BINARY_CONTENT).
+    if edit::file_looks_binary(&path).map_err(|error| error.to_string())? {
+        return Err("binary file".to_owned());
+    }
     let command = settings::editor_command();
     let parts = edit::split_command(&command);
     if let Some((program, args)) = parts.split_first() {

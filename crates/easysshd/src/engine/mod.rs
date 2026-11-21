@@ -329,6 +329,30 @@ impl Engine {
         }
     }
 
+    /// An SFTP session on the host's shared connection, or on another
+    /// connection to it when the server refuses more sessions on that one
+    /// (`MaxSessions`: many terminals to one server, then the files pane).
+    pub async fn open_sftp(
+        &self,
+        plan: &RusshPlan,
+    ) -> Result<(easyssh_ssh::Sftp, Lease), SharedError> {
+        let mut shard = 0;
+        let mut retried_timeout = false;
+        loop {
+            let lease = self.lease_shard(plan, None, shard).await?;
+            match lease.sftp().await {
+                Ok(sftp) => return Ok((sftp, lease)),
+                Err(SshError::ChannelRefused(_)) if shard < MAX_SHARD => shard += 1,
+                Err(SshError::Timeout(_)) if !retried_timeout => {
+                    retried_timeout = true;
+                    drop(lease);
+                    self.registry.evict(&plan.key.shard(shard)).await;
+                }
+                Err(error) => return Err(Arc::new(error)),
+            }
+        }
+    }
+
     /// `engine.connections`.
     pub async fn connections(&self) -> Value {
         self.registry.report().await

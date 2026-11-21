@@ -1,4 +1,4 @@
-import { Cable, ChevronRight, Copy, Download, Pencil, Plus, Search, Server, Star, Trash2, SquarePlus } from "lucide-react";
+import { Cable, ChevronRight, Copy, CopyPlus, Download, Pencil, Plus, Search, Server, Star, Trash2, SquarePlus, Zap } from "lucide-react";
 import { useMemo, useState, type KeyboardEvent, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
@@ -7,6 +7,7 @@ import { Menu, type MenuEntry } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { hostColor, isTauri, type Group, type Host } from "@/lib/backend";
 import { t } from "@/lib/i18n";
+import { findSavedHost, formatTarget, parseTarget, type Target } from "@/lib/quickConnect";
 import { shortcutHint } from "@/lib/shortcutTable";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +41,8 @@ export function HostList({
   selectedId,
   onOpen,
   onOpenNew,
+  onDuplicate,
+  onQuickConnect,
   onEdit,
   onToggleFavorite,
   onDelete,
@@ -53,6 +56,10 @@ export function HostList({
   onOpen: (host: Host) => void;
   /** Always a new tab, even when the host already has one. */
   onOpenNew?: (host: Host) => void;
+  /** A new host with this one's settings. */
+  onDuplicate?: (host: Host) => void;
+  /** Connects to an address typed in the search field, without saving it. */
+  onQuickConnect?: (target: Target) => void;
   /** null creates a new host. */
   onEdit: (host: Host | null) => void;
   onToggleFavorite: (host: Host) => void;
@@ -76,6 +83,13 @@ export function HostList({
     [hosts, normalized],
   );
   const sections = useMemo(() => buildSections(hosts, groups), [hosts, groups]);
+  // An address typed in the search field connects directly (Termius,
+  // MobaXterm, Tabby); a saved host that is the same one shows instead.
+  const quickTarget = useMemo(() => {
+    if (!onQuickConnect) return null;
+    const target = parseTarget(query);
+    return target?.explicit && !findSavedHost(hosts, target) ? target : null;
+  }, [hosts, query, onQuickConnect]);
 
   const toggle = (id: string) =>
     setCollapsed((current) => {
@@ -125,6 +139,7 @@ export function HostList({
       selected={host.id === selectedId}
       onOpen={onOpen}
       onOpenNew={onOpenNew}
+      onDuplicate={onDuplicate}
       onEdit={onEdit}
       onToggleFavorite={onToggleFavorite}
       onDelete={onDelete}
@@ -146,6 +161,13 @@ export function HostList({
             onKeyDown={(event) => {
               if (event.key === "Escape" && query) {
                 event.stopPropagation();
+                setQuery("");
+              } else if (event.key === "Enter" && normalized) {
+                // Enter connects: the typed address, else the first match.
+                event.preventDefault();
+                if (quickTarget) onQuickConnect?.(quickTarget);
+                else if (matches[0]) onOpen(matches[0]);
+                else return;
                 setQuery("");
               } else if (event.key === "ArrowDown") {
                 event.preventDefault();
@@ -188,11 +210,37 @@ export function HostList({
             </div>
           </div>
         ) : normalized ? (
-          matches.length === 0 ? (
-            <p className="px-3 pt-6 text-center text-callout text-label-2">{t.noMatches}</p>
-          ) : (
-            <ul className="mt-1 space-y-0.5">{matches.map(row)}</ul>
-          )
+          <>
+            {quickTarget && (
+              <button
+                type="button"
+                data-host-row
+                tabIndex={-1}
+                onClick={() => {
+                  onQuickConnect?.(quickTarget);
+                  setQuery("");
+                }}
+                className="mt-1 flex w-full items-center gap-3 rounded-sm py-1.5 pr-2 pl-2 text-left hover:bg-fill-1 focus-visible:bg-fill-1"
+              >
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-sm bg-accent-soft text-(--accent)">
+                  <Zap className="size-4" strokeWidth={1.5} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-callout font-medium text-label-1">
+                    {t.quickConnectTo.replace("{target}", formatTarget(quickTarget))}
+                  </span>
+                  <span className="block truncate text-callout text-label-2">
+                    {t.quickConnectNote}
+                  </span>
+                </span>
+              </button>
+            )}
+            {matches.length === 0 ? (
+              !quickTarget && <p className="px-3 pt-6 text-center text-callout text-label-2">{t.noMatches}</p>
+            ) : (
+              <ul className="mt-1 space-y-0.5">{matches.map(row)}</ul>
+            )}
+          </>
         ) : (
           sections.map((section) => {
             const isCollapsed = collapsed.has(section.id);
@@ -229,6 +277,7 @@ function HostRow({
   selected,
   onOpen,
   onOpenNew,
+  onDuplicate,
   onEdit,
   onToggleFavorite,
   onDelete,
@@ -238,6 +287,7 @@ function HostRow({
   selected: boolean;
   onOpen: (host: Host) => void;
   onOpenNew?: (host: Host) => void;
+  onDuplicate?: (host: Host) => void;
   onEdit: (host: Host) => void;
   onToggleFavorite: (host: Host) => void;
   onDelete: (host: Host) => void;
@@ -267,6 +317,9 @@ function HostRow({
             onSelect: () => onToggleFavorite(host),
           },
         ]
+      : []),
+    ...(onDuplicate
+      ? [{ key: "duplicate", label: t.duplicateHost, icon: <CopyPlus />, onSelect: () => onDuplicate(host) }]
       : []),
     { key: "copy", label: t.copyAddress, icon: <Copy />, onSelect: () => void navigator.clipboard?.writeText(host.target) },
     ...(saved

@@ -13,11 +13,17 @@
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { chromium } from "playwright";
 
 const [baseUrl = "http://localhost:4173", outDir = "terminal-e2e"] = process.argv.slice(2);
 await mkdir(outDir, { recursive: true });
+// Local side of file transfers: downloads land here, uploads come from here.
+const localDir = resolve(outDir, "local");
+const downloadsDir = join(localDir, "downloads");
+await mkdir(downloadsDir, { recursive: true });
+// Outside the app, the editor's copies go where backend.ts editPrepare says.
+await mkdir("/tmp/anixops-edit", { recursive: true });
 const bridgePath = process.env.EASYSSH_BRIDGE || "target/debug/examples/web_bridge";
 const only = process.env.ONLY ? new Set(process.env.ONLY.split(",")) : null;
 // The app reads the system from navigator.platform; PLATFORM=win (default),
@@ -32,6 +38,7 @@ const mod = isMacRun ? "Meta" : "Control";
 const bridge = spawn(bridgePath, [], { stdio: ["pipe", "pipe", "inherit"] });
 let bridgePage = null;
 const pendingOpens = new Map();
+const pendingRequests = new Map();
 const openStarted = new Map();
 const openTimes = [];
 // What the bridge sent for each session, and deliveries to the page that
@@ -39,6 +46,31 @@ const openTimes = [];
 // from the server or was lost on the way to the terminal.
 const sessionOutput = new Map();
 let failedDeliveries = 0;
+// Which page each session belongs to, so output of a session from an earlier
+// check never queues in front of the current page's.
+const sessionPages = new Map();
+// Messages go to a page in batches, one evaluate in flight per page: a burst
+// (seq 1 200000 is thousands of chunks) costs a few round trips instead of
+// one per chunk, which on a slow runner backed up for minutes.
+const deliveries = new Map();
+function deliver(page, message) {
+  if (page.isClosed()) return;
+  let state = deliveries.get(page);
+  if (!state) deliveries.set(page, (state = { queue: [], busy: false }));
+  state.queue.push(message);
+  if (!state.busy) void flush(page, state);
+}
+async function flush(page, state) {
+  state.busy = true;
+  while (state.queue.length && !page.isClosed()) {
+    const batch = state.queue.splice(0);
+    await page
+      .evaluate((messages) => messages.forEach((m) => window.__anixopsE2eReceive?.(m)), batch)
+      .catch(() => (failedDeliveries += batch.length));
+  }
+  state.queue.length = 0;
+  state.busy = false;
+}
 const ready = new Promise((resolve, reject) => {
   bridge.once("exit", (code) => reject(new Error(`web_bridge exited with ${code}`)));
   createInterface({ input: bridge.stdout }).on("line", (line) => {
@@ -58,9 +90,14 @@ const ready = new Promise((resolve, reject) => {
         if (ms > 5000) console.log(`slow session open: ${ms} ms (${message.op}${message.message ? `: ${message.message}` : ""})`);
       }
       openStarted.delete(message.seq);
-      pendingOpens.get(message.seq)?.(message);
+      const pending = pendingOpens.get(message.seq);
+      if (pending && message.op === "opened") sessionPages.set(message.id, pending.page);
+      pending?.resolve(message);
       pendingOpens.delete(message.seq);
-    } else if (bridgePage) {
+    } else if (message.op === "reply") {
+      pendingRequests.get(message.seq)?.(message);
+      pendingRequests.delete(message.seq);
+    } else if (sessionPages.has(message.id) || bridgePage) {
       if (process.env.DEBUG_BRIDGE) console.log("bridge>", line.slice(0, 160));
       if (message.op === "data") {
         const seen = sessionOutput.get(message.id) ?? { chars: 0, tail: "" };
@@ -68,7 +105,7 @@ const ready = new Promise((resolve, reject) => {
         seen.tail = (seen.tail + message.data).slice(-120);
         sessionOutput.set(message.id, seen);
       }
-      bridgePage.evaluate((m) => window.__anixopsE2eReceive?.(m), message).catch(() => failedDeliveries++);
+      deliver(sessionPages.get(message.id) ?? bridgePage, message);
     }
   });
 });
@@ -77,11 +114,15 @@ let seq = 0;
 const send = (message) => bridge.stdin.write(JSON.stringify(message) + "\n");
 
 // Runs in the page: the session bridge the app looks for in backend.ts.
-function pageBridge() {
+function pageBridge({ downloads }) {
   const sinks = new Map();
+  const transfers = new Map();
+  const tunnelSinks = new Map();
+  // Transfer events that came before the enqueue reply.
+  const early = new Map();
   // Output that comes before open() has its sink (the prompt can beat the
   // opened reply into the page) waits here instead of being dropped.
-  const early = new Map();
+  const earlyOutput = new Map();
   window.__anixopsE2eDelivered = {};
   window.__anixopsE2eTerminals = new Map();
   const deliver = (sink, message) => {
@@ -91,20 +132,31 @@ function pageBridge() {
     } else if (message.op === "exit") sink({ kind: "exit", code: message.code, reason: message.reason, signal: message.signal ?? undefined });
   };
   window.__anixopsE2eReceive = (message) => {
+    if (message.op === "tunnel") {
+      tunnelSinks.get(message.status.id)?.(message.status);
+      return;
+    }
+    if (message.op === "transfer") {
+      const sink = transfers.get(message.id);
+      if (sink) sink(message.event);
+      else early.set(message.id, [...(early.get(message.id) ?? []), message.event]);
+      return;
+    }
     const sink = sinks.get(message.id);
     if (sink) deliver(sink, message);
-    else if (!window.__anixopsE2eOpened.includes(message.id)) early.set(message.id, [...(early.get(message.id) ?? []), message]);
+    else if (!window.__anixopsE2eOpened.includes(message.id)) earlyOutput.set(message.id, [...(earlyOutput.get(message.id) ?? []), message]);
   };
   window.__anixopsE2eOpened = [];
   window.__anixopsE2eSession = {
     async open(hostId, cols, rows, onEvent) {
-      const opened = await window.__anixopsE2eOpen({ hostId, cols, rows });
+      // A test turns the shell integration on for the next connections.
+      const opened = await window.__anixopsE2eOpen({ hostId, cols, rows, integration: window.__anixopsE2eIntegration === true });
       if (opened.op === "error") throw new Error(opened.message);
       const id = opened.id;
       sinks.set(id, onEvent);
       window.__anixopsE2eOpened.push(id);
-      for (const message of early.get(id) ?? []) deliver(onEvent, message);
-      early.delete(id);
+      for (const message of earlyOutput.get(id) ?? []) deliver(onEvent, message);
+      earlyOutput.delete(id);
       const post = (message) => window.__anixopsE2ePost({ ...message, id });
       return {
         id,
@@ -120,6 +172,111 @@ function pageBridge() {
         },
       };
     },
+  };
+  // Files: the daemon's SFTP and transfer queue, as src-tauri/src/files.rs
+  // drives them for a host on the built-in engine.
+  const request = async (kind, payload, host = false) => {
+    const reply = await window.__anixopsE2eRequest({ kind, payload, host });
+    if (reply.error !== undefined) throw new Error(reply.error);
+    return reply.value;
+  };
+  const modeString = (kind, bits = 0) => {
+    let text = { dir: "d", file: "-", symlink: "l" }[kind] ?? "?";
+    for (let i = 0; i < 9; i++) text += bits & (1 << (8 - i)) ? "rwx"[i % 3] : "-";
+    return text;
+  };
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const modified = (seconds) => {
+    if (typeof seconds !== "number") return "";
+    const d = new Date(seconds * 1000);
+    const day = String(d.getDate()).padStart(2, " ");
+    const recent = Math.abs(Date.now() - d.getTime()) < 180 * 86400e3;
+    const tail = recent ? `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` : ` ${d.getFullYear()}`;
+    return `${months[d.getMonth()]} ${day} ${tail}`;
+  };
+  const kinds = { dir: "directory", file: "file", symlink: "symlink" };
+  window.__anixopsE2eUploads = [];
+  // Closed when the check ends: the server allows ten channels per connection.
+  window.__anixopsE2eSftp = new Set();
+  window.__anixopsE2eFiles = {
+    async open() {
+      const { sftp_id: id, home } = await request("sftp.open", {}, true);
+      window.__anixopsE2eSftp.add(id);
+      return {
+        home,
+        list: async (path) =>
+          ((await request("sftp.list", { sftp_id: id, path })).entries ?? []).map((entry) => ({
+            name: entry.name,
+            kind: kinds[entry.kind] ?? "other",
+            size: entry.size ?? 0,
+            modified: modified(entry.modified),
+            permissions: modeString(entry.kind, entry.permissions),
+            owner: entry.uid?.toString() ?? null,
+            group: entry.gid?.toString() ?? null,
+          })),
+        mkdir: (path) => request("sftp.mkdir", { sftp_id: id, path }).then(() => {}),
+        remove: (path, directory) => request("sftp.remove", { sftp_id: id, path, directory }).then(() => {}),
+        rename: (from, to) => request("sftp.rename", { sftp_id: id, from, to }).then(() => {}),
+        chmod: (path, mode, recursive) => request("sftp.chmod", { sftp_id: id, path, mode, recursive }).then(() => {}),
+        close: () => {
+          window.__anixopsE2eSftp.delete(id);
+          void request("sftp.close", { sftp_id: id }).catch(() => {});
+        },
+      };
+    },
+    async transfer({ upload, remote, local }, onEvent) {
+      const name = (path) => path.split("/").filter(Boolean).pop();
+      const localPath = upload ? local : (local ?? `${downloads}/${name(remote)}`);
+      const remotePath = upload ? `${remote.replace(/\/$/, "")}/${name(local)}` : remote;
+      const started = await request(
+        "transfer.enqueue",
+        { direction: upload ? "upload" : "download", local_path: localPath, remote_path: remotePath, recursive: true },
+        true,
+      );
+      transfers.set(started.transfer_id, onEvent);
+      for (const event of early.get(started.transfer_id) ?? []) onEvent(event);
+      early.delete(started.transfer_id);
+      return { id: started.transfer_id, local: localPath, remote: remotePath, queued: started.queued ?? false };
+    },
+    cancel: (id) => request("transfer.cancel", { transfer_id: id }).then(() => {}),
+    pickUploads: async () => window.__anixopsE2eUploads.splice(0),
+  };
+  // Forwards: the daemon's tunnels, as src-tauri/src/tunnels.rs starts them
+  // for a host on the built-in engine; statuses as daemon_status maps them.
+  // The bridge's daemon outlives the page: each page's tunnel ids are its own.
+  const tunnelPrefix = `page-${Math.random().toString(36).slice(2, 8)}-`;
+  window.__anixopsE2eTunnels = {
+    async start(tunnel, onStatus) {
+      tunnelSinks.set(tunnelPrefix + tunnel.id, (status) => {
+        const next =
+          status.state === "starting"
+            ? { state: "starting" }
+            : status.state === "running"
+              ? { state: "running", port: status.bind_port ?? undefined, lastError: status.channel_errors > 0 ? status.last_channel_error : undefined, errorCount: status.channel_errors }
+              : status.state === "reconnecting"
+                ? { state: "reconnecting", message: status.error ?? undefined }
+                : status.state === "stopped"
+                  ? { state: "stopped" }
+                  : { state: "failed", message: status.error ?? "the tunnel stopped" };
+        onStatus(next);
+      });
+      const body = {
+        id: tunnelPrefix + tunnel.id,
+        name: tunnel.name,
+        host_id: "",
+        kind: tunnel.kind,
+        bind_address: tunnel.bindAddress,
+        bind_port: tunnel.bindPort,
+        target_host: tunnel.targetHost,
+        target_port: tunnel.targetPort,
+      };
+      try {
+        await request("tunnel.start", { tunnel: body }, true);
+      } catch (error) {
+        onStatus({ state: "failed", message: String(error.message ?? error) });
+      }
+    },
+    stop: (id) => request("tunnel.stop", { id: tunnelPrefix + id }).then(() => {}),
   };
   // What the app hands to the system browser (links) is recorded here.
   window.__anixopsE2eOpenedUrls = [];
@@ -153,18 +310,26 @@ async function newPage({ width = 1200, height = 760, query = "" } = {}) {
   });
   page.errors = [];
   page.on("pageerror", (error) => page.errors.push(error.message));
-  await page.exposeFunction("__anixopsE2eOpen", ({ cols, rows }) => {
+  await page.exposeFunction("__anixopsE2eOpen", ({ cols, rows, integration }) => {
     const id = ++seq;
     bridgePage = page;
     return new Promise((resolve) => {
-      pendingOpens.set(id, resolve);
+      pendingOpens.set(id, { resolve, page });
       openStarted.set(id, Date.now());
-      send({ op: "open", seq: id, host: "e2e-target", cols, rows });
+      send({ op: "open", seq: id, host: "e2e-target", cols, rows, integration });
     });
   });
   await page.exposeFunction("__anixopsE2ePost", (message) => send(message));
+  await page.exposeFunction("__anixopsE2eRequest", ({ kind, payload, host }) => {
+    const id = ++seq;
+    bridgePage = page;
+    return new Promise((resolve) => {
+      pendingRequests.set(id, resolve);
+      send({ op: "request", seq: id, kind, payload, ...(host ? { host: "e2e-target" } : {}) });
+    });
+  });
   await page.addInitScript((value) => Object.defineProperty(Navigator.prototype, "platform", { get: () => value }), navigatorPlatform);
-  await page.addInitScript(pageBridge);
+  await page.addInitScript(pageBridge, { downloads: downloadsDir });
   await page.goto(`${baseUrl}/?webgl=1${query ? `&${query}` : ""}`);
   await page.waitForLoadState("networkidle");
   return page;
@@ -383,6 +548,39 @@ check("窗口", "sidebar-toggle", "侧栏可收起，让终端占满窗口（Ter
   const visible = await page.getByPlaceholder(/搜索主机/).isVisible();
   if (!visible) throw new Error("再次点击没有展开侧栏");
   return `${before} 列 → ${after} 列，再次点击展开`;
+});
+
+check("窗口", "focus-mode", "突出终端：侧栏底部有收起按钮，终端里 Ctrl+Shift+S 收起/展开；专注模式（F11，macOS ⌃⌘Z）只留标签和终端，重开后记住", async (page) => {
+  await openHost(page);
+  const cols = () => term(page, (t) => t.cols);
+  const settle = () => page.waitForTimeout(600);
+  const base = await cols();
+  await page.getByRole("button", { name: "收起侧栏" }).click();
+  await settle();
+  const folded = await cols();
+  if (!(folded > base)) throw new Error(`点“收起侧栏”后终端没有变宽（${base} 列）`);
+  await page.locator(".xterm-screen").last().click();
+  await page.keyboard.press(isMacRun ? "Control+Meta+S" : "Control+Shift+S");
+  await settle();
+  if (!(await page.getByPlaceholder(/搜索主机/).isVisible())) throw new Error("终端里按快捷键没有展开侧栏");
+  await page.getByRole("button", { name: "专注模式" }).click();
+  await settle();
+  const focused = await cols();
+  if (await page.getByRole("navigation", { name: "AnixOps SSH" }).count()) throw new Error("专注模式下左侧图标栏还在");
+  if (!(focused > folded)) throw new Error(`专注模式没有让终端更宽（${folded} → ${focused} 列）`);
+  await page.screenshot({ path: join(outDir, "focus-mode-on.png") });
+  // Remembered: a new window of the app opens in focus mode.
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+  await openHost(page);
+  if (await page.getByRole("navigation", { name: "AnixOps SSH" }).count()) throw new Error("重开后没有记住专注模式");
+  await page.locator(".xterm-screen").last().click();
+  await page.keyboard.press(isMacRun ? "Control+Meta+Z" : "F11");
+  await page.getByRole("navigation", { name: "AnixOps SSH" }).waitFor({ timeout: 3000 });
+  await page.keyboard.press(isMacRun ? "Control+Meta+Z" : "F11");
+  await page.getByRole("button", { name: "退出专注模式" }).click();
+  await page.getByRole("navigation", { name: "AnixOps SSH" }).waitFor({ timeout: 3000 });
+  return `${base} 列 → 收起侧栏 ${folded} 列 → 专注模式 ${focused} 列；快捷键和“退出专注模式”按钮可用，重开后记住`;
 });
 
 check("复制粘贴", "copy-shortcut", "选中后 Ctrl+Shift+C（macOS ⌘C）复制", async (page) => {
@@ -736,6 +934,22 @@ check("字体", "ctrl-wheel-zoom", "Ctrl+滚轮缩放字号（Windows Terminal�
   return `字号 ${before} → ${after}`;
 });
 
+check("字体", "ligatures", "连字：Fira Code、Cascadia Code 等字体把 => != 显示成连字（Windows Terminal、WezTerm、iTerm2）", async (page) => {
+  await page.getByRole("button", { name: "设置" }).click();
+  await page.getByRole("switch", { name: "连字" }).click();
+  await page.getByRole("button", { name: "主机", exact: true }).click();
+  await openHost(page);
+  await run(page, "clear; echo '=> != -> === <= >='");
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(outDir, "ligatures.png") });
+  const renderer = await page.evaluate(() => {
+    const screen = document.querySelector(".terminal-ligatures .xterm-rows");
+    return screen ? getComputedStyle(screen).fontVariantLigatures : null;
+  });
+  if (!renderer || !/common-ligatures/.test(renderer)) throw new Error(`连字样式未生效：${renderer}`);
+  return `DOM 渲染，font-variant-ligatures: ${renderer}`;
+});
+
 check("标签与分屏", "split", "Ctrl+Shift+D 分屏后新窗格也连上同一主机", async (page) => {
   await openHost(page);
   await page.keyboard.press(isMacRun ? "Meta+D" : "Control+Shift+D");
@@ -794,6 +1008,23 @@ check("标签与分屏", "tab-drag", "拖动标签调整顺序", async (page) =>
   return `${before.join(" | ")} → ${after.join(" | ")}`;
 });
 
+check("标签与分屏", "tab-rename", "给标签改名：双击标签名或右键“重命名标签”（Windows Terminal、iTerm2、MobaXterm）", async (page) => {
+  await openHost(page);
+  await page.getByRole("tab").first().click({ button: "right" });
+  await page.getByRole("menuitem", { name: "重命名标签" }).click();
+  const field = page.getByRole("textbox", { name: "重命名标签" });
+  await field.fill("数据库主库");
+  await field.press("Enter");
+  await page.getByRole("tab", { name: /数据库主库/ }).waitFor({ timeout: 3000 });
+  // Escape keeps the name.
+  await page.getByText("数据库主库").dblclick();
+  await page.getByRole("textbox", { name: "重命名标签" }).fill("不要");
+  await page.getByRole("textbox", { name: "重命名标签" }).press("Escape");
+  await page.waitForTimeout(200);
+  if ((await page.getByRole("tab", { name: /数据库主库/ }).count()) !== 1) throw new Error("Esc 没有保留原名");
+  return "右键或双击改名，回车确认，Esc 取消";
+});
+
 check("会话", "exit-reconnect", "会话结束后显示原因，按回车重新连接", async (page) => {
   await openHost(page);
   await run(page, "exit");
@@ -823,6 +1054,481 @@ check("性能", "bulk-output", "大量输出（20 万行）不卡死，几秒内
 });
 
 
+// ---- Files (SFTP) --------------------------------------------------------
+
+/** Makes a fresh folder on the server with a few files, from the terminal. */
+async function remoteFixture(page) {
+  const dir = `/tmp/e2e-files-${Math.random().toString(36).slice(2, 8)}`;
+  await runAndWait(
+    page,
+    `mkdir -p ${dir}/sub && printf 'hello\\n' > ${dir}/a.txt && head -c 300000 /dev/urandom > ${dir}/big.bin && touch ${dir}/.hidden && cd ${dir}`,
+  );
+  return dir;
+}
+
+/** Opens the files pane of the active tab and goes to `dir`. */
+async function openFilesAt(page, dir) {
+  await page.keyboard.press(isMacRun ? "Meta+Shift+E" : "Control+Shift+E");
+  const pane = page.getByRole("complementary", { name: "文件" });
+  const path = pane.getByRole("textbox", { name: "路径" });
+  await path.waitFor({ timeout: 15000 });
+  await path.fill(dir);
+  await path.press("Enter");
+  await pane.getByRole("listbox", { name: dir, exact: true }).waitFor({ timeout: 15000 });
+  return pane;
+}
+
+check("文件", "sftp-browse", "打开文件面板列出远端目录：文件夹在前，显示大小、时间、权限（Termius、FinalShell、MobaXterm）", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  const list = pane.getByRole("listbox", { name: dir });
+  await list.getByRole("option", { name: /a\.txt/ }).waitFor();
+  const names = await list.getByRole("option").allInnerTexts();
+  await page.screenshot({ path: join(outDir, "sftp-browse.png") });
+  return names.map((n) => n.replace(/\s+/g, " ")).join(" / ");
+});
+
+/** The listbox of the shown folder and one row of it. */
+const filesList = (pane, dir) => pane.getByRole("listbox", { name: dir, exact: true });
+const fileRow = (pane, name) => pane.locator(`[role=option][data-name="${name}"]`);
+
+
+check("文件", "sftp-navigate", "双击文件夹进入，“上级目录”和 Backspace 返回（FinalShell、MobaXterm、WinSCP）", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  await fileRow(pane, "sub").dblclick();
+  await filesList(pane, `${dir}/sub`).waitFor({ timeout: 10000 });
+  await pane.getByRole("button", { name: "上级目录" }).click();
+  await filesList(pane, dir).waitFor({ timeout: 10000 });
+  await fileRow(pane, "a.txt").click();
+  await page.keyboard.press("Backspace");
+  const up = await filesList(pane, "/tmp").waitFor({ timeout: 3000 }).then(() => true, () => false);
+  if (!up) throw new Error("双击、上级目录可用；在列表里按 Backspace 不会回到上级目录");
+  return "双击进入 sub，上级目录返回，Backspace 返回 /tmp";
+});
+
+check("文件", "sftp-upload", "上传本地文件到当前目录，完成后列表里出现，内容一致", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const local = join(localDir, `upload-${Date.now()}.txt`);
+  await writeFile(local, "uploaded from the e2e test\n".repeat(5000));
+  const pane = await openFilesAt(page, dir);
+  await page.evaluate((path) => window.__anixopsE2eUploads.push(path), local);
+  await pane.getByRole("button", { name: "上传" }).click();
+  const name = local.split("/").pop();
+  await fileRow(pane, name).waitFor({ timeout: 15000 });
+  const sum = await remoteOutput(page, `md5sum < ${dir}/${name} | cut -c1-32`);
+  const { createHash } = await import("node:crypto");
+  const { readFile } = await import("node:fs/promises");
+  const expected = createHash("md5").update(await readFile(local)).digest("hex");
+  if (sum !== expected) throw new Error(`远端 md5 ${sum}，本地 ${expected}`);
+  await page.screenshot({ path: join(outDir, "sftp-upload.png") });
+  return `${name}（130 KB）上传后 md5 一致，列表自动刷新`;
+});
+
+check("文件", "sftp-download", "下载文件到本地“下载”文件夹，传输列表显示进度和完成", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  const row = fileRow(pane, "big.bin");
+  await row.hover();
+  await row.getByRole("button", { name: "下载" }).click();
+  await pane.getByText("完成", { exact: true }).first().waitFor({ timeout: 20000 });
+  const { stat } = await import("node:fs/promises");
+  const size = (await stat(join(downloadsDir, "big.bin"))).size;
+  if (size !== 300000) throw new Error(`本地文件 ${size} 字节`);
+  return "big.bin 300000 字节，传输列表显示完成";
+});
+
+check("文件", "sftp-mkdir-rename-delete", "新建文件夹、F2 重命名、Delete 删除（带确认），远端随之改变", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  await pane.getByRole("button", { name: "新建文件夹" }).click();
+  await pane.getByPlaceholder("文件夹名称").fill("made-here");
+  await pane.getByPlaceholder("文件夹名称").press("Enter");
+  await fileRow(pane, "made-here").waitFor({ timeout: 10000 });
+  await fileRow(pane, "a.txt").click();
+  await page.keyboard.press("F2");
+  const input = pane.getByPlaceholder(/新名称/);
+  await input.fill("renamed.txt");
+  await input.press("Enter");
+  await fileRow(pane, "renamed.txt").waitFor({ timeout: 10000 });
+  await fileRow(pane, "renamed.txt").click();
+  await page.keyboard.press("Delete");
+  await page.getByRole("alertdialog").getByRole("button", { name: "删除" }).click();
+  await fileRow(pane, "renamed.txt").waitFor({ state: "detached", timeout: 10000 });
+  const listing = await remoteOutput(page, `ls ${dir}`);
+  if (!/made-here/.test(listing) || /a\.txt|renamed/.test(listing)) throw new Error(`远端：${listing}`);
+  return `远端现在：${listing.replace(/\s+/g, " ")}`;
+});
+
+check("文件", "sftp-chmod", "属性里改权限（八进制或勾选），远端 ls -l 随之改变", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  await fileRow(pane, "a.txt").click();
+  await page.keyboard.press("Alt+Enter");
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("八进制").fill("750");
+  await dialog.getByRole("button", { name: "应用" }).click();
+  await dialog.waitFor({ state: "detached", timeout: 10000 });
+  const mode = await remoteOutput(page, `stat -c %a ${dir}/a.txt`);
+  if (mode !== "750") throw new Error(`远端权限 ${mode}`);
+  return "a.txt → 750";
+});
+
+check("文件", "sftp-multi-select", "Ctrl+点击多选、Shift+点击连选，批量下载", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  await fileRow(pane, ".hidden").click();
+  await fileRow(pane, "big.bin").click({ modifiers: ["Shift"] });
+  const text = await pane.getByText(/已选 \d+ 项/).innerText();
+  if (text !== "已选 3 项") throw new Error(text);
+  await fileRow(pane, "a.txt").click({ modifiers: [isMacRun ? "Meta" : "Control"] });
+  const after = await pane.getByText(/已选 \d+ 项/).innerText();
+  if (after !== "已选 2 项") throw new Error(`Ctrl+点击取消一项后：${after}`);
+  return "Shift 连选 3 项，Ctrl 取消 1 项";
+});
+
+check("文件", "sftp-path", "路径栏输入 ~、绝对路径、文件路径都能打开（FinalShell、WinSCP）", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  const path = pane.getByRole("textbox", { name: "路径" });
+  await path.fill("~");
+  await path.press("Enter");
+  await filesList(pane, "/home/keyuser").waitFor({ timeout: 10000 });
+  await path.fill(`${dir}/a.txt`);
+  await path.press("Enter");
+  await filesList(pane, dir).waitFor({ timeout: 10000 });
+  const selected = await fileRow(pane, "a.txt").getAttribute("aria-selected");
+  if (selected !== "true") throw new Error("输入文件路径后没有选中该文件");
+  return "~ → /home/keyuser；文件路径打开其目录并选中";
+});
+
+check("文件", "sftp-follow-osc7", "终端报告当前目录（OSC 7，fish、Fedora/Ubuntu 的 VTE 配置会发）时，文件面板可以跟随（Windows Terminal、WezTerm、iTerm2 都读 OSC 7）", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  // What /etc/profile.d/vte.sh makes bash send before each prompt.
+  await runAndWait(page, `PROMPT_COMMAND='printf "\\033]7;file://%s%s\\033\\\\" "$HOSTNAME" "$PWD"'`);
+  const pane = await openFilesAt(page, dir);
+  const follow = pane.getByRole("button", { name: "跟随终端目录" });
+  if ((await follow.getAttribute("aria-pressed")) !== "true") await follow.click();
+  await page.locator(".xterm-screen").last().click();
+  await runAndWait(page, `cd ${dir}/sub`);
+  const followed = await filesList(pane, `${dir}/sub`).waitFor({ timeout: 4000 }).then(() => true, () => false);
+  if (!followed) throw new Error("终端 cd 后文件面板没有跟过去（OSC 7 没有被读取）");
+  return "开启跟随后，终端 cd sub，文件面板随之打开 sub";
+});
+
+check("文件", "sftp-follow-integration", "没开 Shell 集成时点“跟随终端目录”，可以直接为这台主机开启；重连后跟随（FinalShell 默认就跟随）", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  await pane.getByRole("button", { name: "跟随终端目录" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await dialog.waitFor({ timeout: 3000 }).catch(() => {
+    throw new Error("没开 Shell 集成时，跟随按钮点了没反应，只能去主机设置里找开关");
+  });
+  await dialog.getByRole("button", { name: "开启" }).click();
+  await pane.getByText(/已为这台主机开启 Shell 集成/).waitFor({ timeout: 5000 });
+  // The next connection has the integration (the bridge's host stands in for the saved one).
+  await page.evaluate(() => (window.__anixopsE2eIntegration = true));
+  await page.getByRole("button", { name: "关闭标签页" }).first().click();
+  await openHost(page);
+  await openFilesAt(page, dir);
+  const pane2 = page.getByRole("complementary", { name: "文件" });
+  await page.locator(".xterm-screen").last().click();
+  await runAndWait(page, `cd ${dir}/sub`);
+  const followed = await filesList(pane2, `${dir}/sub`).waitFor({ timeout: 6000 }).then(() => true, () => false);
+  if (!followed) throw new Error("开启 Shell 集成并重连后，文件面板仍不跟随");
+  return "确认开启 → 重连 → 终端 cd sub，文件面板随之打开 sub";
+});
+
+check("文件", "sftp-many-tabs", "同一台服务器开 12 个标签后，文件面板和下载照常可用（OpenSSH 每个连接最多 10 个会话；Termius、FinalShell 不受影响）", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  for (let i = 1; i < 12; i++) {
+    await page.getByRole("tab").first().click({ button: "right" });
+    await page.getByRole("menuitem", { name: "复制标签" }).click();
+    await page.waitForFunction((n) => window.__anixopsE2eOpened.length >= n, i + 1, { timeout: 15000 });
+  }
+  await waitScreen(page, /keyuser@/, { index: -1 });
+  const pane = await openFilesAt(page, dir);
+  await fileRow(pane, "a.txt").waitFor({ timeout: 10000 });
+  const row = fileRow(pane, "big.bin");
+  await row.hover();
+  await row.getByRole("button", { name: "下载" }).click();
+  await pane.getByText("完成", { exact: true }).first().waitFor({ timeout: 20000 });
+  return "12 个终端时文件面板照常打开、下载";
+});
+
+check("文件", "sftp-double-click", "双击文件用编辑器打开，保存后传回（FinalShell、MobaXterm、WinSCP；设置里可改成下载）", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  await fileRow(pane, "a.txt").dblclick();
+  const editing = pane.getByRole("region", { name: "正在编辑" });
+  const opened = await editing.getByText("a.txt").waitFor({ timeout: 10000 }).then(() => true, () => false);
+  if (!opened) throw new Error("双击文件没有用编辑器打开");
+  return "a.txt 出现在“正在编辑”里";
+});
+
+check("文件", "sftp-double-click-binary", "双击二进制文件（压缩包、程序、图片）直接下载，不用编辑器打开，免得卡住", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  await fileRow(pane, "big.bin").dblclick();
+  await pane.getByText("完成", { exact: true }).first().waitFor({ timeout: 20000 });
+  const editing = await pane.getByRole("region", { name: "正在编辑" }).getByText("big.bin").count();
+  if (editing) throw new Error("big.bin 被当成文本用编辑器打开了");
+  await fileRow(pane, "big.bin").click({ button: "right" });
+  const edit = await page.getByRole("menuitem", { name: /编辑/ }).count();
+  await page.keyboard.press("Escape");
+  if (edit) throw new Error("二进制文件的右键菜单里还有“编辑”");
+  return "big.bin 双击后下载完成，右键菜单没有“编辑”";
+});
+
+check("文件", "sftp-cancel", "大文件传输可以取消，状态显示已取消", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  await runAndWait(page, `head -c 400000000 /dev/zero > ${dir}/huge.bin`);
+  const pane = await openFilesAt(page, dir);
+  const row = fileRow(pane, "huge.bin");
+  await row.hover();
+  await row.getByRole("button", { name: "下载" }).click();
+  await pane.getByRole("button", { name: "取消传输" }).click({ timeout: 5000 });
+  await pane.getByText("已取消").waitFor({ timeout: 10000 });
+  return "取消后显示“已取消”";
+});
+
+check("文件", "sftp-context-menu", "在文件上右键弹出菜单：下载、重命名、属性、删除、复制路径（FinalShell、MobaXterm）", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  await fileRow(pane, "a.txt").click({ button: "right" });
+  const menu = page.getByRole("menu");
+  await menu.waitFor({ timeout: 3000 });
+  const items = (await menu.getByRole("menuitem").allInnerTexts()).map((s) => s.split("\n")[0].trim());
+  await page.screenshot({ path: join(outDir, "sftp-context-menu.png") });
+  const missing = ["下载", "重命名", "属性", "删除", "复制路径"].filter((name) => !items.includes(name));
+  if (missing.length) throw new Error(`右键菜单缺少：${missing.join("、")}（现有：${items.join("、")}）`);
+  return items.join("、");
+});
+
+check("文件", "sftp-sort", "点列头按名称、大小、修改时间排序（FinalShell、MobaXterm、WinSCP）", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  const header = pane.getByRole("button", { name: /^大小/ });
+  if (!(await header.count())) throw new Error("没有可点的列头，只能按名称排");
+  await header.click();
+  const names = await pane.locator("[role=option]").evaluateAll((rows) => rows.map((r) => r.dataset.name));
+  return names.join(" / ");
+});
+
+check("文件", "sftp-hidden", "可以隐藏或显示以 . 开头的文件（Termius、MobaXterm、WinSCP）", async (page) => {
+  await openHost(page);
+  const dir = await remoteFixture(page);
+  const pane = await openFilesAt(page, dir);
+  const toggle = pane.getByRole("button", { name: /隐藏文件/ });
+  if (!(await toggle.count())) throw new Error("没有显示/隐藏隐藏文件的开关");
+  await toggle.click();
+  const shown = await fileRow(pane, ".hidden").count();
+  await toggle.click();
+  const back = await fileRow(pane, ".hidden").count();
+  if (shown === back) throw new Error("开关不起作用");
+  return "开关切换 .hidden 的显示";
+});
+
+// ---- Connections and forwards --------------------------------------------
+
+check("连接管理", "quick-connect", "在主机搜索框输入 user@host:port 回车直接连接（Termius、MobaXterm、Tabby 的快速连接）", async (page) => {
+  const search = page.getByRole("textbox", { name: "搜索主机" });
+  await search.fill("keyuser@10.20.30.40:2200");
+  const row = page.getByRole("button", { name: /连接到 keyuser@10\.20\.30\.40:2200/ });
+  if (!(await row.count())) throw new Error("搜索框里输入地址只显示“没有匹配的主机”，不能直接连接");
+  await search.press("Enter");
+  await page.locator(".xterm-screen").last().waitFor();
+  await waitScreen(page, /keyuser@/);
+  const tab = await page.getByRole("tab").first().innerText();
+  return `回车后打开标签“${tab.split("\n")[0]}”并连上`;
+});
+
+check("连接管理", "search-enter", "搜索主机后回车连接第一个结果（Termius、Royal TSX）", async (page) => {
+  const search = page.getByRole("textbox", { name: "搜索主机" });
+  await search.fill("staging");
+  await search.press("Enter");
+  const opened = await page.locator(".xterm-screen").first().waitFor({ timeout: 4000 }).then(() => true, () => false);
+  if (!opened) throw new Error("回车没有反应");
+  const tab = await page.getByRole("tab").first().innerText();
+  if (!/staging-api/.test(tab)) throw new Error(`打开了 ${tab}`);
+  return "回车打开 staging-api";
+});
+
+check("连接管理", "duplicate-host", "主机右键“复制主机”，得到设置相同的新主机（Termius、MobaXterm、FinalShell）", async (page) => {
+  await page.getByRole("button", { name: /prod-web-02/ }).first().click({ button: "right" });
+  const item = page.getByRole("menuitem", { name: "复制主机" });
+  if (!(await item.count())) throw new Error(`主机菜单没有“复制主机”（现有：${(await page.getByRole("menuitem").allInnerTexts()).map((s) => s.split("\n")[0]).join("、")}）`);
+  await item.click();
+  const dialog = page.getByRole("dialog");
+  const name = await dialog.getByLabel("名称").first().inputValue();
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await dialog.waitFor({ state: "detached" });
+  await page.getByRole("button", { name: new RegExp(name) }).first().waitFor({ timeout: 3000 });
+  return `新主机“${name}”，地址相同`;
+});
+
+/** A port nothing listens on. */
+async function freePort() {
+  const { createServer } = await import("node:net");
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+/** The first bytes a TCP server sends (an SSH server's banner). */
+async function banner(port, { socks = null } = {}) {
+  const { connect } = await import("node:net");
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, "127.0.0.1");
+    let data = Buffer.alloc(0);
+    let stage = socks ? "greet" : "data";
+    const timer = setTimeout(() => (socket.destroy(), reject(new Error("no answer"))), 5000);
+    socket.on("connect", () => socks && socket.write(Buffer.from([5, 1, 0])));
+    socket.on("data", (chunk) => {
+      data = Buffer.concat([data, chunk]);
+      if (stage === "greet" && data.length >= 2) {
+        data = data.subarray(2);
+        stage = "connect";
+        const host = Buffer.from(socks.host);
+        socket.write(Buffer.concat([Buffer.from([5, 1, 0, 3, host.length]), host, Buffer.from([socks.port >> 8, socks.port & 255])]));
+      }
+      if (stage === "connect" && data.length >= 10) {
+        if (data[1] !== 0) return (clearTimeout(timer), socket.destroy(), reject(new Error(`SOCKS reply ${data[1]}`)));
+        data = data.subarray(10);
+        stage = "data";
+      }
+      if (stage === "data" && data.includes(10)) {
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(data.toString().split("\n")[0].trim());
+      }
+    });
+    socket.on("error", (error) => (clearTimeout(timer), reject(error)));
+  });
+}
+
+/** The port the e2e server's sshd listens on, as the shell sees it. */
+async function serverSshPort(page) {
+  await openHost(page);
+  const text = await remoteOutput(page, "echo ${SSH_CONNECTION##* }");
+  return Number(text.trim());
+}
+
+/** Creates a forward through the form and turns it on. */
+async function createTunnel(page, { name, kind, bindPort, targetHost, targetPort }) {
+  await page.getByRole("button", { name: "端口转发", exact: true }).click();
+  await page.getByRole("button", { name: "新建隧道" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("名称").fill(name);
+  await dialog.getByLabel("经由主机").selectOption({ label: /prod-web-01/ }).catch(async () => {
+    const value = await dialog.locator("select option", { hasText: "prod-web-01" }).first().getAttribute("value");
+    await dialog.getByLabel("经由主机").selectOption(value);
+  });
+  await dialog.getByText({ local: "本地", remote: "远程", dynamic: "SOCKS" }[kind], { exact: true }).click();
+  await dialog.getByLabel(kind === "remote" ? "服务器端口" : "本机端口").fill(String(bindPort));
+  if (kind !== "dynamic") {
+    await dialog.getByLabel("目标主机").fill(targetHost);
+    await dialog.getByLabel("目标端口").fill(String(targetPort));
+  }
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await dialog.waitFor({ state: "detached" });
+  await page.getByRole("switch", { name }).click();
+  const row = page.locator("[data-context-row]", { has: page.getByRole("switch", { name }) });
+  await row.getByText("运行中").waitFor({ timeout: 10000 }).catch(async () => {
+    throw new Error(`隧道没有运行：${(await row.innerText()).replace(/\s+/g, " ")}`);
+  });
+}
+
+check("端口转发", "forward-local", "本地转发（-L）：打开后本机端口直通服务器那边的目标，关掉后端口释放", async (page) => {
+  const sshPort = await serverSshPort(page);
+  const port = await freePort();
+  await createTunnel(page, { name: "e2e-local", kind: "local", bindPort: port, targetHost: "127.0.0.1", targetPort: sshPort });
+  const text = await banner(port);
+  if (!/^SSH-2\.0-/.test(text)) throw new Error(`本机 ${port} 读到：${text}`);
+  await page.getByRole("switch", { name: "e2e-local" }).click();
+  await page.waitForTimeout(800);
+  const closed = await banner(port).then(() => false, () => true);
+  if (!closed) throw new Error("关掉后端口还在转发");
+  await page.screenshot({ path: join(outDir, "forward-local.png") });
+  return `127.0.0.1:${port} → 服务器 127.0.0.1:${sshPort}，读到 ${text.slice(0, 20)}…；关掉后端口释放`;
+});
+
+check("端口转发", "forward-socks", "动态转发（-D，SOCKS5）：浏览器或工具经它访问服务器那边", async (page) => {
+  const sshPort = await serverSshPort(page);
+  const port = await freePort();
+  await createTunnel(page, { name: "e2e-socks", kind: "dynamic", bindPort: port });
+  const text = await banner(port, { socks: { host: "127.0.0.1", port: sshPort } });
+  if (!/^SSH-2\.0-/.test(text)) throw new Error(`SOCKS 读到：${text}`);
+  return `SOCKS5 127.0.0.1:${port} → 服务器 127.0.0.1:${sshPort}`;
+});
+
+check("端口转发", "forward-remote", "远程转发（-R）：服务器上的端口直通本机的服务", async (page) => {
+  const { createServer } = await import("node:net");
+  const local = createServer((socket) => socket.end("hello-from-local\n"));
+  const localPort = await new Promise((resolve) => local.listen(0, "127.0.0.1", () => resolve(local.address().port)));
+  try {
+    await openHost(page);
+    const remotePort = 20000 + Math.floor(Math.random() * 20000);
+    await createTunnel(page, { name: "e2e-remote", kind: "remote", bindPort: remotePort, targetHost: "127.0.0.1", targetPort: localPort });
+    await page.getByRole("button", { name: "主机", exact: true }).click();
+    const text = await remoteOutput(page, `exec 3<>/dev/tcp/127.0.0.1/${remotePort} && head -1 <&3; exec 3<&-`);
+    if (!/hello-from-local/.test(text)) throw new Error(`服务器上读到：${text}`);
+    return `服务器 127.0.0.1:${remotePort} → 本机 ${localPort}`;
+  } finally {
+    local.close();
+  }
+});
+
+// ---- Settings ------------------------------------------------------------
+
+check("设置", "settings-search", "设置可以搜索，只留下匹配的项（Windows Terminal、VS Code、Termius）", async (page) => {
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const search = page.getByRole("textbox", { name: "搜索设置" });
+  if (!(await search.count())) throw new Error("设置没有搜索框，只能在侧栏里一项项往下翻");
+  await search.fill("连字");
+  await page.getByText("连字", { exact: true }).waitFor({ timeout: 2000 });
+  const themeShown = await page.getByText("主题", { exact: true }).isVisible().catch(() => false);
+  if (themeShown) throw new Error("搜“连字”时仍显示“主题”");
+  await page.screenshot({ path: join(outDir, "settings-search.png") });
+  await search.fill("没有这一项");
+  await page.getByText("没有匹配的设置").waitFor({ timeout: 2000 });
+  await search.fill("终端");
+  const rows = await page.locator("[data-settings-row]").count();
+  return `搜“连字”只剩连字；搜“终端”显示终端组 ${rows} 项；搜不到时提示`;
+});
+
+check("设置", "settings-live", "改字号立刻作用到已打开的终端，不用重连（Windows Terminal、iTerm2）", async (page) => {
+  await openHost(page);
+  const before = await term(page, (t) => t.options.fontSize);
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("button", { name: "字号 +" }).click();
+  await page.getByRole("button", { name: "字号 +" }).click();
+  await page.waitForTimeout(300);
+  const after = await term(page, (t) => t.options.fontSize);
+  if (after !== before + 2) throw new Error(`字号 ${before} → ${after}`);
+  return `字号 ${before} → ${after}，会话不断`;
+});
+
 // ---- Run -----------------------------------------------------------------
 
 const results = [];
@@ -845,6 +1551,8 @@ for (const item of checks) {
   console.log(`${result.ok ? "PASS" : "FAIL"} ${item.name} (${result.seconds.toFixed(1)}s) ${result.note}`);
   if (!result.ok && process.env.VERBOSE) console.log(result.detail);
   for (const id of await page.evaluate(() => window.__anixopsE2eOpened).catch(() => [])) send({ op: "close", id });
+  for (const id of await page.evaluate(() => [...window.__anixopsE2eSftp]).catch(() => []))
+    send({ op: "request", seq: ++seq, kind: "sftp.close", payload: { sftp_id: id } });
   await page.context().close();
 }
 await browser.close();

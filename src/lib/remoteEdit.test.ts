@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkEditable, editConflict, editKey, isEditableName, MAX_EDIT_BYTES, stampOf } from "./remoteEdit";
+import { checkEditable, editConflict, editKey, isBinaryName, isEditableName, MAX_EDIT_BYTES, stampOf } from "./remoteEdit";
 import { followTarget, clearTerminalCwd, onTerminalCwd, publishTerminalCwd, terminalCwd } from "./terminalCwd";
 
 const base = { size: 120, modified: "Oct 14 09:30" };
@@ -26,6 +26,16 @@ describe("checkEditable", () => {
     expect(checkEditable({ kind: "file", size: MAX_EDIT_BYTES + 1 })).toBe("too-large");
     expect(checkEditable({ kind: "file", size: MAX_EDIT_BYTES })).toBe("ok");
     expect(checkEditable({ kind: "symlink", size: 5 })).toBe("ok");
+  });
+  it("refuses binaries by name, and leaves unknown names to the content check", () => {
+    expect(checkEditable({ kind: "file", size: 5, name: "backup.tar.gz" })).toBe("binary");
+    expect(checkEditable({ kind: "file", size: 5, name: "nginx.conf" })).toBe("ok");
+    expect(isBinaryName("LOGO.PNG")).toBe(true);
+    expect(isBinaryName("libssl.so.3")).toBe(true);
+    expect(isBinaryName("app.exe")).toBe(true);
+    expect(isBinaryName("Dockerfile")).toBe(false);
+    expect(isBinaryName(".zip")).toBe(false);
+    expect(isBinaryName("notes.md")).toBe(false);
   });
   it("only takes names that survive as local file names", () => {
     expect(isEditableName("nginx.conf")).toBe(true);

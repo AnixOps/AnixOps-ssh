@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Server, Settings, SquareCode, Users, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, Maximize2, PanelLeftClose, PanelLeftOpen, Server, Settings, SquareCode, Users, type LucideIcon } from "lucide-react";
 import mark from "@/assets/mark.svg";
 import { Tooltip } from "@/components/ui/tooltip";
 import { t } from "@/lib/i18n";
@@ -18,11 +18,16 @@ export function IconRail({
   active,
   sidebarHidden = false,
   onChange,
+  onToggleSidebar,
+  onFocusMode,
 }: {
   active: NavKey;
   /** The section's panel is hidden; choosing the active section shows it again. */
   sidebarHidden?: boolean;
   onChange: (key: NavKey) => void;
+  onToggleSidebar?: () => void;
+  /** Hides the rail and the sidebar, leaving the tabs and the terminal. */
+  onFocusMode?: () => void;
 }) {
   return (
     <nav
@@ -34,6 +39,18 @@ export function IconRail({
         <RailButton key={item.key} item={item} active={active === item.key} open={!sidebarHidden} onChange={onChange} />
       ))}
       <div className="flex-1" />
+      {onFocusMode && (
+        <RailAction label={t.focusMode} hint={shortcutHint("toggle-focus")} icon={Maximize2} onClick={onFocusMode} />
+      )}
+      {onToggleSidebar && (
+        <RailAction
+          label={sidebarHidden ? t.showSidebar : t.hideSidebar}
+          hint={shortcutHint("toggle-sidebar")}
+          icon={sidebarHidden ? PanelLeftOpen : PanelLeftClose}
+          expanded={!sidebarHidden}
+          onClick={onToggleSidebar}
+        />
+      )}
       <RailButton
         item={{ key: "settings", label: t.navSettings, icon: Settings }}
         active={active === "settings"}
@@ -41,6 +58,35 @@ export function IconRail({
         onChange={onChange}
       />
     </nav>
+  );
+}
+
+/** A command at the foot of the rail (not a section). */
+function RailAction({
+  label,
+  hint,
+  icon: Icon,
+  expanded,
+  onClick,
+}: {
+  label: string;
+  hint: string;
+  icon: LucideIcon;
+  expanded?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Tooltip label={hint ? `${label} (${hint})` : label} side="right">
+      <button
+        type="button"
+        aria-label={label}
+        aria-expanded={expanded}
+        onClick={onClick}
+        className="flex size-10 items-center justify-center rounded-sm text-label-2 transition-colors duration-micro ease-standard hover:bg-fill-1 hover:text-label-1"
+      >
+        <Icon className="size-5" strokeWidth={1.5} />
+      </button>
+    </Tooltip>
   );
 }
 

@@ -220,6 +220,25 @@ export async function saveHost(input: HostInput): Promise<string> {
   return invoke<string>("host_save", { input });
 }
 
+/** Turns the shell integration on for a saved host (from its next
+ *  connection), keeping everything else as it is. False when the host is
+ *  not a saved one (a ~/.ssh/config entry is changed through the editor). */
+export async function enableShellIntegration(hostId: string): Promise<boolean> {
+  const { hosts, groups } = await loadHosts();
+  const host = hosts.find((candidate) => candidate.id === hostId);
+  if (!host || host.source !== "saved") return false;
+  await saveHost({
+    id: host.id,
+    name: host.name,
+    group: groups.find((group) => group.id === host.groupId)?.name ?? null,
+    tags: host.tags,
+    favorite: host.favorite,
+    color: host.color,
+    fields: { ...host.fields, shellIntegration: true },
+  });
+  return true;
+}
+
 export async function deleteHost(id: string): Promise<void> {
   if (!isTauri) return previewDeleteHost(id);
   await invoke("host_delete", { id });
@@ -493,9 +512,22 @@ export interface StartedTransfer {
   queued?: boolean;
 }
 
+/** The file side of the end-to-end bridge (scripts/terminal-e2e.mjs): the
+ *  real daemon's SFTP and transfer queue in place of the preview's files. */
+interface E2eFilesBridge {
+  open(hostId: string): Promise<FilesHandle>;
+  transfer(request: TransferRequest, onEvent: (event: TransferEvent) => void): Promise<StartedTransfer>;
+  cancel(id: string): Promise<void>;
+  pickUploads(): Promise<string[]>;
+}
+
+function e2eFiles(): E2eFilesBridge | undefined {
+  return (window as { __anixopsE2eFiles?: E2eFilesBridge }).__anixopsE2eFiles;
+}
+
 /** Opens a long-lived sftp process for browsing `hostId`. */
 export async function openFiles(hostId: string): Promise<FilesHandle> {
-  if (!isTauri) return previewFiles();
+  if (!isTauri) return e2eFiles()?.open(hostId) ?? previewFiles();
   const { id, home } = await invoke<{ id: string; home: string }>("sftp_open", { hostId });
   return {
     home,
@@ -550,19 +582,19 @@ export async function startTransfer(
   request: TransferRequest,
   onEvent: (event: TransferEvent) => void,
 ): Promise<StartedTransfer> {
-  if (!isTauri) return previewTransfer(request, onEvent);
+  if (!isTauri) return e2eFiles()?.transfer(request, onEvent) ?? previewTransfer(request, onEvent);
   const events = new Channel<TransferEvent>();
   events.onmessage = onEvent;
   return invoke<StartedTransfer>("transfer_start", { ...request, local: request.local ?? null, events });
 }
 
 export async function cancelTransfer(id: string): Promise<void> {
-  if (!isTauri) return previewCancel(id);
+  if (!isTauri) return e2eFiles()?.cancel(id) ?? previewCancel(id);
   await invoke("transfer_cancel", { id });
 }
 
 export async function pickUploads(): Promise<string[]> {
-  if (!isTauri) return ["/Users/you/Desktop/release-notes.md"];
+  if (!isTauri) return e2eFiles()?.pickUploads() ?? ["/Users/you/Desktop/release-notes.md"];
   const picked = await openDialog({ multiple: true, directory: false });
   if (picked === null) return [];
   return Array.isArray(picked) ? picked : [picked];
@@ -956,7 +988,24 @@ function previewStatus(id: string, status: TunnelStatus) {
   for (const listener of previewListeners) listener(id, status);
 }
 
+/** The forwarding side of the end-to-end bridge (scripts/terminal-e2e.mjs):
+ *  the real daemon's tunnels in place of the preview's. */
+interface E2eTunnelsBridge {
+  start(tunnel: Tunnel, onStatus: (status: TunnelStatus) => void): Promise<void>;
+  stop(id: string): Promise<void>;
+}
+
+function e2eTunnels(): E2eTunnelsBridge | undefined {
+  return (window as { __anixopsE2eTunnels?: E2eTunnelsBridge }).__anixopsE2eTunnels;
+}
+
 export async function startTunnel(id: string): Promise<void> {
+  const bridge = isTauri ? undefined : e2eTunnels();
+  const tunnel = previewTunnels.find((candidate) => candidate.id === id);
+  if (bridge && tunnel) {
+    previewStatus(id, { state: "starting" });
+    return bridge.start(tunnel, (status) => previewStatus(id, status));
+  }
   if (!isTauri) {
     previewStatus(id, { state: "starting" });
     window.setTimeout(() => previewStatus(id, { state: "running" }), 400);
@@ -966,6 +1015,7 @@ export async function startTunnel(id: string): Promise<void> {
 }
 
 export async function stopTunnel(id: string): Promise<void> {
+  if (!isTauri && e2eTunnels()) return e2eTunnels()?.stop(id);
   if (!isTauri) return previewStatus(id, { state: "stopped" });
   await invoke("tunnel_stop", { id });
 }

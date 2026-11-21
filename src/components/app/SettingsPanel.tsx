@@ -5,12 +5,12 @@ import { BackupSync } from "@/components/app/BackupSync";
 import { KnownHosts } from "@/components/app/KnownHosts";
 import { SyncSettings } from "@/components/app/SyncSettings";
 import { VaultSettings } from "@/components/app/VaultSettings";
-import { CircleAlert, CircleCheck, Download, Eye, EyeOff, Minus, Plus, RotateCw, Trash2 } from "lucide-react";
+import { CircleAlert, CircleCheck, Download, Eye, EyeOff, Minus, Plus, RotateCw, Search, Trash2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { SettingsRow, SettingsGroup } from "@/components/ui/settings";
+import { SettingsFilter, SettingsRow, SettingsGroup } from "@/components/ui/settings";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -49,6 +49,7 @@ export function SettingsPanel({
   onRecheck: () => void;
   onDataChanged: () => void;
 }) {
+  const [query, setQuery] = useState("");
   const [current, setCurrent] = useState<Settings>(settings());
   const [prefs, setPrefs] = useState(completionPrefs());
   const [transferState, setTransferState] = useState(transferPrefs());
@@ -84,7 +85,28 @@ export function SettingsPanel({
   return (
     <aside className="material-sidebar flex w-72 shrink-0 flex-col border-r">
       <h2 className="px-4 pt-4 pb-2 text-title-3">{t.navSettings}</h2>
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-4">
+      {/* Search, as Windows Terminal, VS Code and Termius settings have it. */}
+      <div className="px-3 pb-2">
+        <div className="relative">
+        <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-label-3" strokeWidth={1.5} />
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && query) {
+              event.stopPropagation();
+              setQuery("");
+            }
+          }}
+          placeholder={t.searchSettings}
+          aria-label={t.searchSettings}
+          className="pl-9"
+        />
+        </div>
+      </div>
+      <SettingsFilter query={query}>
+      <div className="settings-list min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-4">
+        <p className="settings-empty hidden px-3 pt-6 text-center text-callout text-label-2">{t.noMatchingSettings}</p>
         {error && <p className="rounded-sm bg-danger-soft px-3 py-2 text-callout text-danger">{error}</p>}
 
         <SettingsGroup title={t.appearance}>
@@ -151,6 +173,13 @@ export function SettingsPanel({
                 <option key={family} value={family} />
               ))}
             </datalist>
+          </SettingsRow>
+          <SettingsRow label={t.ligatures} hint={t.ligaturesHint}>
+            <Switch
+              on={current.terminalLigatures}
+              label={t.ligatures}
+              onClick={() => update({ terminalLigatures: !current.terminalLigatures })}
+            />
           </SettingsRow>
           <SettingsRow label={t.lineHeight}>
             <Select
@@ -292,6 +321,17 @@ export function SettingsPanel({
         </SettingsGroup>
 
         <SettingsGroup title={t.files}>
+          <SettingsRow label={t.filesDoubleClick}>
+            <Segmented
+              value={current.filesDoubleClick}
+              onChange={(value) => update({ filesDoubleClick: value })}
+              label={t.filesDoubleClick}
+              options={[
+                { value: "edit", label: t.filesDoubleClickEdit },
+                { value: "download", label: t.filesDoubleClickDownload },
+              ]}
+            />
+          </SettingsRow>
           <SettingsRow label={t.editorCommand} hint={t.editorCommandHint} stacked>
             <Input
               value={editor}
@@ -412,6 +452,7 @@ export function SettingsPanel({
           </SettingsRow>
         </SettingsGroup>
       </div>
+      </SettingsFilter>
     </aside>
   );
 }

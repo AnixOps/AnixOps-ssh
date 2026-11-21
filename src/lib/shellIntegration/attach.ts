@@ -2,7 +2,7 @@ import type { IDecoration, IMarker, Terminal } from "@xterm/xterm";
 import { t } from "@/lib/i18n";
 import { ShellIntegrationLineSource } from "./lineSource";
 import { PromptMarks, type PromptMark } from "./marks";
-import { INTEGRATION_OSC, parseIntegrationOsc } from "./osc";
+import { INTEGRATION_OSC, parseIntegrationOsc, parseOsc7 } from "./osc";
 
 /** The last command the shell reported, with where its output sits in the buffer. */
 export interface ReportedCommand {
@@ -87,6 +87,12 @@ export function attachShellIntegration(
     else if (event.kind === "commandEnd") marks.commandEnd(event.exitCode);
     return true;
   });
+  // A shell without the script may still say where it is (OSC 7).
+  const cwdReport = terminal.parser.registerOscHandler(7, (data) => {
+    const path = parseOsc7(data);
+    if (path) source.handle({ kind: "cwd", path });
+    return true;
+  });
   const parsed = terminal.onWriteParsed(() => marks.prune());
 
   return {
@@ -112,6 +118,7 @@ export function attachShellIntegration(
     },
     dispose() {
       handler.dispose();
+      cwdReport.dispose();
       parsed.dispose();
       for (const { decoration } of decorations.values()) decoration.dispose();
       decorations.clear();

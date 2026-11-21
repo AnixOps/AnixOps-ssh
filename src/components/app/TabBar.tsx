@@ -1,5 +1,5 @@
-import { Activity, Bell, Cable, Columns2, FolderOpen, LoaderCircle, Plus, Radio, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
-import { useCallback, useState, type KeyboardEvent } from "react";
+import { Activity, Bell, Cable, Columns2, FolderOpen, LoaderCircle, Minimize2, Plus, Radio, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
+import { useCallback, useRef, useState, type KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ContextMenu, Menu, type MenuEntry } from "@/components/ui/menu";
 import type { SessionStatus } from "@/components/app/TerminalView";
@@ -44,6 +44,7 @@ export function TabBar({
   onClose,
   onCloseMany,
   onDuplicate,
+  onRename,
   onMove,
   onNew,
   serialHosts,
@@ -53,6 +54,7 @@ export function TabBar({
   monitorAvailable,
   onToggleMonitor,
   onSplit,
+  onExitFocus,
 }: {
   tabs: Tab[];
   activeKey: string | null;
@@ -62,6 +64,8 @@ export function TabBar({
   onCloseMany: (keys: string[], keep: string) => void;
   /** Opens another session like this tab's (same host, or a local shell). */
   onDuplicate: (key: string) => void;
+  /** Gives a tab a name of its own (empty keeps the current one). */
+  onRename: (key: string, title: string) => void;
   /** Moves tab `from` to where tab `to` is. */
   onMove: (from: string, to: string) => void;
   onNew: () => void;
@@ -74,16 +78,32 @@ export function TabBar({
   monitorAvailable: boolean;
   onToggleMonitor: () => void;
   onSplit: (axis: Axis) => void;
+  /** Shown in focus mode, where the bar is all that is left of the window's chrome. */
+  onExitFocus?: () => void;
 }) {
   const activeTab = tabs.find((tab) => tab.key === activeKey);
   const broadcast = useBroadcast();
   // The right-click menu of a tab: which tab, and where.
   const [menu, setMenu] = useState<{ key: string; at: { x: number; y: number } } | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
+  // The tab whose name is being edited in place.
+  const [renaming, setRenamingState] = useState<string | null>(null);
+  const renamingRef = useRef<string | null>(null);
+  const setRenaming = (key: string | null) => {
+    renamingRef.current = key;
+    setRenamingState(key);
+  };
+  const finishRename = (key: string, value: string | null) => {
+    // Escape, then the blur of the field going away: only the first counts.
+    if (renamingRef.current !== key) return;
+    setRenaming(null);
+    if (value !== null && value.trim()) onRename(key, value.trim());
+  };
   const menuIndex = menu ? tabs.findIndex((tab) => tab.key === menu.key) : -1;
   const menuItems: MenuEntry[] = menu
     ? [
         { key: "duplicate", label: t.duplicateTab, onSelect: () => onDuplicate(menu.key) },
+        { key: "rename", label: t.renameTab, onSelect: () => setRenaming(menu.key) },
         "separator",
         { key: "close", label: t.closeTab, shortcut: shortcutHint("close-tab"), onSelect: () => onClose(menu.key) },
         {
@@ -163,12 +183,15 @@ export function TabBar({
                 className="relative flex h-full min-w-0 items-center gap-2 pl-3 text-callout"
               >
                 <TabIcon tab={tab} />
-                <span
-                  className="truncate"
-                  title={tab.status.remoteTitle ? `${tab.title} — ${tab.status.remoteTitle}` : tab.title}
-                >
-                  {tab.title}
-                </span>
+                {renaming !== tab.key && (
+                  <span
+                    className="truncate"
+                    title={tab.status.remoteTitle ? `${tab.title} — ${tab.status.remoteTitle}` : tab.title}
+                    onDoubleClick={() => setRenaming(tab.key)}
+                  >
+                    {tab.title}
+                  </span>
+                )}
                 {tab.status.bell && !active && (
                   <Bell className="size-3.5 shrink-0 text-warning" strokeWidth={1.5} aria-label={t.bell} />
                 )}
@@ -179,6 +202,22 @@ export function TabBar({
                   <Radio className="size-4 shrink-0 text-warning" strokeWidth={1.5} aria-label={t.broadcastingTab} />
                 )}
               </button>
+              {renaming === tab.key && (
+                <input
+                    aria-label={t.renameTab}
+                    defaultValue={tab.title}
+                    autoFocus
+                    onFocus={(event) => event.currentTarget.select()}
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                      if (event.key === "Enter") finishRename(tab.key, event.currentTarget.value);
+                      else if (event.key === "Escape") finishRename(tab.key, null);
+                    }}
+                    onBlur={(event) => finishRename(tab.key, event.currentTarget.value)}
+                    className="mr-1 h-6 w-32 min-w-0 rounded-xs bg-bg px-1 text-callout text-label-1 outline-none ring-1 ring-(--accent)"
+                  />
+              )}
               <Tooltip label={`${t.closeTab} (${shortcutHint("close-tab")})`}>
                 <button
                   type="button"
@@ -239,6 +278,13 @@ export function TabBar({
           >
             <FolderOpen />
             <span className={BAR_LABEL}>{t.files}</span>
+          </Button>
+        </Tooltip>
+      )}
+      {onExitFocus && (
+        <Tooltip label={`${t.exitFocusMode} (${shortcutHint("toggle-focus")})`}>
+          <Button variant="quiet" size="icon" aria-label={t.exitFocusMode} onClick={onExitFocus}>
+            <Minimize2 />
           </Button>
         </Tooltip>
       )}
