@@ -23,6 +23,12 @@ CI also builds the mobile prototype (`docs/mobile-prototype.md`): the
 "Android (debug APK)" job builds an APK, and the macOS Rust job builds the iOS
 app library without signing (one macOS runner per run).
 
+CI installs exactly what a release installs: `npm ci` (never `npm install`)
+and a `cargo metadata --locked` check, so a package.json / Cargo.toml change
+without its lockfile fails CI the same way it would fail the release.
+`npm run lint:workflows` (run by `npm test`) enforces this in every workflow.
+Change a manifest and its lockfile in the same pull request.
+
 `scripts/ci-changes.sh` decides the rest. `tauri build` (installers) runs on
 main, on manual runs (Actions → CI → Run workflow on the branch), and on pull
 requests that change the version or packaging files. End-to-end and Android
