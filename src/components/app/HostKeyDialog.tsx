@@ -173,7 +173,7 @@ export function HostKeyDialog() {
                   <input
                     type="checkbox"
                     checked={confirmed}
-                    disabled={match === "match"}
+                    disabled={match === "match" || match === "mismatch"}
                     onChange={(event) => setVerified(event.target.checked)}
                     className="mt-1 accent-(--accent)"
                   />
