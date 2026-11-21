@@ -6,6 +6,13 @@ import { cn } from "@/lib/utils";
 const FilterContext = createContext("");
 /** The group's own title matches the search: all of its rows stay. */
 const GroupMatchContext = createContext(false);
+/** The title of the settings page the group is on: a group with the same
+ *  title (the only group of "文件" on the 文件 page) does not repeat it. */
+const PageTitleContext = createContext("");
+
+export function SettingsPageTitle({ title, children }: { title: string; children: ReactNode }) {
+  return <PageTitleContext.Provider value={title}>{children}</PageTitleContext.Provider>;
+}
 
 export function SettingsFilter({ query, children }: { query: string; children: ReactNode }) {
   return <FilterContext.Provider value={query.trim().toLowerCase()}>{children}</FilterContext.Provider>;
@@ -15,14 +22,21 @@ export function SettingsFilter({ query, children }: { query: string; children: R
  *  over a grouped list on `--bg-elevated`. `action` is at most one E3 icon (S4). */
 export function SettingsGroup({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   const query = useContext(FilterContext);
+  const pageTitle = useContext(PageTitleContext);
   const titleMatches = query !== "" && title.toLowerCase().includes(query);
+  const showTitle = title !== pageTitle || action != null;
   return (
     <GroupMatchContext.Provider value={titleMatches}>
-    <section className={cn(query && !titleMatches && "[&:not(:has([data-settings-row]))]:hidden")}>
-      <div className="flex h-9 items-center px-1">
-        <h3 className="flex-1 text-title-3">{title}</h3>
-        {action}
-      </div>
+    <section
+      data-settings-match={titleMatches || undefined}
+      className={cn(query && !titleMatches && "[&:not(:has([data-settings-row]))]:hidden")}
+    >
+      {showTitle && (
+        <div className="flex min-h-9 items-center gap-2 px-1">
+          <h3 className="min-w-0 flex-1 text-title-3">{title}</h3>
+          {action}
+        </div>
+      )}
       <div className="divide-y divide-separator overflow-hidden rounded-md bg-bg-elevated shadow-1 ring-1 ring-separator">
         {children}
       </div>
@@ -34,7 +48,8 @@ export function SettingsGroup({ title, action, children }: { title: string; acti
 /** One row: a label, an optional hint under it, and one control at the
  *  trailing edge. Comfortable tier: 44 high, body text (N1, N23).
  *
- *  Settings live in a 288 px sidebar, so the row never lets the control squeeze
+ *  A settings page can be as narrow as about 460 px (the smallest window), and
+ *  rows inside dialogs narrower still, so the row never lets the control squeeze
  *  the label: a label with a hint keeps at least `basis-40`, a lone label its
  *  own width, and the control wraps onto its own line, still at the trailing
  *  edge, when both do not fit. A text
