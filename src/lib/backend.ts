@@ -491,6 +491,10 @@ export interface FilesHandle {
 export type TransferEvent =
   | { kind: "started" }
   | { kind: "progress"; bytes: number; total?: number | null }
+  /** How the transfer went on from an earlier try. */
+  | { kind: "note"; note: "resumed" | "source_changed" | "part_missing"; resumedFrom?: number | null }
+  /** The SHA-256 check, before the end. */
+  | ({ kind: "verify" } & VerifyResult)
   | { kind: "done" }
   | { kind: "failed"; message: string }
   | { kind: "cancelled" };
@@ -502,6 +506,30 @@ export interface TransferRequest {
   remote: string;
   /** Upload: the local file or folder. Download: a file in the editor cache (see `editPrepare`) instead of Downloads. */
   local?: string;
+  /** Continue from the partial files an earlier try left (a download's `local` is then that try's target). */
+  resume?: boolean;
+  /** Compare SHA-256 here and on the server after each file. */
+  verify?: boolean;
+}
+
+/** The answer of a SHA-256 check (also the `verify` event). */
+export interface VerifyResult {
+  status: "match" | "mismatch" | "unavailable";
+  files: number;
+  path?: string | null;
+  localSha256?: string | null;
+  remoteSha256?: string | null;
+  detail?: string | null;
+}
+
+/** Partial files an earlier try of a transfer left. */
+export interface PartialTransfer {
+  found: boolean;
+  files?: number;
+  bytes?: number;
+  size?: number;
+  /** Where the earlier download was going. */
+  localPath?: string | null;
 }
 
 export interface StartedTransfer {
@@ -510,6 +538,8 @@ export interface StartedTransfer {
   remote: string;
   /** Waits for the host's other transfers; a "started" event follows when its turn comes. */
   queued?: boolean;
+  /** A failed try can be continued and its file checked (the built-in engine). */
+  resumable?: boolean;
 }
 
 /** The file side of the end-to-end bridge (scripts/terminal-e2e.mjs): the
@@ -518,6 +548,9 @@ interface E2eFilesBridge {
   open(hostId: string): Promise<FilesHandle>;
   transfer(request: TransferRequest, onEvent: (event: TransferEvent) => void): Promise<StartedTransfer>;
   cancel(id: string): Promise<void>;
+  partial?(hostId: string, upload: boolean, remote: string, local?: string): Promise<PartialTransfer>;
+  discard?(hostId: string, upload: boolean, remote: string, local?: string): Promise<void>;
+  verify?(hostId: string, local: string, remote: string): Promise<VerifyResult>;
   pickUploads(): Promise<string[]>;
 }
 
@@ -585,7 +618,44 @@ export async function startTransfer(
   if (!isTauri) return e2eFiles()?.transfer(request, onEvent) ?? previewTransfer(request, onEvent);
   const events = new Channel<TransferEvent>();
   events.onmessage = onEvent;
-  return invoke<StartedTransfer>("transfer_start", { ...request, local: request.local ?? null, events });
+  return invoke<StartedTransfer>("transfer_start", {
+    ...request,
+    local: request.local ?? null,
+    resume: request.resume ?? false,
+    verify: request.verify ?? false,
+    events,
+  });
+}
+
+/** Partial files an earlier try of this transfer left, if any. `remote` is as for `startTransfer`. */
+export async function transferPartial(
+  hostId: string,
+  upload: boolean,
+  remote: string,
+  local?: string,
+): Promise<PartialTransfer> {
+  if (!isTauri) return (await e2eFiles()?.partial?.(hostId, upload, remote, local)) ?? { found: false };
+  return invoke<PartialTransfer>("transfer_partial", { hostId, upload, remote, local: local ?? null });
+}
+
+/** Removes the partial files of this transfer, here and on the server. */
+export async function transferDiscard(hostId: string, upload: boolean, remote: string, local?: string): Promise<void> {
+  if (!isTauri) return void (await e2eFiles()?.discard?.(hostId, upload, remote, local));
+  await invoke("transfer_discard", { hostId, upload, remote, local: local ?? null });
+}
+
+/** Compares SHA-256 of the local file and the remote file (both final paths). */
+export async function transferVerify(hostId: string, local: string, remote: string): Promise<VerifyResult> {
+  if (!isTauri) {
+    return (
+      (await e2eFiles()?.verify?.(hostId, local, remote)) ?? {
+        status: "unavailable",
+        files: 0,
+        detail: "no sha256sum on the server",
+      }
+    );
+  }
+  return invoke<VerifyResult>("transfer_verify", { hostId, local, remote });
 }
 
 export async function cancelTransfer(id: string): Promise<void> {

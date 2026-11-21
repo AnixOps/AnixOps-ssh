@@ -1438,3 +1438,364 @@ async fn a_folder_upload_follows_links_without_going_round_in_circles() {
     sh(&shell, &format!("rm -r '{remote}'")).await;
     engine.shutdown().await;
 }
+
+// ---- resumable transfers and SHA-256 checks --------------------------------
+
+mod resume {
+    use super::*;
+    use easyssh_engine::files::{check_file, Check, Options, SftpEntry};
+    use sha2::{Digest, Sha256};
+    use std::path::{Path, PathBuf};
+
+    fn sha_hex(data: &[u8]) -> String {
+        Sha256::digest(data)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    struct Run {
+        events: Vec<(String, Value)>,
+        status: String,
+    }
+
+    impl Run {
+        fn note(&self) -> Option<(String, Option<u64>)> {
+            self.events.iter().find_map(|(name, payload)| {
+                (name == "transfer.progress" && payload.get("note").is_some()).then(|| {
+                    (
+                        payload["note"].as_str().unwrap().to_owned(),
+                        payload["resumed_from"].as_u64(),
+                    )
+                })
+            })
+        }
+
+        fn done(&self) -> &Value {
+            &self.events.last().expect("events").1
+        }
+    }
+
+    /// Runs one transfer to its end; `cancel_at` cancels it once that many
+    /// bytes have been reported.
+    async fn run(
+        engine: &Engine,
+        entry: &Arc<SftpEntry>,
+        upload: bool,
+        local: &Path,
+        remote: &str,
+        options: Options,
+        cancel_at: Option<u64>,
+    ) -> Run {
+        let (sender, mut receiver) = mpsc::unbounded_channel::<(String, Value)>();
+        let sink: easyssh_engine::Events = Arc::new(move |name: &str, payload: Value| {
+            let _ = sender.send((name.to_owned(), payload));
+            1usize
+        });
+        let id = engine.files().start_transfer_with(
+            entry.clone(),
+            upload,
+            local.to_owned(),
+            remote.to_owned(),
+            local.is_dir(),
+            options,
+            sink,
+        );
+        let mut events = Vec::new();
+        let status = within("transfer", async {
+            loop {
+                let (name, payload) = receiver.recv().await.expect("events");
+                if let (Some(at), "transfer.progress") = (cancel_at, name.as_str()) {
+                    if payload["bytes"].as_u64().unwrap_or(0) >= at {
+                        engine.files().cancel_transfer(&id);
+                    }
+                }
+                let done = name == "transfer.done";
+                let status = payload["status"].as_str().map(str::to_owned);
+                events.push((name, payload));
+                if done {
+                    return status.unwrap();
+                }
+            }
+        })
+        .await;
+        Run { events, status }
+    }
+
+    struct Setup {
+        _e2e: E2e,
+        shell: Session,
+        engine: Arc<Engine>,
+        entry: Arc<SftpEntry>,
+        dir: String,
+        scratch: tempfile::TempDir,
+    }
+
+    async fn setup() -> Setup {
+        let e2e = E2e::new();
+        let shell = pw_session(&e2e).await;
+        let engine = engine(PW_PASSWORD, Arc::default());
+        let scratch = tempfile::tempdir().unwrap();
+        engine
+            .files()
+            .set_resume_dir(scratch.path().join("journal"));
+        let (sftp_id, home) = within("sftp", engine.open_files(&target()))
+            .await
+            .expect("open the files");
+        let entry = engine.files().get(&sftp_id).unwrap();
+        let dir = format!("{home}/{}", unique_name("e2e-resume"));
+        sh(&shell, &format!("mkdir '{dir}'")).await;
+        Setup {
+            _e2e: e2e,
+            shell,
+            engine,
+            entry,
+            dir,
+            scratch,
+        }
+    }
+
+    impl Setup {
+        async fn finish(self) {
+            sh(&self.shell, &format!("rm -rf '{}'", self.dir)).await;
+            self.engine.shutdown().await;
+        }
+
+        fn local(&self, name: &str) -> PathBuf {
+            self.scratch.path().join(name)
+        }
+    }
+
+    const RESUME: Options = Options {
+        resume: true,
+        verify: true,
+    };
+
+    #[tokio::test]
+    #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+    async fn a_cancelled_download_keeps_its_part_and_resumes_to_the_same_bytes() {
+        let s = setup().await;
+        let remote = format!("{}/big 报告.bin", s.dir);
+        sh(
+            &s.shell,
+            &format!("head -c 48000000 /dev/urandom > '{remote}'"),
+        )
+        .await;
+        let remote_sha = sh(&s.shell, &format!("sha256sum < '{remote}'")).await;
+        let local = s.local("big 报告.bin");
+        let first = run(
+            &s.engine,
+            &s.entry,
+            false,
+            &local,
+            &remote,
+            Options::default(),
+            Some(6_000_000),
+        )
+        .await;
+        assert_eq!(first.status, "cancelled");
+        let part = s.local(".big 报告.bin.easyssh-part");
+        assert!(part.exists(), "the part stays after a cancel");
+        assert!(!local.exists(), "the real name is not written");
+        let kept = std::fs::metadata(&part).unwrap().len();
+        assert!(kept > 0 && kept < 48_000_000, "kept {kept}");
+        let found = s.engine.files().partials("", false, None, &remote);
+        assert_eq!(found.len(), 1, "the journal knows it");
+
+        let second = run(&s.engine, &s.entry, false, &local, &remote, RESUME, None).await;
+        assert_eq!(second.status, "completed", "{:?}", second.done());
+        let (note, from) = second.note().expect("a note");
+        assert_eq!(note, "resumed");
+        assert!(
+            from.unwrap() >= kept / 2,
+            "resumed from {from:?}, kept {kept}"
+        );
+        assert!(!part.exists(), "the part is gone on success");
+        assert!(s
+            .engine
+            .files()
+            .partials("", false, None, &remote)
+            .is_empty());
+        assert_eq!(second.done()["verify"]["status"], "match");
+        assert_eq!(
+            sha_hex(&std::fs::read(&local).unwrap()),
+            remote_sha.split_whitespace().next().unwrap()
+        );
+        s.finish().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+    async fn a_cancelled_upload_keeps_its_part_and_resumes_to_the_same_bytes() {
+        let s = setup().await;
+        let remote = format!("{}/up 文件.bin", s.dir);
+        sh(&s.shell, &format!("printf original > '{remote}'")).await;
+        let local = s.local("up 文件.bin");
+        let data = sample_bytes(40_000_000);
+        std::fs::write(&local, &data).unwrap();
+        let first = run(
+            &s.engine,
+            &s.entry,
+            true,
+            &local,
+            &remote,
+            Options::default(),
+            Some(14_000_000),
+        )
+        .await;
+        assert_eq!(first.status, "cancelled");
+        // The original is intact and the part stays beside it.
+        assert_eq!(sh(&s.shell, &format!("cat '{remote}'")).await, "original");
+        let listing = sh(&s.shell, &format!("ls -A '{}'", s.dir)).await;
+        assert!(listing.contains(".up 文件.bin.easyssh-part"), "{listing}");
+        assert_eq!(s.engine.files().partials("", true, None, &remote).len(), 1);
+
+        let second = run(&s.engine, &s.entry, true, &local, &remote, RESUME, None).await;
+        assert_eq!(second.status, "completed", "{:?}", second.done());
+        let (note, from) = second.note().expect("a note");
+        assert_eq!(note, "resumed");
+        assert!(from.unwrap() > 0);
+        assert_eq!(second.done()["verify"]["status"], "match");
+        let listing = sh(&s.shell, &format!("ls -A '{}'", s.dir)).await;
+        assert_eq!(listing, "up 文件.bin\n", "no temporary file is left");
+        let remote_sha = sh(&s.shell, &format!("sha256sum < '{remote}'")).await;
+        assert_eq!(
+            remote_sha.split_whitespace().next().unwrap(),
+            sha_hex(&data)
+        );
+        s.finish().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+    async fn a_source_that_changed_starts_again_from_zero_with_a_note() {
+        let s = setup().await;
+        let remote = format!("{}/changing.bin", s.dir);
+        let local = s.local("changing.bin");
+        std::fs::write(&local, sample_bytes(30_000_000)).unwrap();
+        let first = run(
+            &s.engine,
+            &s.entry,
+            true,
+            &local,
+            &remote,
+            Options::default(),
+            Some(10_000_000),
+        )
+        .await;
+        assert_eq!(first.status, "cancelled");
+        // Another file with the same name now.
+        let changed = sample_bytes(30_000_001);
+        std::fs::write(&local, &changed).unwrap();
+        let second = run(&s.engine, &s.entry, true, &local, &remote, RESUME, None).await;
+        assert_eq!(second.status, "completed", "{:?}", second.done());
+        assert_eq!(
+            second.note().map(|n| n.0).as_deref(),
+            Some("source_changed")
+        );
+        let remote_sha = sh(&s.shell, &format!("sha256sum < '{remote}'")).await;
+        assert_eq!(
+            remote_sha.split_whitespace().next().unwrap(),
+            sha_hex(&changed)
+        );
+        s.finish().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+    async fn a_resumed_folder_skips_complete_files_and_discard_removes_the_rest() {
+        let s = setup().await;
+        let tree = s.local("tree");
+        std::fs::create_dir(&tree).unwrap();
+        std::fs::write(tree.join("a.txt"), b"alpha").unwrap();
+        std::fs::write(tree.join("empty"), b"").unwrap();
+        std::fs::write(tree.join("big.bin"), sample_bytes(30_000_000)).unwrap();
+        let remote = format!("{}/tree", s.dir);
+        let (sender, mut receiver) = mpsc::unbounded_channel::<(String, Value)>();
+        let sink: easyssh_engine::Events = Arc::new(move |name: &str, payload: Value| {
+            let _ = sender.send((name.to_owned(), payload));
+            1usize
+        });
+        let id = s.engine.files().start_transfer_with(
+            s.entry.clone(),
+            true,
+            tree.clone(),
+            remote.clone(),
+            true,
+            Options::default(),
+            sink,
+        );
+        within("cancel", async {
+            loop {
+                let (name, payload) = receiver.recv().await.expect("events");
+                if name == "transfer.progress" && payload["bytes"].as_u64().unwrap_or(0) > 8_000_000
+                {
+                    s.engine.files().cancel_transfer(&id);
+                }
+                if name == "transfer.done" {
+                    return;
+                }
+            }
+        })
+        .await;
+        let partial = s.engine.files().partials("", true, None, &remote);
+        assert_eq!(partial.len(), 1, "only the cut-off file has a record");
+        // Discarding removes the remote part and the record.
+        let removed = s
+            .engine
+            .files()
+            .discard_partials(&partial, Some(s.entry.sftp()))
+            .await;
+        assert_eq!(removed, 1);
+        assert!(s
+            .engine
+            .files()
+            .partials("", true, None, &remote)
+            .is_empty());
+        let listing = sh(&s.shell, &format!("ls -A '{remote}'")).await;
+        assert!(!listing.contains("easyssh-part"), "{listing}");
+
+        // Resuming the whole folder finishes it; files that were already
+        // there are not sent again.
+        let done = run(&s.engine, &s.entry, true, &tree, &remote, RESUME, None).await;
+        assert_eq!(done.status, "completed", "{:?}", done.done());
+        // Files that were already there complete are left out, and so are
+        // their checks.
+        let checked = done.done()["verify"]["files"].as_u64().unwrap();
+        assert!((1..=3).contains(&checked), "{checked} files checked");
+        let sums = sh(
+            &s.shell,
+            &format!("cd '{remote}' && sha256sum a.txt empty big.bin"),
+        )
+        .await;
+        assert!(sums.contains(&sha_hex(b"alpha")), "{sums}");
+        assert!(sums.contains(&sha_hex(b"")), "{sums}");
+        let again = run(&s.engine, &s.entry, true, &tree, &remote, RESUME, None).await;
+        assert_eq!(again.status, "completed");
+        assert_eq!(again.done()["verify"]["files"], 0, "nothing was sent again");
+        s.finish().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the e2e OpenSSH containers; see e2e/README.md"]
+    async fn a_difference_is_reported_with_both_hashes_and_the_file_stays() {
+        let s = setup().await;
+        let remote = format!("{}/same size.txt", s.dir);
+        let local = s.local("same size.txt");
+        std::fs::write(&local, b"0123456789").unwrap();
+        let ok = run(&s.engine, &s.entry, true, &local, &remote, RESUME, None).await;
+        assert_eq!(ok.status, "completed");
+        // Same length, other content, behind the transfer's back.
+        sh(&s.shell, &format!("printf 'abcdefghij' > '{remote}'")).await;
+        let checked = check_file(&s.shell, &local, &remote).await.expect("check");
+        match checked {
+            Check::Mismatch { local, remote } => {
+                assert_eq!(local, sha_hex(b"0123456789"));
+                assert_eq!(remote, sha_hex(b"abcdefghij"));
+            }
+            _ => panic!("the difference was not found"),
+        }
+        assert_eq!(sh(&s.shell, &format!("cat '{remote}'")).await, "abcdefghij");
+        s.finish().await;
+    }
+}

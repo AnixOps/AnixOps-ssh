@@ -65,6 +65,30 @@ mod bridge {
             }));
         }
 
+        fn transfer_note(&self, transfer_id: &str, note: &str, resumed_from: Option<u64>) {
+            emit(json!({
+                "op": "transfer",
+                "id": transfer_id,
+                "event": {"kind": "note", "note": note, "resumedFrom": resumed_from},
+            }));
+        }
+
+        fn transfer_verify(&self, transfer_id: &str, verify: &serde_json::Value) {
+            emit(json!({
+                "op": "transfer",
+                "id": transfer_id,
+                "event": {
+                    "kind": "verify",
+                    "status": verify["status"],
+                    "files": verify["files"],
+                    "path": verify["path"],
+                    "localSha256": verify["local_sha256"],
+                    "remoteSha256": verify["remote_sha256"],
+                    "detail": verify["detail"],
+                },
+            }));
+        }
+
         fn transfer_done(&self, transfer_id: &str, status: &str, error: Option<&str>) {
             let event = match status {
                 "completed" => json!({"kind": "done"}),

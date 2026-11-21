@@ -108,6 +108,21 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "TransferEnqueueResult",
     ),
     ("transfer.cancel", "TransferCancelParams", ""),
+    (
+        "transfer.partial",
+        "TransferPartialParams",
+        "TransferPartialResult",
+    ),
+    (
+        "transfer.discard",
+        "TransferDiscardParams",
+        "TransferDiscardResult",
+    ),
+    (
+        "transfer.verify",
+        "TransferVerifyParams",
+        "TransferVerifyOutcome",
+    ),
     ("tunnel.start", "TunnelStartParams", "TunnelStartResult"),
     ("tunnel.stop", "TunnelStopParams", ""),
     ("tunnel.list", "TunnelListParams", "TunnelListResult"),

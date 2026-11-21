@@ -136,6 +136,33 @@ impl LinkHandler for Handler {
         );
     }
 
+    fn transfer_note(&self, transfer_id: &str, note: &str, resumed_from: Option<u64>) {
+        crate::files::remote_event(
+            &self.app,
+            transfer_id,
+            crate::files::TransferEvent::Note {
+                note: note.to_owned(),
+                resumed_from,
+            },
+        );
+    }
+
+    fn transfer_verify(&self, transfer_id: &str, verify: &serde_json::Value) {
+        let text = |key: &str| verify[key].as_str().map(str::to_owned);
+        crate::files::remote_event(
+            &self.app,
+            transfer_id,
+            crate::files::TransferEvent::Verify {
+                status: text("status").unwrap_or_else(|| "unavailable".to_owned()),
+                files: verify["files"].as_u64().unwrap_or(0),
+                path: text("path"),
+                local_sha256: text("local_sha256"),
+                remote_sha256: text("remote_sha256"),
+                detail: text("detail"),
+            },
+        );
+    }
+
     fn transfer_done(&self, transfer_id: &str, status: &str, error: Option<&str>) {
         let event = match status {
             "completed" => crate::files::TransferEvent::Done,

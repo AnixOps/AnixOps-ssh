@@ -275,6 +275,13 @@ impl Daemon {
                 .parent()
                 .unwrap_or_else(|| Path::new(".")),
         );
+        // Partial files of stopped transfers can be continued for a week.
+        engine.files.set_resume_dir(
+            db_path_for(cfg.config_store.path())
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("partials"),
+        );
         // Retention: old logs go when the daemon starts.
         let retention = opened
             .store
@@ -1243,12 +1250,16 @@ impl Daemon {
                 let p: proto::TransferStartParams = parse(payload)?;
                 let entry = self.sftp(&p.sftp_id)?;
                 let upload = serde_json::to_value(p.direction).ok() == Some(json!("upload"));
-                let id = self.engine.files.start_transfer(
+                let id = self.engine.files.start_transfer_with(
                     entry,
                     upload,
                     PathBuf::from(&p.local_path),
                     p.remote_path.clone(),
                     p.recursive.unwrap_or(false),
+                    engine::files::Options {
+                        resume: p.resume.unwrap_or(false),
+                        verify: p.verify.unwrap_or(false),
+                    },
                     self.broadcaster(),
                 );
                 ok(json!({"transfer_id": id}))
@@ -1268,16 +1279,97 @@ impl Daemon {
                             .await
                             .map_err(|error| error.to_string())
                     });
-                    let (id, queued) = me.engine.files.start_queued_transfer(
+                    let (id, queued) = me.engine.files.start_queued_transfer_with(
                         &p.host_id,
                         open,
                         upload,
                         PathBuf::from(&p.local_path),
                         p.remote_path.clone(),
                         p.recursive.unwrap_or(false),
+                        engine::files::Options {
+                            resume: p.resume.unwrap_or(false),
+                            verify: p.verify.unwrap_or(false),
+                        },
                         broadcast,
                     );
                     Ok(json!({"transfer_id": id, "queued": queued}))
+                })
+            }
+            "transfer.partial" => {
+                let p: proto::TransferPartialParams = parse(payload)?;
+                let upload = serde_json::to_value(p.direction).ok() == Some(json!("upload"));
+                let found = self.engine.files.partials(
+                    &p.host_id,
+                    upload,
+                    p.local_path.as_deref(),
+                    &p.remote_path,
+                );
+                let mut reply = json!({"found": !found.is_empty()});
+                if let Some(first) = found.first() {
+                    reply["files"] = json!(found.len());
+                    reply["bytes"] = json!(found.iter().map(|e| e.bytes).sum::<u64>());
+                    reply["size"] = json!(found.iter().map(|e| e.size).sum::<u64>());
+                    reply["local_path"] = json!(first.top_local);
+                }
+                ok(reply)
+            }
+            "transfer.discard" => {
+                let p: proto::TransferDiscardParams = parse(payload)?;
+                let upload = serde_json::to_value(p.direction).ok() == Some(json!("upload"));
+                let found = self.engine.files.partials(
+                    &p.host_id,
+                    upload,
+                    p.local_path.as_deref(),
+                    &p.remote_path,
+                );
+                let me = self.upgrade()?;
+                self.background(outbox, req_id, async move {
+                    // Temporary files on the server need a file session;
+                    // when there is none the records still go.
+                    let mut opened = None;
+                    if upload && !found.is_empty() {
+                        if let Ok(plan) = me.russh_plan(&p.host_id).await {
+                            opened = me.engine.open_sftp(&plan).await.ok();
+                        }
+                    }
+                    let removed = me
+                        .engine
+                        .files
+                        .discard_partials(&found, opened.as_ref().map(|(sftp, _)| sftp))
+                        .await;
+                    if let Some((sftp, _)) = opened {
+                        let _ = sftp.close().await;
+                    }
+                    Ok(json!({"removed": removed}))
+                })
+            }
+            "transfer.verify" => {
+                let p: proto::TransferVerifyParams = parse(payload)?;
+                let me = self.upgrade()?;
+                self.background(outbox, req_id, async move {
+                    let plan = me.russh_plan(&p.host_id).await?;
+                    let lease = me
+                        .engine
+                        .lease(&plan, None)
+                        .await
+                        .map_err(|e| fail("connect_failed", e.to_string()))?;
+                    let checked = engine::files::check_file(
+                        &lease,
+                        std::path::Path::new(&p.local_path),
+                        &p.remote_path,
+                    )
+                    .await
+                    .map_err(ssh_fail)?;
+                    Ok(match checked {
+                        engine::files::Check::Match(_) => json!({"status": "match", "files": 1}),
+                        engine::files::Check::Mismatch { local, remote } => json!({
+                            "status": "mismatch", "files": 0, "path": p.remote_path,
+                            "local_sha256": local, "remote_sha256": remote,
+                        }),
+                        engine::files::Check::Unavailable(detail) => {
+                            json!({"status": "unavailable", "files": 0, "detail": detail})
+                        }
+                    })
                 })
             }
             "transfer.cancel" => {
