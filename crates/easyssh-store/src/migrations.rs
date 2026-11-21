@@ -52,6 +52,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "host_forward_x11",
         sql: include_str!("../migrations/0008_host_forward_x11.sql"),
     },
+    Migration {
+        version: 9,
+        name: "host_environment",
+        sql: include_str!("../migrations/0009_host_environment.sql"),
+    },
 ];
 
 /// The newest schema version this build can apply.

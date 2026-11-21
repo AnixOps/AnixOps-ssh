@@ -1194,6 +1194,18 @@ const zh = {
   processCopyCommand: "复制命令行",
   processSignalFailed: "无法结束进程",
   processSort: "按此列排序",
+  envLabel: "环境",
+  envNone: "无",
+  envProduction: "生产",
+  envStaging: "预发",
+  envTesting: "测试",
+  envDevelopment: "开发",
+  envBadgeAria: "{env}环境",
+  envHint: "标记后，生产主机会在列表、标签页和终端上醒目显示，并在广播输入和多行粘贴前确认。",
+  broadcastProdTitle: "向生产主机广播输入？",
+  broadcastProdBody: "{hosts} 是生产主机。你输入的每个按键都会同时发送给它。",
+  broadcastProdVerb: "开始广播",
+  pasteProdTitle: "向生产主机 {host} 粘贴 {n} 行，每一行都会立即执行",
 };
 
 const en: typeof zh = {
@@ -2398,6 +2410,18 @@ const en: typeof zh = {
   processCopyCommand: "Copy command line",
   processSignalFailed: "Could not end the process",
   processSort: "Sort by this column",
+  envLabel: "Environment",
+  envNone: "None",
+  envProduction: "Production",
+  envStaging: "Staging",
+  envTesting: "Testing",
+  envDevelopment: "Development",
+  envBadgeAria: "{env} environment",
+  envHint: "A production host is marked in the list, on its tab and on its terminal, and asks before broadcast input and multi-line paste.",
+  broadcastProdTitle: "Broadcast input to production hosts?",
+  broadcastProdBody: "{hosts} is production. Every key you type is sent to it as well.",
+  broadcastProdVerb: "Start broadcasting",
+  pasteProdTitle: "Paste {n} lines into production host {host}? Each one runs as it arrives",
 };
 
 export type Strings = typeof zh;

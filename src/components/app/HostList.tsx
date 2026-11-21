@@ -5,6 +5,8 @@ import { useConfirm } from "@/components/ui/confirm";
 import { Input } from "@/components/ui/input";
 import { Menu, type MenuEntry } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
+import { EnvBadge } from "@/components/app/EnvBadge";
+import { environmentMatches } from "@/lib/environment";
 import { hostColor, isTauri, type Group, type Host } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { findSavedHost, formatTarget, parseTarget, type Target } from "@/lib/quickConnect";
@@ -78,7 +80,8 @@ export function HostList({
         (host) =>
           host.name.toLowerCase().includes(normalized) ||
           host.target.toLowerCase().includes(normalized) ||
-          host.tags.some((tag) => tag.toLowerCase().includes(normalized)),
+          host.tags.some((tag) => tag.toLowerCase().includes(normalized)) ||
+          environmentMatches(host.environment, normalized),
       ),
     [hosts, normalized],
   );
@@ -357,8 +360,11 @@ function HostRow({
       >
         <HostTile host={host} selected={selected} />
         <span className="relative min-w-0 flex-1">
-          <span className="block truncate text-callout font-medium text-label-1" title={host.name}>
-            {host.name}
+          <span className="flex items-center gap-1.5">
+            <span className="min-w-0 truncate text-callout font-medium text-label-1" title={host.name}>
+              {host.name}
+            </span>
+            <EnvBadge environment={host.environment} />
           </span>
           <span className="block truncate font-mono text-callout text-label-2" title={host.target}>
             {host.target}

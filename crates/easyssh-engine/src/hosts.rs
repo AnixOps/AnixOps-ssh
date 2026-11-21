@@ -89,6 +89,7 @@ fn host_json(connection: &Connection) -> Option<Value> {
         "tags": connection.tags,
         "favorite": connection.favorite,
         "color": connection.color,
+        "environment": connection.environment,
         "source": "saved",
         "fields": {
             "alias": null,

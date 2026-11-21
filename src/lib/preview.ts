@@ -44,7 +44,7 @@ function makeHost(
   name: string,
   fields: HostFields,
   groupId: string | null,
-  extra: { favorite?: boolean; color?: string; source?: Host["source"] } = {},
+  extra: { favorite?: boolean; color?: string; environment?: Host["environment"]; source?: Host["source"] } = {},
 ): Host {
   return {
     id,
@@ -54,6 +54,7 @@ function makeHost(
     tags: [],
     favorite: extra.favorite ?? false,
     color: extra.color ?? null,
+    environment: extra.environment ?? null,
     source: extra.source ?? "saved",
     fields,
   };
@@ -73,12 +74,13 @@ const store: HostsSnapshot =
         hosts: [
           makeHost("1", "prod-web-01", endpoint("deploy@10.0.1.11"), "prod", { favorite: true, color: "chart-1" }),
           makeHost("2", "prod-web-02", endpoint("deploy@10.0.1.12"), "prod"),
-          makeHost("3", "prod-db", endpoint("postgres@10.0.2.20"), "prod", { favorite: true, color: "chart-5" }),
+          makeHost("3", "prod-db", endpoint("postgres@10.0.2.20"), "prod", { favorite: true, color: "chart-5", environment: "production" }),
           makeHost(
             "4",
             "staging-api",
             { ...endpoint("ubuntu@staging.internal:2222"), proxy: { kind: "socks5", host: "127.0.0.1", port: 7890, username: null } },
             "staging",
+            { environment: "staging" },
           ),
           makeHost("5", "home-nas", endpoint("admin@192.168.1.10"), "home", { favorite: true }),
           makeHost("6", "raspberry-pi", endpoint("pi@192.168.1.42"), "home", { color: "chart-7" }),
@@ -135,6 +137,7 @@ export function previewSaveHost(input: HostInput): string {
   const host = makeHost(id, input.name.trim(), input.fields, groupId, {
     favorite: input.favorite,
     color: input.color ?? undefined,
+    environment: input.environment ?? undefined,
   });
   host.tags = input.tags;
   // Saving a ~/.ssh/config host turns it into a saved host, as in the app.
@@ -409,7 +412,7 @@ export function previewApplyImport(request: HostsImportApplyParams): HostsImport
       result.unchanged += 1;
     } else if (match && request.duplicates === "update") {
       const groupId = groupFor(imported.group_path);
-      Object.assign(match, makeHost(match.id, imported.label, fields, request.group_mode === "none" ? match.groupId : groupId, { favorite: match.favorite, color: match.color ?? undefined }));
+      Object.assign(match, makeHost(match.id, imported.label, fields, request.group_mode === "none" ? match.groupId : groupId, { favorite: match.favorite, color: match.color ?? undefined, environment: match.environment ?? undefined }));
       result.updated += 1;
     } else {
       store.hosts.push(makeHost(String(nextId++), imported.label, fields, groupFor(imported.group_path)));

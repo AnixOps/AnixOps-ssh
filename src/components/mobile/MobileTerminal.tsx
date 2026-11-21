@@ -14,6 +14,7 @@ import { snippetBytes } from "@/lib/barLayout";
 import { binaryInput } from "@/lib/terminalBytes";
 import { BackgroundPolicy, resumeAction } from "@/lib/backgroundPolicy";
 import { watchLifecycle } from "@/lib/mobileVault";
+import { EnvBadge } from "@/components/app/EnvBadge";
 import { t } from "@/lib/i18n";
 import { attachImeLayer, type ImeLayer } from "@/lib/imeLayer";
 import {
@@ -461,7 +462,10 @@ export function MobileTerminal({
             <ChevronLeft />
           </Button>
           <div className="min-w-0 flex-1 pl-2 md:pl-4">
-            <h2 className="truncate text-body font-medium">{host.name}</h2>
+            <div className="flex items-center gap-1.5">
+              <h2 className="min-w-0 truncate text-body font-medium">{host.name}</h2>
+              <EnvBadge environment={host.environment} />
+            </div>
             <p role="status" className="truncate text-callout text-label-2">
               {statusText} · {host.target}
             </p>

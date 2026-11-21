@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { broadcastTargets, participants, pasteNeedsConfirm, scopeOf, type BroadcastState } from "./broadcast";
+import {
+  broadcastTargets,
+  participants,
+  pasteNeedsConfirm,
+  scopeOf,
+  unconfirmedProduction,
+  withoutUnconfirmed,
+  type BroadcastState,
+} from "./broadcast";
 
 const panes = new Map<string, string[]>([
   ["t1", ["p1", "p2", "p3"]],
@@ -58,5 +66,30 @@ describe("paste confirmation", () => {
     expect(pasteNeedsConfirm("a\nb", 0, { bracketedPaste: false, warnMultiline: false })).toBe(false);
     // Several panes: always asked, whatever the pane's mode.
     expect(pasteNeedsConfirm("a\nb", 2, { bracketedPaste: true, warnMultiline: false })).toBe(true);
+  });
+});
+
+describe("production hosts in a broadcast", () => {
+  const production = new Map([["t2", "prod-db"]]);
+  it("asks for the production tabs a scope reaches, once", () => {
+    expect(unconfirmedProduction(null, "t1", panes, production, new Set())).toEqual([]);
+    expect(unconfirmedProduction("tab", "t1", panes, production, new Set())).toEqual([]);
+    expect(unconfirmedProduction("tab", "t2", panes, production, new Set())).toEqual([["t2", "prod-db"]]);
+    expect(unconfirmedProduction("global", "t1", panes, production, new Set())).toEqual([["t2", "prod-db"]]);
+    expect(unconfirmedProduction("global", "t1", panes, production, new Set(["t2"]))).toEqual([]);
+  });
+
+  it("leaves out production panes that were not confirmed", () => {
+    const ids = ["p1", "p4", "p5"];
+    expect(withoutUnconfirmed(ids, panes, production, new Set())).toEqual(["p1"]);
+    expect(withoutUnconfirmed(ids, panes, production, new Set(["t2"]))).toEqual(ids);
+  });
+
+  it("always confirms a multi-line paste into production, unless the app takes bracketed paste", () => {
+    const off = { bracketedPaste: false, warnMultiline: false };
+    expect(pasteNeedsConfirm("a\nb", 0, off)).toBe(false);
+    expect(pasteNeedsConfirm("a\nb", 0, { ...off, production: true })).toBe(true);
+    expect(pasteNeedsConfirm("a", 0, { ...off, production: true })).toBe(false);
+    expect(pasteNeedsConfirm("a\nb", 0, { bracketedPaste: true, warnMultiline: true, production: true })).toBe(false);
   });
 });

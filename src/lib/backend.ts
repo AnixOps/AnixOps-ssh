@@ -43,6 +43,9 @@ import type { UpdateStatus } from "./update";
 
 export type HostSource = "saved" | "ssh_config";
 
+/** What a host is for; null (or absent, in older data) is unmarked. */
+export type HostEnvironment = "production" | "staging" | "testing" | "development";
+
 export interface Host {
   id: string;
   name: string;
@@ -52,6 +55,7 @@ export interface Host {
   tags: string[];
   favorite: boolean;
   color: string | null;
+  environment?: HostEnvironment | null;
   source: HostSource;
   fields: HostFields;
 }
@@ -123,6 +127,7 @@ export interface HostInput {
   favorite: boolean;
   /** A chart colour token name such as "chart-3", or null. */
   color: string | null;
+  environment?: HostEnvironment | null;
   fields: HostFields;
 }
 
@@ -234,6 +239,7 @@ export async function enableShellIntegration(hostId: string): Promise<boolean> {
     tags: host.tags,
     favorite: host.favorite,
     color: host.color,
+    environment: host.environment ?? null,
     fields: { ...host.fields, shellIntegration: true },
   });
   return true;

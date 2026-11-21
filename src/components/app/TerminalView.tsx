@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ContextMenu, type MenuEntry } from "@/components/ui/menu";
 import { PasteConfirm, BroadcastBadge } from "@/components/app/PaneOverlays";
+import { environmentName, environmentTone, isProduction } from "@/lib/environment";
 import { TransferSheet } from "@/components/app/TransferSheet";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
@@ -30,6 +31,7 @@ import {
   openUrl,
   pasteText,
   type FilesHandle,
+  type HostEnvironment,
   type SessionEvent,
   type SessionHandle,
   type SshEngine,
@@ -105,9 +107,14 @@ export function TerminalView({
   onStatus,
   onSession,
   broadcast = null,
+  environment = null,
+  hostName = "",
 }: {
   tabKey: string;
   hostId: string | null;
+  /** The host's environment: production and staging get a coloured top edge, production asks before a multi-line paste. */
+  environment?: HostEnvironment | null;
+  hostName?: string;
   /** A live session to reattach to instead of opening a new one. */
   sessionId?: string;
   active: boolean;
@@ -145,6 +152,8 @@ export function TerminalView({
   const [badPattern, setBadPattern] = useState(false);
   const findInputRef = useRef<HTMLInputElement>(null);
   const [pendingPaste, setPendingPaste] = useState<{ text: string; count: number } | null>(null);
+  const productionRef = useRef(isProduction(environment));
+  productionRef.current = isProduction(environment);
   const pasteRef = useRef<(text: string, all: boolean) => void>(() => {});
   /** rz/sz: output goes through it, and it takes the terminal over while a transfer runs. */
   const transfer = useMemo(createTerminalTransfer, []);
@@ -469,6 +478,7 @@ export function TerminalView({
       pasteNeedsConfirm(text, 0, {
         bracketedPaste: terminal.modes.bracketedPasteMode,
         warnMultiline: settings().terminalWarnMultilinePaste,
+        production: productionRef.current,
       });
     function routePaste(text: string) {
       const count = receivers().length;
@@ -906,6 +916,7 @@ export function TerminalView({
     { key: "clear", label: t.clearTerminal, icon: <Eraser />, onSelect: () => actionsRef.current.clear() },
   ];
 
+  const tone = environmentTone(environment);
   return (
     <div ref={wrapperRef} className="relative h-full min-w-0 flex-1 bg-bg">
       {/* Broadcasting reserves a strip below the text for its badge. */}
@@ -913,6 +924,14 @@ export function TerminalView({
         style={{ right: askOpen ? ASK_AI_WIDTH : 0 }}
       />
       {broadcast && <BroadcastBadge scope={broadcast} />}
+      {tone && (
+        <div
+          role="img"
+          aria-label={t.envBadgeAria.replace("{env}", environmentName(environment!))}
+          data-env-edge={environment}
+          className={cn("pointer-events-none absolute inset-x-0 top-0 z-sticky h-1", tone === "danger" ? "bg-danger" : "bg-warning")}
+        />
+      )}
       <ContextMenu
         label={t.terminalMenu}
         at={menuAt}
@@ -923,6 +942,7 @@ export function TerminalView({
         <PasteConfirm
           count={pendingPaste.count}
           lines={pendingPaste.text.split(/\r\n|\r|\n/).filter(Boolean).length}
+          production={isProduction(environment) ? hostName : undefined}
           onChoose={(all) => {
             const { text } = pendingPaste;
             setPendingPaste(null);

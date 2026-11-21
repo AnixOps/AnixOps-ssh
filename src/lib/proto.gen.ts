@@ -165,6 +165,13 @@ export type SshEngine = "openssh" | "russh";
  */
 export type EnginePreference = "auto" | "russh" | "openssh";
 /**
+ * Rust: domain::HostEnvironment. A production host is marked in the UI and asks before broadcast input and multi-line paste.
+ *
+ * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
+ * via the `definition` "HostEnvironment".
+ */
+export type HostEnvironment = "production" | "staging" | "testing" | "development";
+/**
  * This interface was referenced by `EasySSHProtocol`'s JSON-Schema
  * via the `definition` "HostKeyStatus".
  */
@@ -244,6 +251,10 @@ export interface Connection {
    */
   forward_x11?: boolean;
   proxy?: ProxySettings;
+  /**
+   * What the host is for. Absent means unmarked.
+   */
+  environment?: "production" | "staging" | "testing" | "development";
 }
 /**
  * An outbound proxy for the first hop. Absent means a direct connection. The proxy password is a saved secret, not part of the record.

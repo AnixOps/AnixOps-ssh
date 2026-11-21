@@ -24,6 +24,7 @@ import {
   type EnginePreference,
   type Group,
   type Host,
+  type HostEnvironment,
   type HostFields,
   type SecretsInput,
   type SecretsStatus,
@@ -49,6 +50,7 @@ export interface HostPrefill {
   groupId?: string | null;
   tags?: string[];
   color?: string | null;
+  environment?: HostEnvironment | null;
 }
 
 const emptyFields: HostFields = { alias: null, hostname: "", username: null, port: 22, proxyJump: null, notes: "", shellIntegration: false };
@@ -87,6 +89,7 @@ export function HostEditor({
   const [group, setGroup] = useState(groups.find((candidate) => candidate.id === (host ?? prefill)?.groupId)?.name ?? "");
   const [tags, setTags] = useState((host ?? prefill)?.tags?.join(", ") ?? "");
   const [color, setColor] = useState<string | null>((host ?? prefill)?.color ?? null);
+  const [environment, setEnvironment] = useState<HostEnvironment | null>((host ?? prefill)?.environment ?? null);
   const [favorite, setFavorite] = useState(host?.favorite ?? false);
   const [error, setError] = useState<string | null>(null);
   const confirm = useConfirm();
@@ -169,6 +172,7 @@ export function HostEditor({
         tags: tags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean),
         favorite,
         color,
+        environment,
         fields: serialOn
           ? { ...fields, alias: null, proxy: null, serial: { ...serial, port: serial.port.trim(), baud: Number(serial.baud) } }
           : byAlias
@@ -362,6 +366,23 @@ export function HostEditor({
                 <Swatch key={token} color={token} selected={color === token} label={`${t.color} ${index + 1}`} onClick={() => setColor(token)} />
               ))}
             </div>
+          </Field>
+
+          <Field label={t.envLabel} hint={t.envHint} group>
+            <Segmented
+              size="sm"
+              label={t.envLabel}
+              value={environment ?? "none"}
+              onChange={(value) => setEnvironment(value === "none" ? null : value)}
+              options={[
+                { value: "none", label: t.envNone },
+                { value: "production", label: t.envProduction },
+                { value: "staging", label: t.envStaging },
+                { value: "testing", label: t.envTesting },
+                // Marked "development" by a synced record: shown, so saving does not drop it.
+                ...(environment === "development" ? [{ value: "development" as const, label: t.envDevelopment }] : []),
+              ]}
+            />
           </Field>
 
           <div className="flex items-center justify-between gap-4">

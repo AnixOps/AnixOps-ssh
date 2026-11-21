@@ -5,6 +5,7 @@ import { useConfirm } from "@/components/ui/confirm";
 import { Input } from "@/components/ui/input";
 import { Menu } from "@/components/ui/menu";
 import { deleteHost, hostColor, setFavorite, type Group, type Host } from "@/lib/backend";
+import { EnvBadge } from "@/components/app/EnvBadge";
 import { t } from "@/lib/i18n";
 import { groupName, listHosts } from "@/lib/mobileHosts";
 import { cn } from "@/lib/utils";
@@ -131,6 +132,7 @@ export function MobileHostList({
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
                       <span className="truncate text-body text-label-1">{host.name}</span>
+                      <EnvBadge environment={host.environment} />
                       {host.favorite && (
                         <Star aria-label={t.favorite} className="size-3.5 shrink-0 text-label-3" strokeWidth={1.5} />
                       )}

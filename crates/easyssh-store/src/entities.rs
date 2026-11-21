@@ -202,6 +202,9 @@ impl Entity for Host {
             proxy: row
                 .get::<_, Option<String>>("proxy")?
                 .and_then(|json| serde_json::from_str(&json).ok()),
+            environment: row
+                .get::<_, Option<String>>("environment")?
+                .and_then(|name| easyssh_core::domain::HostEnvironment::parse(&name)),
         };
         Ok(Self {
             connection,
@@ -239,6 +242,7 @@ impl Entity for Host {
         fields.insert("engine", Field::plain(c.engine));
         fields.insert("forward_x11", Field::plain(c.forward_x11));
         fields.insert("proxy", Field::plain(&c.proxy));
+        fields.insert("environment", Field::plain(c.environment));
         fields.insert("tags", Field::plain(clean_tags(&c.tags)));
         fields.insert("password", Field::secret(secrets.password));
         fields.insert("private_key", Field::secret(secrets.private_key));
@@ -336,6 +340,10 @@ impl Entity for Host {
                     Some(proxy) => json(proxy)?,
                     None => Value::Null,
                 },
+            ),
+            (
+                "environment",
+                opt_text(c.environment.map(|environment| environment.as_str())),
             ),
             (
                 "term_font_size",
