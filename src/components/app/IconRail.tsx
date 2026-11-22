@@ -1,4 +1,4 @@
-import { ArrowLeftRight, Maximize2, PanelLeftClose, PanelLeftOpen, Server, Settings, SquareCode, Users, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, Maximize2, PanelLeftClose, Pin, Server, Settings, SquareCode, Users, type LucideIcon } from "lucide-react";
 import mark from "@/assets/mark.svg";
 import { Tooltip } from "@/components/ui/tooltip";
 import { t } from "@/lib/i18n";
@@ -18,15 +18,19 @@ const primary: { key: NavKey; label: string; icon: LucideIcon }[] = [
 export function IconRail({
   active,
   sidebarHidden = false,
+  pinned = false,
   onChange,
-  onToggleSidebar,
+  onTogglePin,
   onFocusMode,
 }: {
   active: NavKey;
   /** The section's panel is hidden; choosing the active section shows it again. */
   sidebarHidden?: boolean;
+  /** The sidebar stays beside the terminal while sessions are open. */
+  pinned?: boolean;
   onChange: (key: NavKey) => void;
-  onToggleSidebar?: () => void;
+  /** Pins the sidebar beside the terminal, or unpins and folds it away. */
+  onTogglePin?: () => void;
   /** Hides the rail and the sidebar, leaving the tabs and the terminal. */
   onFocusMode?: () => void;
 }) {
@@ -45,13 +49,13 @@ export function IconRail({
       {onFocusMode && (
         <RailAction label={t.focusMode} hint={shortcutHint("toggle-focus")} icon={Maximize2} onClick={onFocusMode} />
       )}
-      {onToggleSidebar && (
+      {onTogglePin && (
         <RailAction
-          label={sidebarHidden ? t.showSidebar : t.hideSidebar}
-          hint={shortcutHint("toggle-sidebar")}
-          icon={sidebarHidden ? PanelLeftOpen : PanelLeftClose}
-          expanded={!sidebarHidden}
-          onClick={onToggleSidebar}
+          label={pinned ? t.hideSidebar : t.pinSidebar}
+          hint=""
+          icon={pinned ? PanelLeftClose : Pin}
+          expanded={pinned}
+          onClick={onTogglePin}
         />
       )}
       <RailButton

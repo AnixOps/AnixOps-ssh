@@ -7,6 +7,8 @@ export interface TerminalTarget {
   /** Pastes text without running it or taking focus. */
   paste(text: string): void;
   connected(): boolean;
+  /** Gives the terminal the keyboard focus. */
+  focus(): void;
   /** Ends the tab's session (closing the tab); unmounting alone only detaches. */
   close(): void;
 }
@@ -26,4 +28,10 @@ export function terminalFor(key: string | null): TerminalTarget | undefined {
 
 export function connectedTerminals(): TerminalTarget[] {
   return [...terminals.values()].filter((target) => target.connected());
+}
+
+/** Puts the keyboard back in a terminal (after a panel or overlay closes). */
+export function focusTerminal(key: string | null): void {
+  // After the closing panel has left the page and its own focus handling ran.
+  window.requestAnimationFrame(() => terminalFor(key)?.focus());
 }

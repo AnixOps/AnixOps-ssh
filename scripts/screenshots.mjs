@@ -59,7 +59,7 @@ const scenes = [
   { name: "settings-update-package", query: "update=package", nav: "设置", waitText: "打开下载页" },
   { name: "settings-update-off", query: "update=off", nav: "设置", waitText: "此版本没有配置更新验证密钥", waitTextEn: "This build has no update" },
   { name: "no-ssh", query: "ssh=missing" },
-  { name: "sync-setup", query: "", nav: "设置", click: "开始设置" },
+  { name: "sync-setup", query: "", nav: "设置", section: "sync", click: "开始设置" },
   { name: "snippets", query: "", open: ["prod-web-01"], nav: "命令片段", run: "磁盘用量", runEn: "磁盘用量" },
   { name: "new-host", query: "hosts=empty", click: "新建主机" },
   { name: "first-run", query: "hosts=empty" },
@@ -190,6 +190,9 @@ async function playScene(context, scene, { en = false } = {}) {
   await page.goto(`${baseUrl}/?${query}`);
   await page.waitForLoadState("networkidle");
   for (const host of scene.open ?? []) {
+    // With a session open the host list has made way; the rail brings it back.
+    if (!(await page.getByRole("button", { name: new RegExp(host) }).first().isVisible()))
+      await page.getByRole("button", { name: /^(?:主机|Hosts)$/ }).click();
     await page.getByRole("button", { name: new RegExp(host) }).first().click();
     await page.waitForTimeout(300);
   }

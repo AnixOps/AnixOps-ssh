@@ -37,3 +37,24 @@ export function rememberSidebarHidden(hidden: boolean): void {
     // Not remembered; the sidebar shows again next time.
   }
 }
+
+const PINNED_KEY = "anixops-ssh.sidebar-pinned";
+
+/** Pinned: the sidebar stays beside the terminal while sessions are open.
+ *  Unpinned (the default), opening a session folds it away so the terminal
+ *  gets the window, and the rail brings it back over the terminal. */
+export function sidebarPinnedByDefault(): boolean {
+  try {
+    return window.localStorage.getItem(PINNED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function rememberSidebarPinned(pinned: boolean): void {
+  try {
+    window.localStorage.setItem(PINNED_KEY, String(pinned));
+  } catch {
+    // Not remembered.
+  }
+}
