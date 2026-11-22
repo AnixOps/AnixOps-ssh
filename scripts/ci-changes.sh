@@ -55,7 +55,7 @@ while IFS= read -r file; do
   case "$file" in
     # Packaging: bundle settings, icons, the release scripts and CI itself.
     src-tauri/tauri.conf.json | src-tauri/icons/* | src-tauri/gen/* | \
-    scripts/build-update-feeds.sh | .github/workflows/*)
+    scripts/build-update-feeds.sh | scripts/windows-sign.ps1 | .github/workflows/*)
       installers=true
       echo "installers: $file" >&2
       ;;
