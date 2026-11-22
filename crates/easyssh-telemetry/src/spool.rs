@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 const EXT: &str = "crash";
 const SENDING: &str = "sending";
 const STATE: &str = "state.json";
+/// A claim older than this belongs to a sender that died.
+const CLAIM_TTL_SECS: i64 = 3600;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
@@ -35,6 +37,19 @@ impl Default for Limits {
 pub struct Spool {
     dir: PathBuf,
     limits: Limits,
+    /// Who this spool handle is, written into the names of the reports it
+    /// claims (process id plus a per-handle counter; never contains a dot).
+    owner: String,
+}
+
+fn new_owner() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    format!(
+        "{}x{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 #[derive(Debug)]
@@ -66,6 +81,7 @@ impl Spool {
         Spool {
             dir: dir.into(),
             limits: Limits::default(),
+            owner: new_owner(),
         }
     }
 
@@ -73,6 +89,7 @@ impl Spool {
         Spool {
             dir: dir.into(),
             limits,
+            owner: new_owner(),
         }
     }
 
@@ -190,29 +207,52 @@ impl Spool {
     }
 
     /// Takes a report for upload so a second process does not send it too.
+    /// The rename is the claim (only one caller can win it) and the new name
+    /// records when and by whom: `<name>.<claim time>.<owner>.sending`.
     pub(crate) fn claim(&self, path: &Path) -> Option<PathBuf> {
-        let claimed = path.with_extension(SENDING);
+        self.claim_at(path, now())
+    }
+
+    pub(crate) fn claim_at(&self, path: &Path, at: i64) -> Option<PathBuf> {
+        let stem = path.file_stem()?.to_str()?;
+        let claimed = path.with_file_name(format!("{stem}.{at}.{}.{SENDING}", self.owner));
         fs::rename(path, claimed.as_path()).ok()?;
         Some(claimed)
     }
 
     pub(crate) fn release(&self, claimed: &Path) {
-        let _ = fs::rename(claimed, claimed.with_extension(EXT));
+        if let Some((stem, _)) = parse_claim(claimed) {
+            let _ = fs::rename(claimed, claimed.with_file_name(format!("{stem}.{EXT}")));
+        } else if let Some(name) = claimed.file_stem().and_then(|s| s.to_str()) {
+            // A claim in the old format (`<name>.sending`).
+            let _ = fs::rename(claimed, claimed.with_file_name(format!("{name}.{EXT}")));
+        }
     }
 
     pub(crate) fn finish(&self, claimed: &Path) {
         let _ = fs::remove_file(claimed);
     }
 
-    /// Puts back reports a killed process left in flight for over an hour.
+    /// Puts back reports whose claim is over an hour old, judged by the claim
+    /// time in the name, never by the age of the report. Restoring is a
+    /// rename too, so it cannot overlap a fresh claim of the same file.
     pub(crate) fn recover_stale(&self) {
+        self.recover_stale_at(now());
+    }
+
+    pub(crate) fn recover_stale_at(&self, at: i64) {
         for p in self.files(SENDING) {
-            let old = fs::metadata(&p)
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.elapsed().ok())
-                .is_some_and(|age| age.as_secs() > 3600);
-            if old {
+            let claimed_at = match parse_claim(&p) {
+                Some((_, claimed_at)) => claimed_at,
+                // Left by a version that did not record the claim: the best
+                // evidence is when the file was last renamed or written.
+                None => fs::metadata(&p)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_secs() as i64),
+            };
+            if at - claimed_at > CLAIM_TTL_SECS {
                 self.release(&p);
             }
         }
@@ -232,6 +272,18 @@ impl Spool {
             }
         }
     }
+}
+
+/// `(report name, claim time)` of `<name>.<claim time>.<owner>.sending`.
+fn parse_claim(path: &Path) -> Option<(String, i64)> {
+    let name = path.file_name()?.to_str()?;
+    let rest = name.strip_suffix(&format!(".{SENDING}"))?;
+    let (rest, owner) = rest.rsplit_once('.')?;
+    let (stem, at) = rest.rsplit_once('.')?;
+    if owner.is_empty() || stem.is_empty() {
+        return None;
+    }
+    Some((stem.to_owned(), at.parse().ok()?))
 }
 
 #[cfg(test)]
@@ -356,5 +408,75 @@ mod tests {
         )
         .unwrap();
         assert_eq!(spool.list()[0].report.message, "to <host>");
+    }
+
+    fn old_report(spool: &Spool) -> PathBuf {
+        // A report that has waited for hours in the spool.
+        spool.write(&report("old", now() - 5 * 3600)).unwrap()
+    }
+
+    #[test]
+    fn a_fresh_claim_on_an_old_report_is_not_recovered() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Spool::new(dir.path());
+        let b = Spool::new(dir.path());
+        let path = old_report(&a);
+        // The file itself is old on disk too.
+        let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(5 * 3600);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        let claimed = a.claim(&path).unwrap();
+        b.recover_stale();
+        assert!(claimed.exists(), "sender B took A's live claim");
+        assert!(b.list().is_empty());
+        assert!(b.claim(&path).is_none());
+        a.finish(&claimed);
+        assert!(a.list().is_empty());
+    }
+
+    #[test]
+    fn a_stale_claim_is_recovered() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Spool::new(dir.path());
+        let b = Spool::new(dir.path());
+        let path = old_report(&a);
+        let claimed = a.claim_at(&path, now() - 2 * 3600).unwrap();
+        b.recover_stale();
+        assert!(!claimed.exists());
+        let list = b.list();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].path, path);
+        assert!(b.claim(&list[0].path).is_some());
+    }
+
+    #[test]
+    fn only_one_sender_wins_a_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Spool::new(dir.path());
+        let b = Spool::new(dir.path());
+        let path = a.write(&report("x", now())).unwrap();
+        let first = a.claim(&path);
+        let second = b.claim(&path);
+        assert!(first.is_some() && second.is_none());
+        a.release(&first.unwrap());
+        assert_eq!(a.list().len(), 1);
+    }
+
+    #[test]
+    fn a_claim_in_the_old_format_is_judged_by_its_file_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = Spool::new(dir.path());
+        let path = spool.write(&report("x", now())).unwrap();
+        let legacy = path.with_extension(SENDING);
+        fs::rename(&path, &legacy).unwrap();
+        spool.recover_stale();
+        assert!(legacy.exists(), "just renamed, so not stale");
+        spool.recover_stale_at(now() + 2 * 3600);
+        assert!(!legacy.exists());
+        assert_eq!(spool.list().len(), 1);
     }
 }
