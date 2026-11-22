@@ -7,26 +7,29 @@ export interface ShortcutRow {
   id: ShortcutId;
   group: "app" | "terminal" | "list";
   title: () => string;
+  /** The shortcut shown everywhere (tooltips, menus, the palette); it works
+   *  whether or not the terminal has the focus. */
   pc: string;
   mac: string;
-  /** Shown beside the shortcut when the terminal has the focus and it differs. */
-  pcInTerminal?: string;
-  macInTerminal?: string;
+  /** A shorter form that works only outside the terminal, where plain Ctrl
+   *  does not belong to the shell; listed in the shortcut list only. */
+  pcOutside?: string;
+  macOutside?: string;
 }
 
 /** Every shortcut, once (K9). */
 export const shortcutTable: ShortcutRow[] = [
-  { id: "search-hosts", group: "app", title: () => t.palette, pc: "Ctrl+K", mac: "⌘K", pcInTerminal: "Ctrl+Shift+K", macInTerminal: "⌘⇧K" },
-  { id: "shortcut-list", group: "app", title: () => t.shortcutList, pc: "Ctrl+/", mac: "⌘/", pcInTerminal: "Ctrl+Shift+/" },
-  { id: "settings", group: "app", title: () => t.navSettings, pc: "Ctrl+,", mac: "⌘,", pcInTerminal: "Ctrl+Shift+," },
-  { id: "go-hosts", group: "app", title: () => t.navHosts, pc: "Ctrl+1", mac: "⌘1", pcInTerminal: "Ctrl+Shift+1" },
-  { id: "go-forwards", group: "app", title: () => t.navForwards, pc: "Ctrl+2", mac: "⌘2", pcInTerminal: "Ctrl+Shift+2" },
-  { id: "go-snippets", group: "app", title: () => t.navSnippets, pc: "Ctrl+3", mac: "⌘3", pcInTerminal: "Ctrl+Shift+3" },
-  { id: "go-team", group: "app", title: () => t.navTeam, pc: "Ctrl+4", mac: "⌘4", pcInTerminal: "Ctrl+Shift+4" },
-  { id: "import", group: "app", title: () => t.importHosts, pc: "Ctrl+I", mac: "⌘I", pcInTerminal: "Ctrl+Shift+I" },
-  { id: "new-host", group: "app", title: () => t.newHost, pc: "Ctrl+N", mac: "⌘N", pcInTerminal: "Ctrl+Shift+N" },
+  { id: "search-hosts", group: "app", title: () => t.palette, pc: "Ctrl+Shift+K", mac: "⌘⇧K", pcOutside: "Ctrl+K", macOutside: "⌘K" },
+  { id: "shortcut-list", group: "app", title: () => t.shortcutList, pc: "Ctrl+Shift+/", mac: "⌘/", pcOutside: "Ctrl+/" },
+  { id: "settings", group: "app", title: () => t.navSettings, pc: "Ctrl+Shift+,", mac: "⌘,", pcOutside: "Ctrl+," },
+  { id: "go-hosts", group: "app", title: () => t.navHosts, pc: "Ctrl+Shift+1", mac: "⌘1", pcOutside: "Ctrl+1" },
+  { id: "go-forwards", group: "app", title: () => t.navForwards, pc: "Ctrl+Shift+2", mac: "⌘2", pcOutside: "Ctrl+2" },
+  { id: "go-snippets", group: "app", title: () => t.navSnippets, pc: "Ctrl+Shift+3", mac: "⌘3", pcOutside: "Ctrl+3" },
+  { id: "go-team", group: "app", title: () => t.navTeam, pc: "Ctrl+Shift+4", mac: "⌘4", pcOutside: "Ctrl+4" },
+  { id: "import", group: "app", title: () => t.importHosts, pc: "Ctrl+Shift+I", mac: "⌘I", pcOutside: "Ctrl+I" },
+  { id: "new-host", group: "app", title: () => t.newHost, pc: "Ctrl+Shift+N", mac: "⌘N", pcOutside: "Ctrl+N" },
   { id: "find", group: "app", title: () => t.searchHosts, pc: "Ctrl+F", mac: "⌘F" },
-  { id: "toggle-sidebar", group: "app", title: () => t.toggleSidebar, pc: "Ctrl+B", mac: "⌃⌘S", pcInTerminal: "Ctrl+Shift+S" },
+  { id: "toggle-sidebar", group: "app", title: () => t.toggleSidebar, pc: "Ctrl+Shift+S", mac: "⌃⌘S", pcOutside: "Ctrl+B" },
   { id: "toggle-focus", group: "app", title: () => t.focusMode, pc: "F11", mac: "⌃⌘Z" },
   { id: "new-local", group: "terminal", title: () => t.newTab, pc: "Ctrl+Shift+T", mac: "⌘T" },
   { id: "next-tab", group: "terminal", title: () => t.nextTab, pc: "Ctrl+Tab", mac: "⌃Tab" },

@@ -5,7 +5,8 @@
    A terminal needs plain Ctrl keys (Ctrl+K, Ctrl+W, Ctrl+N mean something in
    bash and vim), so on Windows and Linux the reserved shortcuts work with plain
    Ctrl everywhere except while the terminal has the focus, where the same
-   commands use Ctrl+Shift (K22: never Ctrl+Alt). Terminal commands (tabs,
+   commands use Ctrl+Shift (K22: never Ctrl+Alt). The Ctrl+Shift form works
+   everywhere and is the one shown, so a hint is right wherever the focus is. Terminal commands (tabs,
    splits, broadcast) use Ctrl+Shift always. macOS has no such conflict and uses
    Cmd, except that ⌘K clears the screen and scrollback inside a terminal (the
    palette is ⌘⇧K there). The table below is the one place shortcuts are written down (K9): the
@@ -181,8 +182,10 @@ export function resolveGlobalShortcut(input: KeyInput, mac: boolean, inTerminal:
     return null;
   }
   if (input.metaKey) return null;
-  // Plain Ctrl outside the terminal, Ctrl+Shift inside it.
-  if (!input.ctrlKey || shiftKey !== inTerminal) return null;
+  // Ctrl+Shift everywhere (the form the app shows, so one shortcut works
+  // wherever the focus is, as in Windows Terminal); plain Ctrl also works
+  // outside the terminal, where it does not belong to the shell.
+  if (!input.ctrlKey || (inTerminal && !shiftKey)) return null;
   if (letter === "k") return "search-hosts";
   if (slash) return "shortcut-list";
   if (comma) return "settings";
@@ -192,10 +195,9 @@ export function resolveGlobalShortcut(input: KeyInput, mac: boolean, inTerminal:
   if (letter === "f") return "find";
   // keyboard.md: Ctrl+B shows or hides the sidebar. Inside a terminal Ctrl+B is
   // the shell's (and tmux's prefix), and Ctrl+Shift+B is broadcast.
-  if (letter === "b" && !inTerminal) return "toggle-sidebar";
-  // In a terminal the sidebar is Ctrl+Shift+S, so it folds away without
-  // leaving the terminal.
-  if ((letter === "s" || input.code === "KeyS") && inTerminal) return "toggle-sidebar";
+  if (letter === "b" && !shiftKey) return "toggle-sidebar";
+  // Ctrl+Shift+S folds the sidebar away from anywhere, the terminal included.
+  if ((letter === "s" || input.code === "KeyS") && shiftKey) return "toggle-sidebar";
   return null;
 }
 
