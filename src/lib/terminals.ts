@@ -9,6 +9,9 @@ export interface TerminalTarget {
   connected(): boolean;
   /** Gives the terminal the keyboard focus. */
   focus(): void;
+  /** What closing would interrupt: the running command (shell integration),
+   *  "" for a full-screen program, null when the shell is idle or unknown. */
+  busy(): string | null;
   /** Ends the tab's session (closing the tab); unmounting alone only detaches. */
   close(): void;
 }

@@ -1,5 +1,5 @@
 import { Cable, ChevronRight, Copy, CopyPlus, Download, Pencil, Plus, Search, Server, Star, Trash2, SquarePlus, Zap } from "lucide-react";
-import { useMemo, useState, type KeyboardEvent, type Ref } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,8 @@ import { hostColor, isTauri, type Group, type Host } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { findSavedHost, formatTarget, parseTarget, type Target } from "@/lib/quickConnect";
 import { shortcutHint } from "@/lib/shortcutTable";
+import { isMac } from "@/lib/shortcuts";
+import { onSettings, settings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 
 interface Section {
@@ -51,6 +53,7 @@ export function HostList({
   onImport,
   onNewSerial,
   searchRef,
+  reveal,
 }: {
   hosts: Host[];
   groups: Group[];
@@ -69,6 +72,8 @@ export function HostList({
   onImport: () => void;
   onNewSerial: () => void;
   searchRef: Ref<HTMLInputElement>;
+  /** A host just saved: picked and scrolled into view, so the save shows (F1). */
+  reveal?: { id: string } | null;
 }) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -101,6 +106,35 @@ export function HostList({
       else next.add(id);
       return next;
     });
+
+  // A click picks a host and a double-click (or Enter) connects, as in
+  // Termius, FinalShell and MobaXterm, so a stray click never opens a
+  // session (on a production host least of all). Settings can make a single
+  // click connect.
+  const [singleClick, setSingleClick] = useState(() => settings().hostsSingleClick);
+  useEffect(() => onSettings((next) => setSingleClick(next.hostsSingleClick)), []);
+  const [picked, setPicked] = useState<string | null>(null);
+
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const host = reveal && hosts.find((candidate) => candidate.id === reveal.id);
+    if (!host) return;
+    setPicked(host.id);
+    setQuery("");
+    setCollapsed((current) => {
+      const next = new Set(current);
+      next.delete(host.groupId ?? "ungrouped");
+      next.delete("ungrouped");
+      return next;
+    });
+    const frame = requestAnimationFrame(() =>
+      listRef.current
+        ?.querySelector<HTMLElement>(`[data-host-id="${CSS.escape(host.id)}"]`)
+        ?.scrollIntoView({ block: "nearest" }),
+    );
+    return () => cancelAnimationFrame(frame);
+    // Only a new reveal (or the reload that brings its host) moves the list.
+  }, [reveal, hosts]);
 
   // The list is one Tab stop; arrows move between rows (K7). The selected host, or
   // the first row, is the stop.
@@ -140,6 +174,9 @@ export function HostList({
       host={host}
       tabStop={isStop(host)}
       selected={host.id === selectedId}
+      picked={host.id === picked}
+      singleClick={singleClick}
+      onPick={setPicked}
       onOpen={onOpen}
       onOpenNew={onOpenNew}
       onDuplicate={onDuplicate}
@@ -195,14 +232,16 @@ export function HostList({
         />
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2 pb-3" onKeyDown={moveRow}>
+      <div ref={listRef} className="flex-1 overflow-y-auto px-2 pb-3" onKeyDown={moveRow}>
         {hosts.length === 0 ? (
           <div className="px-3 pt-10 text-center">
             <Server className="mx-auto mb-3 size-12 text-label-3" strokeWidth={1.5} />
             <p className="text-callout font-medium text-label-1">{t.noHosts}</p>
             <p className="mt-1 text-callout text-label-2">{t.noHostsHint}</p>
             <div className="mt-4 flex items-center justify-center gap-2">
-              <Button variant="primary" size="sm" onClick={() => onEdit(null)}>
+              {/* Secondary: the window's one primary action is the same
+                  "新建主机" on the empty workspace beside this list (A1). */}
+              <Button variant="secondary" size="sm" onClick={() => onEdit(null)}>
                 <Plus />
                 {t.newHost}
               </Button>
@@ -278,6 +317,9 @@ function HostRow({
   host,
   tabStop,
   selected,
+  picked,
+  singleClick,
+  onPick,
   onOpen,
   onOpenNew,
   onDuplicate,
@@ -288,6 +330,10 @@ function HostRow({
   host: Host;
   tabStop: boolean;
   selected: boolean;
+  /** Clicked once: highlighted, not connected. */
+  picked: boolean;
+  singleClick: boolean;
+  onPick: (id: string) => void;
   onOpen: (host: Host) => void;
   onOpenNew?: (host: Host) => void;
   onDuplicate?: (host: Host) => void;
@@ -303,7 +349,7 @@ function HostRow({
   };
   const menu: MenuEntry[] = [
     // A second session to the same host, as every terminal's "new tab" gives.
-    ...(onOpenNew ? [{ key: "open-new", label: t.openInNewTab, icon: <SquarePlus />, onSelect: () => onOpenNew(host) }, "separator" as const] : []),
+    ...(onOpenNew ? [{ key: "open-new", label: t.openInNewTab, icon: <SquarePlus />, shortcut: isMac ? t.openNewClickMac : t.openNewClick, onSelect: () => onOpenNew(host) }, "separator" as const] : []),
     {
       key: "edit",
       label: saved ? t.editHost : t.saveToHosts,
@@ -350,12 +396,28 @@ function HostRow({
       <button
         type="button"
         data-host-row
+        data-host-id={host.id}
         tabIndex={tabStop ? 0 : -1}
-        onClick={() => onOpen(host)}
+        // Enter on a focused row arrives as a click without a pointer (detail 0).
+        onClick={(event) => {
+          // Ctrl/⌘-click opens another session beside an open one (as a
+          // browser opens a link in a new tab); so does a middle click.
+          if ((event.ctrlKey || event.metaKey) && onOpenNew) onOpenNew(host);
+          else if (singleClick || event.detail === 0) onOpen(host);
+          else onPick(host.id);
+        }}
+        onAuxClick={(event) => {
+          if (event.button !== 1 || !onOpenNew) return;
+          event.preventDefault();
+          onOpenNew(host);
+        }}
+        onMouseDown={(event) => event.button === 1 && event.preventDefault()}
+        onDoubleClick={() => !singleClick && onOpen(host)}
         aria-current={selected ? "true" : undefined}
+        aria-description={singleClick ? undefined : t.hostDoubleClickHint}
         className={cn(
-          "relative flex w-full items-center gap-3 rounded-sm py-1.5 pr-16 pl-2 text-left",
-          selected ? "bg-accent-soft" : "hover:bg-fill-1",
+          "relative flex w-full items-center gap-3 rounded-sm py-1.5 pr-16 pl-2 text-left select-none",
+          selected ? "bg-accent-soft" : picked ? "bg-fill-2" : "hover:bg-fill-1",
         )}
       >
         <HostTile host={host} selected={selected} />
@@ -364,7 +426,7 @@ function HostRow({
             <span className="min-w-0 truncate text-callout font-medium text-label-1" title={host.name}>
               {host.name}
             </span>
-            <EnvBadge environment={host.environment} />
+            <EnvBadge environment={host.environment} iconOnly />
           </span>
           <span className="block truncate font-mono text-callout text-label-2" title={host.target}>
             {host.target}
@@ -408,17 +470,12 @@ export function HostTile({ host, selected = false, large = false }: { host: Host
         selected ? "bg-bg-elevated text-(--accent) shadow-1" : "bg-fill-2 text-label-2",
       )}
     >
+      {/* The host's colour tints its icon: a dot on the corner read as
+          "online", which it never meant. */}
       {host.fields.serial ? (
-        <Cable className={large ? "size-6" : "size-4"} strokeWidth={1.5} />
+        <Cable className={large ? "size-6" : "size-4"} strokeWidth={host.color ? 2 : 1.5} style={host.color ? { color: hostColor(host.color) } : undefined} />
       ) : (
-        <Server className={large ? "size-6" : "size-4"} strokeWidth={1.5} />
-      )}
-      {host.color && (
-        <span
-          aria-hidden
-          className="absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-(--bg-grouped)"
-          style={{ backgroundColor: hostColor(host.color) }}
-        />
+        <Server className={large ? "size-6" : "size-4"} strokeWidth={host.color ? 2 : 1.5} style={host.color ? { color: hostColor(host.color) } : undefined} />
       )}
     </span>
   );

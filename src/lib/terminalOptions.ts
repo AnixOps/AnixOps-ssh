@@ -78,3 +78,13 @@ export const MINIMUM_CONTRAST = 4.5;
 
 /** Wide characters (CJK, emoji) take two cells, as current terminals and `wcwidth` count them. */
 export const UNICODE_VERSION = "11";
+
+/** Disposes a terminal one task later, with its element taken out of the page
+ *  now. xterm's viewport syncs its scroll area in a timer queued when the
+ *  terminal opens; disposing first leaves that timer reading a renderer that
+ *  is gone ("reading 'dimensions'"), as when a pane closes right after it
+ *  opened or React mounts an effect twice. */
+export function disposeTerminal(terminal: { element: HTMLElement | undefined; dispose(): void }): void {
+  terminal.element?.remove();
+  window.setTimeout(() => terminal.dispose(), 0);
+}

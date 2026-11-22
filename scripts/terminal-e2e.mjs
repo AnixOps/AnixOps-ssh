@@ -383,7 +383,8 @@ async function newPage({ width = 1200, height = 760, query = "" } = {}) {
 /** Opens a host from the list; the bridge connects it to the e2e server. */
 async function openHost(page, name = "prod-web-01") {
   await revealHosts(page);
-  await page.getByRole("button", { name: new RegExp(name) }).first().click();
+  // A click picks a host; a double-click connects (Termius, FinalShell).
+  await page.getByRole("button", { name: new RegExp(name) }).first().dblclick();
   await page.locator(".xterm-screen").last().waitFor();
   // The engine gives a channel that does not open 15 s before it reconnects;
   // the session-open times are reported at the end.
@@ -634,6 +635,27 @@ check("窗口", "sidebar-toggle", "打开会话后主机列表让位给终端（
   return `终端 ${cols} 列；浮出时不变，Esc 收回回到终端；固定后 ${pinned} 列`;
 });
 
+check("窗口", "shortcuts-everywhere", "界面上显示的快捷键在哪里按都生效：终端外和终端内同一组（Windows Terminal）", async (page) => {
+  if (isMacRun) return "macOS 用 ⌘，本来就同一组";
+  const hint = await page.getByText(/Ctrl\+Shift\+K/).count();
+  if (!hint) throw new Error("首页没有显示 Ctrl+Shift+K");
+  if (await page.getByText(/^Ctrl\+K$/).count()) throw new Error("首页仍显示 Ctrl+K");
+  await page.keyboard.press("Control+Shift+K");
+  await page.getByRole("dialog").waitFor({ timeout: 2000 }).catch(() => { throw new Error("终端外 Ctrl+Shift+K 没有打开命令面板"); });
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({ state: "detached", timeout: 2000 });
+  await page.keyboard.press("Control+Shift+Comma");
+  await page.locator('[data-settings-nav="terminal"]').waitFor({ timeout: 2000 }).catch(() => { throw new Error("终端外 Ctrl+Shift+, 没有打开设置"); });
+  await page.waitForTimeout(200);
+  await page.keyboard.press("Escape");
+  await page.locator('[data-settings-nav="terminal"]').waitFor({ state: "detached", timeout: 2000 });
+  await openHost(page);
+  await page.keyboard.press("Control+Shift+K");
+  await page.getByRole("dialog").waitFor({ timeout: 2000 }).catch(() => { throw new Error("终端内 Ctrl+Shift+K 没有打开命令面板"); });
+  await page.keyboard.press("Escape");
+  return "首页提示 Ctrl+Shift+K；终端内外都打开命令面板，Ctrl+Shift+, 终端外也打开设置";
+});
+
 check("窗口", "focus-returns", "关掉命令面板、快捷键列表、设置、文件面板、监控后，直接打字仍进终端（Windows Terminal、iTerm2）", async (page) => {
   await openHost(page);
   const mod = isMacRun ? "Meta" : "Control";
@@ -649,8 +671,17 @@ check("窗口", "focus-returns", "关掉命令面板、快捷键列表、设置�
     await page.waitForTimeout(300);
     const marker = `F${Math.random().toString(36).slice(2, 8)}`;
     await page.keyboard.type(`echo ${marker}\n`);
-    await waitScreen(page, new RegExp(`^${marker}$`, "m"), { timeout: 4000 }).catch(() => {
-      throw new Error(`${what}之后打的字没有进终端`);
+    await waitScreen(page, new RegExp(`^${marker}$`, "m"), { timeout: 4000 }).catch(async () => {
+      // Where the keyboard went, and what the terminal shows, for a CI failure.
+      const focus = await page.evaluate(() => {
+        const el = document.activeElement;
+        if (!el) return "none";
+        const label = el.getAttribute("aria-label") || el.textContent?.trim().slice(0, 20) || "";
+        return `${el.tagName.toLowerCase()}${el.className ? `.${String(el.className).split(" ")[0]}` : ""} "${label}"`;
+      });
+      const shown = (await screen(page)).split("\n").filter((line) => line.trim()).slice(-3).join(" | ");
+      await page.screenshot({ path: join(outDir, "focus-returns-fail.png") });
+      throw new Error(`${what}之后打的字没有进终端（焦点在 ${focus}；屏幕末尾：${shown}）`);
     });
   }
   return steps.map(([what]) => what).join("、") + "之后打字都进了终端";
@@ -983,6 +1014,30 @@ check("全屏程序", "htop", "htop/btop：全屏 TUI 正确绘制（鼠标点�
   return "htop 正常绘制";
 });
 
+check("标签与分屏", "close-busy", "关掉还在运行程序的标签前先确认，空闲的直接关（iTerm2、macOS 终端）", async (page) => {
+  await openHost(page);
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await run(page, "less /etc/passwd");
+  await waitScreen(page, /root:/);
+  await page.keyboard.press(isMacRun ? "Meta+W" : "Control+Shift+W");
+  const dialog = page.getByRole("alertdialog");
+  await dialog.waitFor({ timeout: 2000 }).catch(() => { throw new Error("关闭运行 less 的标签没有确认"); });
+  const title = (await dialog.innerText()).split("\n")[0];
+  await dialog.getByRole("button", { name: "取消" }).click();
+  await dialog.waitFor({ state: "detached" });
+  if ((await page.getByRole("tab").count()) !== 1) throw new Error("取消后标签不见了");
+  await page.locator(".xterm-screen").last().click();
+  await page.keyboard.press("q");
+  await page.waitForTimeout(300);
+  await page.keyboard.press(isMacRun ? "Meta+W" : "Control+Shift+W");
+  await page.waitForTimeout(500);
+  if (await dialog.count()) throw new Error("空闲的 shell 关闭时也要确认");
+  if (await page.getByRole("tab").count()) throw new Error("空闲标签没有关掉");
+  if (errors.length) throw new Error(`页面报错：${errors.join("；")}`);
+  return `运行 less 时询问「${title}」，空闲时直接关闭`;
+});
+
 check("窗口", "resize", "窗口变化后远端 stty size 跟着变", async (page) => {
   await openHost(page);
   await page.setViewportSize({ width: 900, height: 560 });
@@ -1063,6 +1118,29 @@ check("标签与分屏", "split", "Ctrl+Shift+D 分屏后新窗格也连上同�
   await waitScreen(page, /keyuser@/, { index: -1 });
   await page.screenshot({ path: join(outDir, "split.png") });
   return "两个窗格各有一个会话";
+});
+
+check("标签与分屏", "split-active-pane", "分屏时一眼看出活动窗格：活动窗格有边框、其余变暗，生产标记只在标签上（Windows Terminal、iTerm2）", async (page) => {
+  await openHost(page, "prod-db");
+  if (!(await page.locator("[data-env-edge]").count())) throw new Error("单窗格时没有生产色条");
+  await page.keyboard.press(isMacRun ? "Meta+D" : "Control+Shift+D");
+  await page.waitForFunction(() => window.__anixopsE2eTerminals.size >= 2);
+  await waitScreen(page, /keyuser@/, { index: -1 });
+  const counts = async () => ({
+    active: await page.locator("[data-pane-active]").count(),
+    dim: await page.locator("[data-pane-dim]").count(),
+    edge: await page.locator("[data-env-edge]").count(),
+  });
+  let now = await counts();
+  if (now.active !== 1 || now.dim !== 1) throw new Error(`活动边框 ${now.active} 个，变暗 ${now.dim} 个`);
+  if (now.edge) throw new Error("分屏时窗格上仍有生产色条，和活动窗格混在一起");
+  const first = page.locator(".group\\/pane").first();
+  const firstWasActive = (await first.locator("[data-pane-active]").count()) === 1;
+  const other = firstWasActive ? page.locator(".group\\/pane").nth(1) : first;
+  await other.locator(".xterm-screen").click();
+  await page.waitForTimeout(200);
+  if (!(await other.locator("[data-pane-active]").count())) throw new Error("点另一个窗格后活动边框没有跟过去");
+  return "活动窗格有边框、另一个变暗，点哪个哪个变活动；生产标记只在标签";
 });
 
 check("标签与分屏", "tab-switch", "Ctrl+Tab / Ctrl+Shift+Tab 切换标签", async (page) => {
@@ -1541,6 +1619,66 @@ check("文件", "sftp-hidden", "可以隐藏或显示以 . 开头的文件（Ter
 
 // ---- Connections and forwards --------------------------------------------
 
+check("连接管理", "host-double-click", "单击主机只选中，双击或回车才连接（Termius、FinalShell、MobaXterm）；设置里可改成单击连接", async (page) => {
+  const row = page.getByRole("button", { name: /prod-web-01/ }).first();
+  await row.click();
+  await page.waitForTimeout(800);
+  if (await page.getByRole("tab").count()) throw new Error("单击就连接了");
+  await row.press("Enter");
+  await page.locator(".xterm-screen").last().waitFor({ timeout: 5000 });
+  await waitScreen(page, /keyuser@/, { timeout: 35000 });
+  return "单击选中不连接，回车连接；双击连接见其余各项";
+});
+
+check("连接管理", "new-host-form", "新建主机：地址和凭据在前、其余收进“高级”，保存后在列表里选中新主机，“保存并连接”直接打开（Termius）", async (page) => {
+  const newHost = async () => {
+    await page.getByRole("button", { name: "添加主机" }).click();
+    await page.getByRole("menuitem", { name: /新建主机/ }).click();
+    return page.getByRole("dialog");
+  };
+  let dialog = await newHost();
+  const address = dialog.getByLabel("主机", { exact: true });
+  if (!(await address.evaluate((el) => el === document.activeElement))) throw new Error("打开后焦点不在地址栏");
+  const top = async (locator) => (await locator.first().boundingBox())?.y ?? Infinity;
+  if ((await top(dialog.getByText("已保存的凭据"))) > (await top(dialog.getByLabel("名称"))))
+    throw new Error("凭据排在名称后面");
+  if (await dialog.getByLabel("跳板机").isVisible()) throw new Error("跳板机等高级项没有折叠");
+  await address.fill("e2e-saved.example");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await dialog.waitFor({ state: "detached" });
+  const row = page.locator('[data-host-row][aria-description]', { hasText: "e2e-saved.example" }).first();
+  await row.waitFor({ timeout: 3000 });
+  const shown = await row.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const list = el.closest(".overflow-y-auto").getBoundingClientRect();
+    return box.top >= list.top && box.bottom <= list.bottom && el.className.includes("bg-fill-2");
+  });
+  if (!shown) throw new Error("保存后新主机没有在列表里选中并滚到可见");
+  dialog = await newHost();
+  await dialog.getByLabel("主机", { exact: true }).fill("e2e-connect.example");
+  await dialog.getByRole("button", { name: "保存并连接" }).click();
+  await dialog.waitFor({ state: "detached" });
+  await page.locator(".xterm-screen").last().waitFor({ timeout: 5000 });
+  await waitScreen(page, /keyuser@/, { timeout: 35000 });
+  return "焦点在地址栏，凭据在名称前，高级项折叠；保存后新主机选中可见；保存并连接直接连上";
+});
+
+check("连接管理", "host-new-session", "Ctrl+单击或中键单击主机，在已打开的旁边再开一个会话（浏览器、Windows Terminal 复制标签）", async (page) => {
+  await openHost(page, "prod-web-01");
+  await revealHosts(page);
+  const row = page.getByRole("button", { name: /prod-web-01/ }).first();
+  await row.click({ modifiers: [isMacRun ? "Meta" : "Control"] });
+  await page.waitForFunction(() => window.__anixopsE2eTerminals.size >= 2, null, { timeout: 5000 }).catch(() => {
+    throw new Error("Ctrl+单击没有开新会话");
+  });
+  await revealHosts(page);
+  await page.getByRole("button", { name: /prod-web-01/ }).first().click({ button: "middle" });
+  await page.waitForFunction(() => window.__anixopsE2eTerminals.size >= 3, null, { timeout: 5000 }).catch(() => {
+    throw new Error("中键单击没有开新会话");
+  });
+  return `prod-web-01 共 ${await page.getByRole("tab").count()} 个标签`;
+});
+
 check("连接管理", "quick-connect", "在主机搜索框输入 user@host:port 回车直接连接（Termius、MobaXterm、Tabby 的快速连接）", async (page) => {
   const search = page.getByRole("textbox", { name: "搜索主机" });
   await search.fill("keyuser@10.20.30.40:2200");
@@ -1728,6 +1866,30 @@ check("设置", "settings-live", "改字号立刻作用到已打开的终端，�
   const after = await term(page, (t) => t.options.fontSize);
   if (after !== before + 2) throw new Error(`字号 ${before} → ${after}`);
   return `字号 ${before} → ${after}，会话不断`;
+});
+
+check("设置", "terminal-scheme", "浅色应用里终端默认深色，可改浅色或跟随应用，立刻生效（iTerm2、Windows Terminal、Termius）", async (page) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await openHost(page);
+  const luminance = (hex) => {
+    const full = hex.length === 4 ? `#${[...hex.slice(1)].map((c) => c + c).join("")}` : hex;
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(full.slice(i, i + 2), 16));
+    if ([r, g, b].some(Number.isNaN)) throw new Error(`读不出颜色 ${hex}`);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const terminalBg = () => term(page, (t) => t.options.theme.background);
+  const paneBg = () =>
+    page.evaluate(() => getComputedStyle(document.querySelector(".xterm").closest(".bg-bg")).backgroundColor);
+  const dark = await terminalBg();
+  if (luminance(dark) > 60) throw new Error(`浅色应用里终端背景是 ${dark}`);
+  if (!/rgb\(0, 0, 0\)/.test(await paneBg())) throw new Error(`终端四周留白不是深色：${await paneBg()}`);
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.locator('[data-settings-nav="terminal"]').click();
+  await page.getByRole("radio", { name: "跟随应用" }).click();
+  await page.waitForTimeout(300);
+  const app = await terminalBg();
+  if (luminance(app) < 200) throw new Error(`选了跟随应用，终端背景仍是 ${app}`);
+  return `默认 ${dark}，跟随应用后 ${app}`;
 });
 
 // ---- Run -----------------------------------------------------------------

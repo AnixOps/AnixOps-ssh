@@ -30,6 +30,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useTerminalScheme } from "@/lib/terminalTheme";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -259,6 +260,15 @@ export function SettingsPage({
                 </Select>
               </SettingsRow>
             </SettingsGroup>
+            <SettingsGroup title={t.hostsTitle}>
+              <SettingsRow label={t.hostsSingleClick} hint={t.hostsSingleClickHint}>
+                <Switch
+                  on={current.hostsSingleClick}
+                  label={t.hostsSingleClick}
+                  onClick={() => update({ hostsSingleClick: !current.hostsSingleClick })}
+                />
+              </SettingsRow>
+            </SettingsGroup>
             <SettingsGroup title={t.updatesTitle}>
               <UpdatesSection version={version} />
             </SettingsGroup>
@@ -276,6 +286,19 @@ export function SettingsPage({
           <>
             {!searching && <TerminalPreview current={current} />}
             <SettingsGroup title={t.terminal}>
+              <SettingsRow label={t.terminalScheme} hint={t.terminalSchemeHint}>
+                <Segmented
+                  size="sm"
+                  label={t.terminalScheme}
+                  value={current.terminalScheme}
+                  onChange={(terminalScheme) => update({ terminalScheme })}
+                  options={[
+                    { value: "dark", label: t.terminalSchemeDark },
+                    { value: "light", label: t.terminalSchemeLight },
+                    { value: "app", label: t.terminalSchemeApp },
+                  ]}
+                />
+              </SettingsRow>
               <SettingsRow label={t.fontSize}>
                 <div className="flex items-center gap-1">
                   <Stepper
@@ -659,6 +682,8 @@ export function SettingsPage({
 /** A few lines in the chosen font, size, line height and cursor, so a change
  *  shows here while the sessions are covered (as Windows Terminal's preview). */
 function TerminalPreview({ current }: { current: Settings }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useTerminalScheme(ref, current.terminalScheme);
   const cursor =
     current.terminalCursorStyle === "bar"
       ? "border-l-2 border-(--accent)"
@@ -667,6 +692,7 @@ function TerminalPreview({ current }: { current: Settings }) {
         : "bg-(--accent)";
   return (
     <div
+      ref={ref}
       aria-hidden
       data-layout-ignore
       className={cn(

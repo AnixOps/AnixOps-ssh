@@ -1,4 +1,4 @@
-import { Info, SquareTerminal, TriangleAlert } from "lucide-react";
+import { Download, Info, Plus, SquareTerminal, TriangleAlert } from "lucide-react";
 import mark from "@/assets/mark.svg";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/form";
@@ -6,7 +6,22 @@ import type { SshStatus } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { shortcutHint } from "@/lib/shortcutTable";
 
-export function EmptyWorkspace({ onOpenLocal, status }: { onOpenLocal: () => void; status: SshStatus | null }) {
+/** The workspace with no tab open. With no host saved yet it leads to adding
+ *  the first one (its one primary action); otherwise it points at the list. */
+export function EmptyWorkspace({
+  onOpenLocal,
+  onNewHost,
+  onImport,
+  hostCount,
+  status,
+}: {
+  onOpenLocal: () => void;
+  onNewHost: () => void;
+  onImport: () => void;
+  hostCount: number;
+  status: SshStatus | null;
+}) {
+  const firstRun = hostCount === 0;
   const shortcuts = [
     { label: t.shortcutSearch, keys: shortcutHint("search-hosts") },
     { label: t.shortcutLocal, keys: shortcutHint("new-local") },
@@ -16,8 +31,8 @@ export function EmptyWorkspace({ onOpenLocal, status }: { onOpenLocal: () => voi
   return (
     <div className="flex h-full flex-col items-center justify-center p-8 text-center">
       <img src={mark} alt="AnixOps SSH" className="mb-6 size-16" draggable={false} />
-      <h1 className="text-title-2">{t.emptyTitle}</h1>
-      <p className="mt-2 max-w-sm text-callout text-label-2">{t.emptyHint}</p>
+      <h1 className="text-title-2">{firstRun ? t.emptyFirstTitle : t.emptyTitle}</h1>
+      <p className="mt-2 max-w-sm text-callout text-label-2">{firstRun ? t.emptyFirstHint : t.emptyHint}</p>
       {status && !status.sshVersion && (
         <div
           role="alert"
@@ -36,10 +51,28 @@ export function EmptyWorkspace({ onOpenLocal, status }: { onOpenLocal: () => voi
           {t.agentHint}
         </p>
       )}
-      <Button variant="primary" className="mt-6" onClick={onOpenLocal}>
-        <SquareTerminal />
-        {t.openLocal}
-      </Button>
+      {firstRun ? (
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+          <Button variant="primary" onClick={onNewHost}>
+            <Plus />
+            {t.newHost}
+          </Button>
+          <Button variant="secondary" onClick={onImport}>
+            <Download />
+            {t.importHosts}
+          </Button>
+          <Button variant="quiet" onClick={onOpenLocal}>
+            <SquareTerminal />
+            {t.openLocal}
+          </Button>
+        </div>
+      ) : (
+        // The list beside is where hosts open; a local shell is the alternative (E2).
+        <Button variant="secondary" className="mt-6" onClick={onOpenLocal}>
+          <SquareTerminal />
+          {t.openLocal}
+        </Button>
+      )}
       <dl className="mt-10 grid grid-cols-[auto_auto] gap-x-6 gap-y-2 text-callout">
         {shortcuts.map((shortcut) => (
           <div key={shortcut.label} className="contents">

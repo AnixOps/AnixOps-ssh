@@ -45,10 +45,10 @@ export function ShortcutList({ onClose, only }: { onClose: () => void; only?: re
                     <dt className="min-w-0 flex-1 truncate text-label-1">{row.title()}</dt>
                     <dd className="flex shrink-0 items-center gap-2">
                       <Kbd>{isMac ? row.mac : row.pc}</Kbd>
-                      {(isMac ? row.macInTerminal : row.pcInTerminal) && (
+                      {(isMac ? row.macOutside : row.pcOutside) && (
                         <span className="flex items-center gap-1 text-label-3">
-                          {t.shortcutsInTerminal}
-                          <Kbd>{isMac ? row.macInTerminal : row.pcInTerminal}</Kbd>
+                          {t.shortcutsOutsideTerminal}
+                          <Kbd>{isMac ? row.macOutside : row.pcOutside}</Kbd>
                         </span>
                       )}
                     </dd>

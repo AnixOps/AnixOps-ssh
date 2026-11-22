@@ -19,6 +19,9 @@ export interface ShellIntegrationHandle {
   jump(direction: "previous" | "next"): boolean;
   /** The last command run from a marked prompt; null without shell integration. */
   lastCommand(): ReportedCommand | null;
+  /** The command still running from the last prompt; null when the shell is
+   *  at a prompt or does not report it. */
+  running(): string | null;
   dispose(): void;
 }
 
@@ -105,6 +108,10 @@ export function attachShellIntegration(
         promptLine: found.mark.marker.line,
         nextPromptLine: found.endLine,
       };
+    },
+    running() {
+      const last = marks.all().at(-1);
+      return last?.status === "running" ? last.command : null;
     },
     jump(direction) {
       const top = terminal.buffer.active.viewportY;

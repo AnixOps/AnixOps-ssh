@@ -27,7 +27,8 @@ import {
   type SessionLogEntry,
 } from "@/lib/sessionLogs";
 import { settings as appSettings } from "@/lib/settings";
-import { terminalFont, terminalTheme } from "@/lib/terminalTheme";
+import { disposeTerminal } from "@/lib/terminalOptions";
+import { terminalFont, terminalTheme, useTerminalScheme } from "@/lib/terminalTheme";
 import { requestVaultUnlock, vaultErrorText } from "@/lib/vaultUi";
 
 const units = () => ({ sec: t.logsSec, min: t.logsMin, hour: t.logsHour });
@@ -136,6 +137,8 @@ export function SessionLogs() {
 /** A decrypted log in a read-only terminal, with search and export. */
 function LogViewer({ entry, onClose }: { entry: SessionLogEntry; onClose: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const schemeRef = useRef<HTMLDivElement>(null);
+  useTerminalScheme(schemeRef);
   const searchRef = useRef<SearchAddon | null>(null);
   const findRef = useRef<HTMLInputElement>(null);
   const [log, setLog] = useState<OpenedLog | null>(null);
@@ -186,7 +189,7 @@ function LogViewer({ entry, onClose }: { entry: SessionLogEntry; onClose: () => 
     return () => {
       observer.disconnect();
       searchRef.current = null;
-      terminal.dispose();
+      disposeTerminal(terminal);
     };
   }, [log]);
 
@@ -260,7 +263,7 @@ function LogViewer({ entry, onClose }: { entry: SessionLogEntry; onClose: () => 
       {error && <Notice className="mx-4 mb-2">{error}</Notice>}
       {!log && !error && <p className="mx-4 text-callout text-label-3">{t.logsLoading}…</p>}
 
-      <div className="min-h-0 flex-1 bg-bg px-3 pt-2 pb-3">
+      <div ref={schemeRef} className="min-h-0 flex-1 bg-bg px-3 pt-2 pb-3">
         <div ref={containerRef} className="h-full w-full" />
       </div>
     </Overlay>

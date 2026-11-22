@@ -191,12 +191,25 @@ jobs:
       # Installers: main, manual runs, and pull requests that change the
       # version or packaging (scripts/ci-changes.sh). A pull request without
       # them is still compiled, linted and tested on every platform above.
+      # Windows: the bundle goes through the same sign command as a release
+      # (scripts/windows-sign.ps1), with a throwaway self-signed certificate
+      # instead of Artifact Signing, so a broken signing setup shows up here
+      # and not on release day. The CI installer is therefore signed by an
+      # untrusted test certificate; that changes nothing for a smoke test.
+      - name: Test signing setup (Windows)
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.frontend.outcome == 'success' && env.INSTALLERS == 'true' }}
+        shell: pwsh
+        run: scripts/windows-sign.ps1 setup test
       - name: Bundle
         if: ${{ !cancelled() && steps.frontend.outcome == 'success' && env.INSTALLERS == 'true' }}
         env:
           # Public keys only (RELEASING.md, "Update feed"); empty means no update check.
           EASYSSH_UPDATE_PUBLIC_KEYS: ${{ vars.EASYSSH_UPDATE_PUBLIC_KEYS }}
-        run: npx tauri build 2>&1 | tee logs/bundle.log
+        run: npx tauri build ${TAURI_SIGN_CONFIG:+--config "$TAURI_SIGN_CONFIG"} 2>&1 | tee logs/bundle.log
+      - name: Check the test signatures (Windows)
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.frontend.outcome == 'success' && env.INSTALLERS == 'true' }}
+        shell: pwsh
+        run: scripts/windows-sign.ps1 verify
       - if: always()
         uses: actions/upload-artifact@v4
         with:

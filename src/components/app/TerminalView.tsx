@@ -68,10 +68,10 @@ import { shortcutHint } from "@/lib/shortcutTable";
 import { capabilityReply, mouseTrackingRequest, parseOsc52, sanitizeTitle, shouldOpenLink } from "@/lib/terminalInput";
 import { binaryInput } from "@/lib/terminalBytes";
 import { registerTerminal, terminalFor } from "@/lib/terminals";
-import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
+import { disposeTerminal, liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { attachCommand, claimSlot, hostKeepSession, keepSessionName, reconnectDivider } from "@/lib/keepSession";
 import { exitTitle, RESIZE_DEBOUNCE_MS, TERMINAL_RESET, trailingDebounce, type SessionEnd } from "@/lib/terminalSession";
-import { searchDecorations, terminalFont, terminalTheme } from "@/lib/terminalTheme";
+import { searchDecorations, terminalFont, terminalTheme, useTerminalScheme } from "@/lib/terminalTheme";
 import { createTerminalTransfer } from "@/lib/terminalTransferFiles";
 import { cn } from "@/lib/utils";
 
@@ -112,6 +112,7 @@ export function TerminalView({
   broadcast = null,
   environment = null,
   hostName = "",
+  split,
 }: {
   tabKey: string;
   hostId: string | null;
@@ -126,9 +127,15 @@ export function TerminalView({
   onSession?: (key: string, sessionId: string) => void;
   /** Set while this pane receives broadcast input; shows the indicator. */
   broadcast?: BroadcastScope;
+  /** One of several panes in a tab: "active" gets an accent border, "inactive"
+   *  is dimmed (Windows Terminal, iTerm2). The environment then shows on the
+   *  tab only, so its edge is never taken for the active pane. */
+  split?: "active" | "inactive";
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // The pane around the terminal takes the terminal's scheme (dark by default).
+  useTerminalScheme(wrapperRef);
   const controllerRef = useRef<CompletionController | null>(null);
   const [completion, setCompletion] = useState<{ view: ViewState; placement: PopupPlacement } | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -715,6 +722,13 @@ export function TerminalView({
       paste: (text) => terminal.paste(text),
       connected: () => sessionRef.current !== null,
       focus: () => terminal.focus(),
+      busy() {
+        if (!sessionRef.current) return null;
+        const command = integrationRef.current?.running();
+        if (command) return command.length > 40 ? `${command.slice(0, 39)}…` : command;
+        // vim, htop, less, tmux: the alternate screen means a program owns the terminal.
+        return terminal.buffer.active.type === "alternate" ? "" : null;
+      },
       close() {
         closing = true;
         stopTimer();
@@ -803,7 +817,7 @@ export function TerminalView({
       sessionRef.current?.detach();
       sessionRef.current = null;
       e2eTerminals?.delete(tabKey);
-      terminal.dispose();
+      disposeTerminal(terminal);
       terminalRef.current = null;
     };
   }, [hostId, onSession, report, sessionId, tabKey, transfer, updateMeta]);
@@ -940,7 +954,11 @@ export function TerminalView({
         style={{ right: askOpen ? ASK_AI_WIDTH : 0 }}
       />
       {broadcast && <BroadcastBadge scope={broadcast} />}
-      {tone && (
+      {split === "inactive" && <div aria-hidden data-pane-dim className="pointer-events-none absolute inset-0 z-sticky bg-bg/40" />}
+      {split === "active" && (
+        <div aria-hidden data-pane-active className="pointer-events-none absolute inset-0 z-sticky ring-2 ring-(--accent) ring-inset" />
+      )}
+      {tone && !split && (
         <div
           role="img"
           aria-label={t.envBadgeAria.replace("{env}", environmentName(environment!))}

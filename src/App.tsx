@@ -49,6 +49,7 @@ import {
   type SshStatus,
 } from "@/lib/backend";
 import { adhocId, formatTarget, parseAdhocId, type Target } from "@/lib/quickConnect";
+import { CloseGuardBridge, confirmClose } from "@/components/app/closeGuard";
 import { BroadcastGuardBridge, guardedToggleGlobal, guardedToggleTab } from "@/components/app/useBroadcastGuard";
 import { participants, scopeOf, setBroadcastScope, setPanes, setProductionTabs, useBroadcast } from "@/lib/broadcast";
 import { environmentsById, isProduction } from "@/lib/environment";
@@ -247,16 +248,23 @@ export function App() {
   const workspaceWidth = useElementWidth(workspaceRef);
   const monitorLayout = useMonitorLayout();
 
-  const reload = useCallback(() => {
-    loadHosts()
-      .then((next) => {
-        setSnapshot(next);
-        setLoadError(null);
-      })
-      .catch((reason) => setLoadError(String(reason)));
-  }, []);
+  const [revealHost, setRevealHost] = useState<{ id: string } | null>(null);
+  const reload = useCallback(
+    () =>
+      loadHosts()
+        .then((next) => {
+          setSnapshot(next);
+          setLoadError(null);
+          return next;
+        })
+        .catch((reason) => {
+          setLoadError(String(reason));
+          return null;
+        }),
+    [],
+  );
 
-  useEffect(reload, [reload]);
+  useEffect(() => void reload(), [reload]);
   // Hosts saved or deleted from another window refresh this list too.
   useEffect(() => onHostsChanged(reload), [reload]);
 
@@ -459,7 +467,7 @@ export function App() {
   }, [viewTabs]);
   const broadcast = useBroadcast();
 
-  const closeTab = useCallback(
+  const dropTab = useCallback(
     (key: string) => {
       const closing = tabs.find((tab) => tab.key === key);
       for (const pane of closing ? leaves(closing.panes.tree) : []) {
@@ -475,7 +483,7 @@ export function App() {
   );
 
   // The tab menu's "close other tabs" and "close tabs to the right": `keep` stays open and active.
-  const closeTabs = useCallback(
+  const dropTabs = useCallback(
     (keys: string[], keep: string) => {
       const closing = new Set(keys);
       for (const tab of tabs) {
@@ -489,6 +497,26 @@ export function App() {
       if (activeKey === null || closing.has(activeKey)) setActiveKey(keep);
     },
     [tabs, activeKey],
+  );
+
+  // A close that has to ask first finishes on the tabs as they are then.
+  const latestClose = useRef({ dropTab, dropTabs });
+  latestClose.current = { dropTab, dropTabs };
+  const panesOf = useCallback(
+    (keys: string[]) => tabs.filter((tab) => keys.includes(tab.key)).flatMap((tab) => leaves(tab.panes.tree)),
+    [tabs],
+  );
+  const closeTab = useCallback(
+    (key: string) => {
+      void confirmClose(panesOf([key])).then((ok) => ok && latestClose.current.dropTab(key));
+    },
+    [panesOf],
+  );
+  const closeTabs = useCallback(
+    (keys: string[], keep: string) => {
+      void confirmClose(panesOf(keys)).then((ok) => ok && latestClose.current.dropTabs(keys, keep));
+    },
+    [panesOf],
   );
 
   // Stable so terminals do not restart their sessions when the app re-renders.
@@ -515,11 +543,11 @@ export function App() {
     [activeKey, updatePanes],
   );
 
-  const closePane = useCallback(
+  const dropPane = useCallback(
     (key: string, paneId: string) => {
       const tab = tabs.find((candidate) => candidate.key === key);
       if (!tab) return;
-      if (leaves(tab.panes.tree).length < 2) return closeTab(key);
+      if (leaves(tab.panes.tree).length < 2) return dropTab(key);
       terminalFor(paneId)?.close();
       sessionIds.current.delete(paneId);
       setTabs((current) =>
@@ -532,8 +560,13 @@ export function App() {
         }),
       );
     },
-    [tabs, closeTab],
+    [tabs, dropTab],
   );
+  const latestDropPane = useRef(dropPane);
+  latestDropPane.current = dropPane;
+  const closePane = useCallback((key: string, paneId: string) => {
+    void confirmClose([paneId]).then((ok) => ok && latestDropPane.current(key, paneId));
+  }, []);
 
   const setFilesOpen = useCallback((key: string, filesOpen: boolean) => {
     setTabs((current) => current.map((tab) => (tab.key === key && tab.hostId ? { ...tab, filesOpen, filesMounted: true } : tab)));
@@ -688,6 +721,7 @@ export function App() {
     <TooltipProvider delayDuration={500}>
     <ConfirmProvider>
       <BroadcastGuardBridge />
+      <CloseGuardBridge />
       <div className="relative flex h-full">
         <FirstRunPrompt />
         {!focused && (
@@ -739,6 +773,7 @@ export function App() {
             onImport={() => setImporting(true)}
             onNewSerial={startSerialHost}
             searchRef={searchRef}
+            reveal={revealHost}
           />
         ) : nav === "snippets" ? (
           <SnippetsPanel activeKey={activePane} />
@@ -864,7 +899,17 @@ export function App() {
               </div>
               );
             })}
-            {!activeTab && <EmptyWorkspace onOpenLocal={openLocal} status={status} />}
+            {!activeTab && <EmptyWorkspace
+                onOpenLocal={openLocal}
+                onNewHost={() => {
+                  setPrefill(undefined);
+                  setNewSerial(false);
+                  setEditing(null);
+                }}
+                onImport={() => setImporting(true)}
+                hostCount={snapshot.hosts.length}
+                status={status}
+              />}
           </div>
         </main>
         </div>
@@ -880,11 +925,17 @@ export function App() {
             setEditing(undefined);
             setPrefill(undefined);
           }}
-          onDone={() => {
+          onDone={(saved) => {
             setEditing(undefined);
             if (prefill && adhocTab) setSavedAdhoc((current) => new Set(current).add(adhocTab));
             setPrefill(undefined);
-            reload();
+            void reload().then((next) => {
+              if (!saved) return;
+              const host = next?.hosts.find((candidate) => candidate.id === saved.id);
+              // The new host is picked in the list, and opened when asked to.
+              setRevealHost({ id: saved.id });
+              if (saved.connect && host) openHost(host);
+            });
           }}
         />
       )}
