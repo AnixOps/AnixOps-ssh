@@ -163,8 +163,11 @@ function Test-Signed([string]$File) {
 }
 
 function Verify-Build {
-  $files = @(Get-Item "target\release\anixops-ssh.exe") + @(Get-ChildItem "target\release\bundle\nsis\*.exe")
-  if ($files.Count -lt 2) { throw "expected the app exe and an NSIS installer under target\release" }
+  # target\release\anixops-ssh.exe itself is not checked: Tauri signs it,
+  # packs it, and afterwards puts back the unpatched build. The copy inside
+  # the installer (below) is the one users run.
+  $files = @(Get-ChildItem "target\release\bundle\nsis\*.exe")
+  if ($files.Count -lt 1) { throw "no NSIS installer under target\release\bundle\nsis" }
   foreach ($file in $files) { Test-Signed $file.FullName }
 
   # The copy of the app inside the installer is the one users run.
