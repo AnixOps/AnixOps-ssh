@@ -398,9 +398,9 @@ async function revealHosts(page) {
 }
 
 /** Text of the active terminal's viewport (or the whole buffer). */
-function screen(page, { all = false, index = -1, normal = false } = {}) {
+function screen(page, { all = false, index = -1, normal = false, unwrap = false } = {}) {
   return page.evaluate(
-    ({ all, index, normal }) => {
+    ({ all, index, normal, unwrap }) => {
       const terminals = [...window.__anixopsE2eTerminals.values()];
       const terminal = terminals.at(index);
       if (!terminal) return "";
@@ -410,18 +410,25 @@ function screen(page, { all = false, index = -1, normal = false } = {}) {
       const start = all ? 0 : buffer.viewportY;
       const end = all ? buffer.length : buffer.viewportY + terminal.rows;
       const lines = [];
-      for (let y = start; y < end; y++) lines.push(buffer.getLine(y)?.translateToString(true) ?? "");
+      for (let y = start; y < end; y++) {
+        const line = buffer.getLine(y);
+        const text = line?.translateToString(true) ?? "";
+        // `unwrap`: a line the terminal wrapped because it was too narrow
+        // joins the one before it, as the program printed it.
+        if (unwrap && line?.isWrapped && lines.length) lines[lines.length - 1] += text;
+        else lines.push(text);
+      }
       return lines.join("\n");
     },
-    { all, index, normal },
+    { all, index, normal, unwrap },
   );
 }
 
-async function waitScreen(page, pattern, { timeout = 15000, all = true, index = -1, normal = false } = {}) {
+async function waitScreen(page, pattern, { timeout = 15000, all = true, index = -1, normal = false, unwrap = false } = {}) {
   const deadline = Date.now() + timeout;
   let text = "";
   while (Date.now() < deadline) {
-    text = await screen(page, { all, index, normal });
+    text = await screen(page, { all, index, normal, unwrap });
     if (pattern.test(text)) return text;
     await page.waitForTimeout(100);
   }
@@ -477,7 +484,8 @@ async function remoteOutput(page, command) {
   const token = Math.random().toString(36).slice(2, 8);
   await page.locator(".xterm-screen").last().click();
   await run(page, `clear; echo B${token}''; ${command}; echo E${token}''`);
-  const text = await waitScreen(page, new RegExp(`^E${token}$`, "m"));
+  // Unwrapped: a long line (a hash) in a narrow pane is still one line.
+  const text = await waitScreen(page, new RegExp(`^E${token}$`, "m"), { unwrap: true });
   const lines = text.split("\n");
   const start = lines.findIndex((line) => line === `B${token}`);
   const end = lines.findIndex((line) => line === `E${token}`);
