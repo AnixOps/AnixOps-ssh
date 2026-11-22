@@ -650,8 +650,17 @@ check("窗口", "focus-returns", "关掉命令面板、快捷键列表、设置�
     await page.waitForTimeout(300);
     const marker = `F${Math.random().toString(36).slice(2, 8)}`;
     await page.keyboard.type(`echo ${marker}\n`);
-    await waitScreen(page, new RegExp(`^${marker}$`, "m"), { timeout: 4000 }).catch(() => {
-      throw new Error(`${what}之后打的字没有进终端`);
+    await waitScreen(page, new RegExp(`^${marker}$`, "m"), { timeout: 4000 }).catch(async () => {
+      // Where the keyboard went, and what the terminal shows, for a CI failure.
+      const focus = await page.evaluate(() => {
+        const el = document.activeElement;
+        if (!el) return "none";
+        const label = el.getAttribute("aria-label") || el.textContent?.trim().slice(0, 20) || "";
+        return `${el.tagName.toLowerCase()}${el.className ? `.${String(el.className).split(" ")[0]}` : ""} "${label}"`;
+      });
+      const shown = (await screen(page)).split("\n").filter((line) => line.trim()).slice(-3).join(" | ");
+      await page.screenshot({ path: join(outDir, "focus-returns-fail.png") });
+      throw new Error(`${what}之后打的字没有进终端（焦点在 ${focus}；屏幕末尾：${shown}）`);
     });
   }
   return steps.map(([what]) => what).join("、") + "之后打字都进了终端";
