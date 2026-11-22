@@ -42,8 +42,12 @@ jobs:
       - name: Create draft release
         env:
           MAC_SIGNED: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          WINDOWS_SIGNED: ${{ secrets.AZURE_CLIENT_SECRET != '' && vars.ARTIFACT_SIGNING_ACCOUNT != '' }}
         run: |
-          notes="Windows 安装包未签名，首次运行时在 SmartScreen 中选择“更多信息 → 仍要运行”。"
+          notes=""
+          if [ "$WINDOWS_SIGNED" != "true" ]; then
+            notes="Windows 安装包未签名，首次运行时在 SmartScreen 中选择“更多信息 → 仍要运行”；开启了“智能应用控制”的 Windows 11 会直接拦截，暂时无法安装。"
+          fi
           if [ "$MAC_SIGNED" != "true" ]; then
             notes="$notes macOS 版本未签名，首次打开请右键选择“打开”。"
           fi
@@ -80,6 +84,43 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
+      # Windows builds are signed with Azure Artifact Signing when its secrets
+      # and variables exist (docs/signing.md, Windows): the app exe,
+      # the NSIS installer and its uninstaller, all timestamped. Without them
+      # the build is left unsigned, with a note in the job summary.
+      - name: Is Windows signing configured
+        id: winsign
+        if: runner.os == 'Windows'
+        env:
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+        run: |
+          if [ -n "$AZURE_CLIENT_SECRET" ] && [ -n "$ARTIFACT_SIGNING_ACCOUNT" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Windows signing is not configured: the installer is unsigned and Smart App Control will block it (docs/signing.md, Windows)."
+            echo "### Windows: built unsigned (AZURE_CLIENT_SECRET or ARTIFACT_SIGNING_ACCOUNT is not set)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      # The signing client runs on .NET (8 per Microsoft Learn, 10 per its
+      # NuGet page); both are installed so either works.
+      - uses: actions/setup-dotnet@v4
+        if: steps.winsign.outputs.signed == 'true'
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Set up Windows signing
+        if: steps.winsign.outputs.signed == 'true'
+        shell: pwsh
+        env:
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: scripts/windows-sign.ps1 setup artifact
       # macOS builds are signed and notarized when the Apple secrets exist
       # (docs/signing.md); without them the build is left unsigned.
       - name: Build
@@ -95,7 +136,17 @@ jobs:
           EASYSSH_USAGE_URL: ${{ secrets.EASYSSH_USAGE_URL }}
           # Trusted update feed keys (public, comma separated); empty means the build does not check for updates.
           EASYSSH_UPDATE_PUBLIC_KEYS: ${{ vars.EASYSSH_UPDATE_PUBLIC_KEYS }}
+          # Read by scripts/windows-sign.ps1 when Tauri runs it; empty unless
+          # Windows signing is configured (the step above).
+          AZURE_TENANT_ID: ${{ steps.winsign.outputs.signed == 'true' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ steps.winsign.outputs.signed == 'true' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ steps.winsign.outputs.signed == 'true' && secrets.AZURE_CLIENT_SECRET || '' }}
         run: |
+          sign_config=()
+          if [ -n "${TAURI_SIGN_CONFIG:-}" ]; then
+            sign_config=(--config "$TAURI_SIGN_CONFIG")
+            echo "Signing the Windows build with Azure Artifact Signing"
+          fi
           if [ "$RUNNER_OS" = "macOS" ] && [ -n "$APPLE_CERTIFICATE" ]; then
             printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
             export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
@@ -105,7 +156,11 @@ jobs:
             unset APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8
           fi
           unset APPLE_API_KEY_P8
-          npx tauri build
+          npx tauri build "${sign_config[@]}"
+      - name: Check the Windows signatures
+        if: steps.winsign.outputs.signed == 'true'
+        shell: pwsh
+        run: scripts/windows-sign.ps1 verify
       - name: Upload installers to the draft release
         run: |
           mkdir upload

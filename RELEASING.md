@@ -28,8 +28,10 @@ Semantic versioning:
    For a patch release, the checks touching the fix are enough.
 3. Merge. `tag.yml` sees the new version on `main`, checks that the three
    files agree, tags the merge commit `vX.Y.Z` and runs `release.yml`, which
-   builds the installers on all three platforms, signs macOS when the Apple
-   secrets exist ([docs/signing.md](docs/signing.md)), builds the phone apps
+   builds the installers on all three platforms, signs Windows when the
+   Artifact Signing secrets exist and macOS when the Apple secrets exist
+   ([docs/signing.md](docs/signing.md); without them that platform ships
+   unsigned and the release still goes out), builds the phone apps
    when their secrets exist (see Mobile) and publishes the release. Nobody tags by hand. If a version's tag already exists, nothing
    happens; Actions → Tag release → Run workflow retries a missed run.
 4. Watch the issues for a few days. A regression gets a patch release, not a
