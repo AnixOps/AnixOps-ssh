@@ -89,6 +89,8 @@ pub struct Files {
     /// Records of partial files; without one a stopped transfer removes its
     /// temporary file as it always did.
     journal: Mutex<Option<Arc<Journal>>>,
+    /// How often a running transfer reports progress, in microseconds.
+    progress_every: AtomicU64,
 }
 
 impl Default for Files {
@@ -100,6 +102,7 @@ impl Default for Files {
             limit: AtomicUsize::new(easyssh_core::transfer::concurrent_transfers()),
             next: AtomicU64::new(0),
             journal: Mutex::new(None),
+            progress_every: AtomicU64::new(PROGRESS_EVERY.as_micros() as u64),
         }
     }
 }
@@ -476,6 +479,7 @@ impl Files {
         let queued = permits.is_some();
         let queued_pool = queue.is_some();
         let journal = lock(&self.journal).clone();
+        let every = Duration::from_micros(self.progress_every.load(Ordering::Relaxed));
         let task = tokio::spawn(async move {
             let _ = gate.await;
             let mut permit = immediate;
@@ -518,7 +522,7 @@ impl Files {
             let mut job = Job {
                 sftp: &task_entry.sftp,
                 session: &task_entry.lease,
-                progress: Progress::new(task_id.clone(), broadcast.clone()),
+                progress: Progress::new(task_id.clone(), broadcast.clone()).every(every),
                 current: task_current.clone(),
                 journal,
                 host: work.host.clone(),
@@ -590,6 +594,14 @@ impl Files {
         );
         let _ = go.send(());
         (id, queued)
+    }
+
+    /// How often transfers started from now on report `transfer.progress`
+    /// (150 ms unless changed). Tests that act at a given byte count set it
+    /// to zero so every chunk is reported, however fast the link is.
+    pub fn set_progress_interval(&self, every: Duration) {
+        self.progress_every
+            .store(every.as_micros() as u64, Ordering::Relaxed);
     }
 
     /// `transfer.cancel`. Unknown or finished transfers are ignored. The
@@ -906,9 +918,11 @@ impl Job<'_> {
     }
 }
 
-/// Reports bytes moved, at most every [`PROGRESS_EVERY`].
+/// Reports bytes moved, at most every [`PROGRESS_EVERY`] (or the interval
+/// set with [`Files::set_progress_interval`]).
 struct Progress {
     id: String,
+    every: Duration,
     broadcast: Events,
     total: Option<u64>,
     bytes: u64,
@@ -923,6 +937,7 @@ impl Progress {
     fn new(id: String, broadcast: Events) -> Self {
         Progress {
             id,
+            every: PROGRESS_EVERY,
             broadcast,
             total: None,
             bytes: 0,
@@ -930,6 +945,11 @@ impl Progress {
             last: Instant::now(),
             skipped: 0,
         }
+    }
+
+    fn every(mut self, every: Duration) -> Self {
+        self.every = every;
+        self
     }
 
     /// Tells the client how much there is to move, before the first byte.
@@ -964,7 +984,7 @@ impl Progress {
 
     fn add(&mut self, bytes: u64) {
         self.bytes += bytes;
-        if self.last.elapsed() >= PROGRESS_EVERY {
+        if self.last.elapsed() >= self.every {
             self.flush();
         }
     }
@@ -1679,6 +1699,32 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].1["bytes"], 20);
     }
+    #[test]
+    fn a_zero_interval_reports_every_chunk() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let seen = events.clone();
+        let mut progress = Progress::new(
+            "t".into(),
+            Arc::new(move |kind: &str, payload: Value| {
+                lock(&seen).push((kind.to_owned(), payload));
+                1
+            }),
+        )
+        .every(Duration::ZERO);
+        progress.add(10);
+        progress.add(10);
+        let events = lock(&events);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].1["bytes"], 20);
+    }
+
+    #[test]
+    fn the_interval_set_on_files_reaches_new_transfers() {
+        let files = Files::default();
+        files.set_progress_interval(Duration::ZERO);
+        assert_eq!(files.progress_every.load(Ordering::Relaxed), 0);
+    }
+
     #[test]
     fn progress_carries_the_total_once_known() {
         let events = Arc::new(Mutex::new(Vec::new()));
