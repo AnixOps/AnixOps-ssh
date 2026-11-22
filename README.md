@@ -312,5 +312,10 @@ pushed. See [AGENTS.md](AGENTS.md) for how changes are made,
 
 ## License
 
-MIT. The AnixOps mark, wordmark and icons are covered by the AnixOps brand
+MIT, except the sync server `crates/easyssh-server`, which is licensed
+AGPL-3.0-only (see [its LICENSE](crates/easyssh-server/LICENSE)). The desktop
+and mobile apps do not include the sync server: it is built and deployed on its
+own, and `easysshd` uses it only as a test dependency. Anyone who runs a
+modified sync server as a network service must offer its source to that
+service's users. The AnixOps mark, wordmark and icons are covered by the AnixOps brand
 license in the design repository.
