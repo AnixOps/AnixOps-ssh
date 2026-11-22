@@ -49,6 +49,7 @@ import {
   type SshStatus,
 } from "@/lib/backend";
 import { adhocId, formatTarget, parseAdhocId, type Target } from "@/lib/quickConnect";
+import { CloseGuardBridge, confirmClose } from "@/components/app/closeGuard";
 import { BroadcastGuardBridge, guardedToggleGlobal, guardedToggleTab } from "@/components/app/useBroadcastGuard";
 import { participants, scopeOf, setBroadcastScope, setPanes, setProductionTabs, useBroadcast } from "@/lib/broadcast";
 import { environmentsById, isProduction } from "@/lib/environment";
@@ -466,7 +467,7 @@ export function App() {
   }, [viewTabs]);
   const broadcast = useBroadcast();
 
-  const closeTab = useCallback(
+  const dropTab = useCallback(
     (key: string) => {
       const closing = tabs.find((tab) => tab.key === key);
       for (const pane of closing ? leaves(closing.panes.tree) : []) {
@@ -482,7 +483,7 @@ export function App() {
   );
 
   // The tab menu's "close other tabs" and "close tabs to the right": `keep` stays open and active.
-  const closeTabs = useCallback(
+  const dropTabs = useCallback(
     (keys: string[], keep: string) => {
       const closing = new Set(keys);
       for (const tab of tabs) {
@@ -496,6 +497,26 @@ export function App() {
       if (activeKey === null || closing.has(activeKey)) setActiveKey(keep);
     },
     [tabs, activeKey],
+  );
+
+  // A close that has to ask first finishes on the tabs as they are then.
+  const latestClose = useRef({ dropTab, dropTabs });
+  latestClose.current = { dropTab, dropTabs };
+  const panesOf = useCallback(
+    (keys: string[]) => tabs.filter((tab) => keys.includes(tab.key)).flatMap((tab) => leaves(tab.panes.tree)),
+    [tabs],
+  );
+  const closeTab = useCallback(
+    (key: string) => {
+      void confirmClose(panesOf([key])).then((ok) => ok && latestClose.current.dropTab(key));
+    },
+    [panesOf],
+  );
+  const closeTabs = useCallback(
+    (keys: string[], keep: string) => {
+      void confirmClose(panesOf(keys)).then((ok) => ok && latestClose.current.dropTabs(keys, keep));
+    },
+    [panesOf],
   );
 
   // Stable so terminals do not restart their sessions when the app re-renders.
@@ -522,11 +543,11 @@ export function App() {
     [activeKey, updatePanes],
   );
 
-  const closePane = useCallback(
+  const dropPane = useCallback(
     (key: string, paneId: string) => {
       const tab = tabs.find((candidate) => candidate.key === key);
       if (!tab) return;
-      if (leaves(tab.panes.tree).length < 2) return closeTab(key);
+      if (leaves(tab.panes.tree).length < 2) return dropTab(key);
       terminalFor(paneId)?.close();
       sessionIds.current.delete(paneId);
       setTabs((current) =>
@@ -539,8 +560,13 @@ export function App() {
         }),
       );
     },
-    [tabs, closeTab],
+    [tabs, dropTab],
   );
+  const latestDropPane = useRef(dropPane);
+  latestDropPane.current = dropPane;
+  const closePane = useCallback((key: string, paneId: string) => {
+    void confirmClose([paneId]).then((ok) => ok && latestDropPane.current(key, paneId));
+  }, []);
 
   const setFilesOpen = useCallback((key: string, filesOpen: boolean) => {
     setTabs((current) => current.map((tab) => (tab.key === key && tab.hostId ? { ...tab, filesOpen, filesMounted: true } : tab)));
@@ -695,6 +721,7 @@ export function App() {
     <TooltipProvider delayDuration={500}>
     <ConfirmProvider>
       <BroadcastGuardBridge />
+      <CloseGuardBridge />
       <div className="relative flex h-full">
         <FirstRunPrompt />
         {!focused && (

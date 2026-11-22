@@ -11,6 +11,7 @@ import { hostColor, isTauri, type Group, type Host } from "@/lib/backend";
 import { t } from "@/lib/i18n";
 import { findSavedHost, formatTarget, parseTarget, type Target } from "@/lib/quickConnect";
 import { shortcutHint } from "@/lib/shortcutTable";
+import { isMac } from "@/lib/shortcuts";
 import { onSettings, settings } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 
@@ -348,7 +349,7 @@ function HostRow({
   };
   const menu: MenuEntry[] = [
     // A second session to the same host, as every terminal's "new tab" gives.
-    ...(onOpenNew ? [{ key: "open-new", label: t.openInNewTab, icon: <SquarePlus />, onSelect: () => onOpenNew(host) }, "separator" as const] : []),
+    ...(onOpenNew ? [{ key: "open-new", label: t.openInNewTab, icon: <SquarePlus />, shortcut: isMac ? t.openNewClickMac : t.openNewClick, onSelect: () => onOpenNew(host) }, "separator" as const] : []),
     {
       key: "edit",
       label: saved ? t.editHost : t.saveToHosts,
@@ -398,7 +399,19 @@ function HostRow({
         data-host-id={host.id}
         tabIndex={tabStop ? 0 : -1}
         // Enter on a focused row arrives as a click without a pointer (detail 0).
-        onClick={(event) => (singleClick || event.detail === 0 ? onOpen(host) : onPick(host.id))}
+        onClick={(event) => {
+          // Ctrl/⌘-click opens another session beside an open one (as a
+          // browser opens a link in a new tab); so does a middle click.
+          if ((event.ctrlKey || event.metaKey) && onOpenNew) onOpenNew(host);
+          else if (singleClick || event.detail === 0) onOpen(host);
+          else onPick(host.id);
+        }}
+        onAuxClick={(event) => {
+          if (event.button !== 1 || !onOpenNew) return;
+          event.preventDefault();
+          onOpenNew(host);
+        }}
+        onMouseDown={(event) => event.button === 1 && event.preventDefault()}
         onDoubleClick={() => !singleClick && onOpen(host)}
         aria-current={selected ? "true" : undefined}
         aria-description={singleClick ? undefined : t.hostDoubleClickHint}

@@ -29,7 +29,7 @@ import {
 import { dynamicTypeScale, haptic, hostAttach, isCjkLanguage, updateMobilePrefs, useMobilePrefs } from "@/lib/mobilePrefs";
 import { onSettings, settings } from "@/lib/settings";
 import { capabilityReply } from "@/lib/terminalInput";
-import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
+import { disposeTerminal, liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { terminalFont, terminalTheme, useTerminalScheme } from "@/lib/terminalTheme";
 
 type Status =
@@ -367,7 +367,7 @@ export function MobileTerminal({
       controllerRef.current = null;
       sessionRef.current?.close();
       sessionRef.current = null;
-      terminal.dispose();
+      disposeTerminal(terminal);
       terminalRef.current = null;
       fitRef.current = null;
     };

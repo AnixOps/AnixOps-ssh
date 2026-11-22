@@ -1014,6 +1014,30 @@ check("全屏程序", "htop", "htop/btop：全屏 TUI 正确绘制（鼠标点�
   return "htop 正常绘制";
 });
 
+check("标签与分屏", "close-busy", "关掉还在运行程序的标签前先确认，空闲的直接关（iTerm2、macOS 终端）", async (page) => {
+  await openHost(page);
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await run(page, "less /etc/passwd");
+  await waitScreen(page, /root:/);
+  await page.keyboard.press(isMacRun ? "Meta+W" : "Control+Shift+W");
+  const dialog = page.getByRole("alertdialog");
+  await dialog.waitFor({ timeout: 2000 }).catch(() => { throw new Error("关闭运行 less 的标签没有确认"); });
+  const title = (await dialog.innerText()).split("\n")[0];
+  await dialog.getByRole("button", { name: "取消" }).click();
+  await dialog.waitFor({ state: "detached" });
+  if ((await page.getByRole("tab").count()) !== 1) throw new Error("取消后标签不见了");
+  await page.locator(".xterm-screen").last().click();
+  await page.keyboard.press("q");
+  await page.waitForTimeout(300);
+  await page.keyboard.press(isMacRun ? "Meta+W" : "Control+Shift+W");
+  await page.waitForTimeout(500);
+  if (await dialog.count()) throw new Error("空闲的 shell 关闭时也要确认");
+  if (await page.getByRole("tab").count()) throw new Error("空闲标签没有关掉");
+  if (errors.length) throw new Error(`页面报错：${errors.join("；")}`);
+  return `运行 less 时询问「${title}」，空闲时直接关闭`;
+});
+
 check("窗口", "resize", "窗口变化后远端 stty size 跟着变", async (page) => {
   await openHost(page);
   await page.setViewportSize({ width: 900, height: 560 });
@@ -1637,6 +1661,22 @@ check("连接管理", "new-host-form", "新建主机：地址和凭据在前、�
   await page.locator(".xterm-screen").last().waitFor({ timeout: 5000 });
   await waitScreen(page, /keyuser@/, { timeout: 35000 });
   return "焦点在地址栏，凭据在名称前，高级项折叠；保存后新主机选中可见；保存并连接直接连上";
+});
+
+check("连接管理", "host-new-session", "Ctrl+单击或中键单击主机，在已打开的旁边再开一个会话（浏览器、Windows Terminal 复制标签）", async (page) => {
+  await openHost(page, "prod-web-01");
+  await revealHosts(page);
+  const row = page.getByRole("button", { name: /prod-web-01/ }).first();
+  await row.click({ modifiers: [isMacRun ? "Meta" : "Control"] });
+  await page.waitForFunction(() => window.__anixopsE2eTerminals.size >= 2, null, { timeout: 5000 }).catch(() => {
+    throw new Error("Ctrl+单击没有开新会话");
+  });
+  await revealHosts(page);
+  await page.getByRole("button", { name: /prod-web-01/ }).first().click({ button: "middle" });
+  await page.waitForFunction(() => window.__anixopsE2eTerminals.size >= 3, null, { timeout: 5000 }).catch(() => {
+    throw new Error("中键单击没有开新会话");
+  });
+  return `prod-web-01 共 ${await page.getByRole("tab").count()} 个标签`;
 });
 
 check("连接管理", "quick-connect", "在主机搜索框输入 user@host:port 回车直接连接（Termius、MobaXterm、Tabby 的快速连接）", async (page) => {
