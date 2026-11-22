@@ -247,16 +247,23 @@ export function App() {
   const workspaceWidth = useElementWidth(workspaceRef);
   const monitorLayout = useMonitorLayout();
 
-  const reload = useCallback(() => {
-    loadHosts()
-      .then((next) => {
-        setSnapshot(next);
-        setLoadError(null);
-      })
-      .catch((reason) => setLoadError(String(reason)));
-  }, []);
+  const [revealHost, setRevealHost] = useState<{ id: string } | null>(null);
+  const reload = useCallback(
+    () =>
+      loadHosts()
+        .then((next) => {
+          setSnapshot(next);
+          setLoadError(null);
+          return next;
+        })
+        .catch((reason) => {
+          setLoadError(String(reason));
+          return null;
+        }),
+    [],
+  );
 
-  useEffect(reload, [reload]);
+  useEffect(() => void reload(), [reload]);
   // Hosts saved or deleted from another window refresh this list too.
   useEffect(() => onHostsChanged(reload), [reload]);
 
@@ -739,6 +746,7 @@ export function App() {
             onImport={() => setImporting(true)}
             onNewSerial={startSerialHost}
             searchRef={searchRef}
+            reveal={revealHost}
           />
         ) : nav === "snippets" ? (
           <SnippetsPanel activeKey={activePane} />
@@ -890,11 +898,17 @@ export function App() {
             setEditing(undefined);
             setPrefill(undefined);
           }}
-          onDone={() => {
+          onDone={(saved) => {
             setEditing(undefined);
             if (prefill && adhocTab) setSavedAdhoc((current) => new Set(current).add(adhocTab));
             setPrefill(undefined);
-            reload();
+            void reload().then((next) => {
+              if (!saved) return;
+              const host = next?.hosts.find((candidate) => candidate.id === saved.id);
+              // The new host is picked in the list, and opened when asked to.
+              setRevealHost({ id: saved.id });
+              if (saved.connect && host) openHost(host);
+            });
           }}
         />
       )}

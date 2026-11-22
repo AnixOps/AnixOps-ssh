@@ -1562,6 +1562,39 @@ check("连接管理", "host-double-click", "单击主机只选中，双击或回
   return "单击选中不连接，回车连接；双击连接见其余各项";
 });
 
+check("连接管理", "new-host-form", "新建主机：地址和凭据在前、其余收进“高级”，保存后在列表里选中新主机，“保存并连接”直接打开（Termius）", async (page) => {
+  const newHost = async () => {
+    await page.getByRole("button", { name: "添加主机" }).click();
+    await page.getByRole("menuitem", { name: /新建主机/ }).click();
+    return page.getByRole("dialog");
+  };
+  let dialog = await newHost();
+  const address = dialog.getByLabel("主机", { exact: true });
+  if (!(await address.evaluate((el) => el === document.activeElement))) throw new Error("打开后焦点不在地址栏");
+  const top = async (locator) => (await locator.first().boundingBox())?.y ?? Infinity;
+  if ((await top(dialog.getByText("已保存的凭据"))) > (await top(dialog.getByLabel("名称"))))
+    throw new Error("凭据排在名称后面");
+  if (await dialog.getByLabel("跳板机").isVisible()) throw new Error("跳板机等高级项没有折叠");
+  await address.fill("e2e-saved.example");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await dialog.waitFor({ state: "detached" });
+  const row = page.locator('[data-host-row][aria-description]', { hasText: "e2e-saved.example" }).first();
+  await row.waitFor({ timeout: 3000 });
+  const shown = await row.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const list = el.closest(".overflow-y-auto").getBoundingClientRect();
+    return box.top >= list.top && box.bottom <= list.bottom && el.className.includes("bg-fill-2");
+  });
+  if (!shown) throw new Error("保存后新主机没有在列表里选中并滚到可见");
+  dialog = await newHost();
+  await dialog.getByLabel("主机", { exact: true }).fill("e2e-connect.example");
+  await dialog.getByRole("button", { name: "保存并连接" }).click();
+  await dialog.waitFor({ state: "detached" });
+  await page.locator(".xterm-screen").last().waitFor({ timeout: 5000 });
+  await waitScreen(page, /keyuser@/, { timeout: 35000 });
+  return "焦点在地址栏，凭据在名称前，高级项折叠；保存后新主机选中可见；保存并连接直接连上";
+});
+
 check("连接管理", "quick-connect", "在主机搜索框输入 user@host:port 回车直接连接（Termius、MobaXterm、Tabby 的快速连接）", async (page) => {
   const search = page.getByRole("textbox", { name: "搜索主机" });
   await search.fill("keyuser@10.20.30.40:2200");

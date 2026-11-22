@@ -1,5 +1,5 @@
 import { Cable, ChevronRight, Copy, CopyPlus, Download, Pencil, Plus, Search, Server, Star, Trash2, SquarePlus, Zap } from "lucide-react";
-import { useEffect, useMemo, useState, type KeyboardEvent, type Ref } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
 import { Input } from "@/components/ui/input";
@@ -52,6 +52,7 @@ export function HostList({
   onImport,
   onNewSerial,
   searchRef,
+  reveal,
 }: {
   hosts: Host[];
   groups: Group[];
@@ -70,6 +71,8 @@ export function HostList({
   onImport: () => void;
   onNewSerial: () => void;
   searchRef: Ref<HTMLInputElement>;
+  /** A host just saved: picked and scrolled into view, so the save shows (F1). */
+  reveal?: { id: string } | null;
 }) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -110,6 +113,27 @@ export function HostList({
   const [singleClick, setSingleClick] = useState(() => settings().hostsSingleClick);
   useEffect(() => onSettings((next) => setSingleClick(next.hostsSingleClick)), []);
   const [picked, setPicked] = useState<string | null>(null);
+
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const host = reveal && hosts.find((candidate) => candidate.id === reveal.id);
+    if (!host) return;
+    setPicked(host.id);
+    setQuery("");
+    setCollapsed((current) => {
+      const next = new Set(current);
+      next.delete(host.groupId ?? "ungrouped");
+      next.delete("ungrouped");
+      return next;
+    });
+    const frame = requestAnimationFrame(() =>
+      listRef.current
+        ?.querySelector<HTMLElement>(`[data-host-id="${CSS.escape(host.id)}"]`)
+        ?.scrollIntoView({ block: "nearest" }),
+    );
+    return () => cancelAnimationFrame(frame);
+    // Only a new reveal (or the reload that brings its host) moves the list.
+  }, [reveal, hosts]);
 
   // The list is one Tab stop; arrows move between rows (K7). The selected host, or
   // the first row, is the stop.
@@ -207,7 +231,7 @@ export function HostList({
         />
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2 pb-3" onKeyDown={moveRow}>
+      <div ref={listRef} className="flex-1 overflow-y-auto px-2 pb-3" onKeyDown={moveRow}>
         {hosts.length === 0 ? (
           <div className="px-3 pt-10 text-center">
             <Server className="mx-auto mb-3 size-12 text-label-3" strokeWidth={1.5} />
@@ -371,6 +395,7 @@ function HostRow({
       <button
         type="button"
         data-host-row
+        data-host-id={host.id}
         tabIndex={tabStop ? 0 : -1}
         // Enter on a focused row arrives as a click without a pointer (detail 0).
         onClick={(event) => (singleClick || event.detail === 0 ? onOpen(host) : onPick(host.id))}
