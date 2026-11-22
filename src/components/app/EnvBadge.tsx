@@ -12,10 +12,13 @@ import { cn } from "@/lib/utils";
 export function EnvBadge({
   environment,
   shrink = false,
+  iconOnly = false,
   className,
 }: {
   environment: HostEnvironment | null | undefined;
   shrink?: boolean;
+  /** Only the icon, in the environment's colour (tabs, where the name needs the room). */
+  iconOnly?: boolean;
   className?: string;
 }) {
   if (!environment) return null;
@@ -33,11 +36,12 @@ export function EnvBadge({
           tone === "danger" && "bg-danger-soft text-danger",
           tone === "warning" && "bg-warning-soft text-warning",
           tone === null && "bg-fill-1 text-label-2",
+          iconOnly && "bg-transparent px-0",
           className,
         )}
       >
         <Icon className="size-3.5" strokeWidth={1.5} aria-hidden />
-        <span className={shrink ? "hidden @2xl:inline" : undefined}>{name}</span>
+        {!iconOnly && <span className={shrink ? "hidden @2xl:inline" : undefined}>{name}</span>}
       </span>
     </Tooltip>
   );

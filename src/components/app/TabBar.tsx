@@ -1,5 +1,5 @@
-import { Activity, Bell, Cable, Columns2, FolderOpen, LoaderCircle, Minimize2, Plus, Radio, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
-import { useCallback, useRef, useState, type KeyboardEvent } from "react";
+import { Activity, Bell, Cable, ChevronDown, Columns2, FolderOpen, LoaderCircle, Minimize2, Plus, Radio, Rows2, SquareTerminal, Unplug, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ContextMenu, Menu, type MenuEntry } from "@/components/ui/menu";
 import type { SessionStatus } from "@/components/app/TerminalView";
@@ -104,6 +104,31 @@ export function TabBar({
     setRenaming(null);
     if (value !== null && value.trim()) onRename(key, value.trim());
   };
+  // The strip scrolls sideways when the tabs do not fit: the active tab is
+  // always scrolled into view, a mouse wheel scrolls the strip, and a menu
+  // at its end lists every tab (as in Windows Terminal and browsers).
+  const stripRef = useRef<HTMLDivElement>(null);
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const measure = () => setOverflowing(strip.scrollWidth > strip.clientWidth + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(strip);
+    for (const child of Array.from(strip.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [tabs.length]);
+  useEffect(() => {
+    if (!activeKey) return;
+    // After the tab's appear animation has given it its width.
+    const frame = window.requestAnimationFrame(() =>
+      stripRef.current
+        ?.querySelector<HTMLElement>(`[data-tab="${CSS.escape(activeKey)}"]`)
+        ?.scrollIntoView({ block: "nearest", inline: "nearest" }),
+    );
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeKey, tabs.length, overflowing]);
   const menuIndex = menu ? tabs.findIndex((tab) => tab.key === menu.key) : -1;
   const menuItems: MenuEntry[] = menu
     ? [
@@ -142,7 +167,15 @@ export function TabBar({
     // A container: in a narrow window the labelled buttons drop their words
     // (icon, tooltip and accessible name stay) so the tabs keep their room.
     <div className="@container material-bar flex h-11 shrink-0 items-center gap-1 border-b px-2">
-      <div role="tablist" className="flex min-w-0 items-center gap-1 overflow-x-auto">
+      <div
+        ref={stripRef}
+        role="tablist"
+        className="flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        onWheel={(event) => {
+          // A vertical wheel scrolls the strip sideways.
+          if (event.deltaY !== 0 && Math.abs(event.deltaY) > Math.abs(event.deltaX)) event.currentTarget.scrollLeft += event.deltaY;
+        }}
+      >
         <AnimatePresence initial={false}>
         {tabs.map((tab) => {
           const active = tab.key === activeKey;
@@ -151,8 +184,13 @@ export function TabBar({
               key={tab.key}
               {...appear}
               className={cn(
-                "group relative flex h-8 max-w-52 shrink-0 items-center rounded-sm",
+                // Tabs share the strip down to a width that still shows the name;
+                // past that the strip scrolls.
+                "group relative flex h-8 min-w-36 max-w-52 shrink items-center rounded-sm",
                 active ? "bg-bg-elevated text-label-1 shadow-1 ring-1 ring-separator" : "text-label-2 hover:bg-fill-1",
+                // Production is marked by a line along the tab's top edge (and
+                // its icon), never by a badge that takes the name's room.
+                tab.environment === "production" && "before:absolute before:inset-x-2 before:top-0 before:h-0.5 before:rounded-full before:bg-(--danger)",
               )}
             >
               <button
@@ -191,7 +229,7 @@ export function TabBar({
                 {renaming !== tab.key && (
                   <span
                     className="truncate"
-                    title={tab.status.remoteTitle ? `${tab.title} — ${tab.status.remoteTitle}` : tab.title}
+                    title={tabTooltip(tab)}
                     onDoubleClick={() => setRenaming(tab.key)}
                   >
                     {tab.title}
@@ -200,10 +238,7 @@ export function TabBar({
                 {tab.status.bell && !active && (
                   <Bell className="size-3.5 shrink-0 text-warning" strokeWidth={1.5} aria-label={t.bell} />
                 )}
-                {tab.hostId !== null && tab.status.state === "connected" && tab.status.engine && (
-                  <EngineBadge engine={tab.status.engine.engine} reason={tab.status.engine.reason} />
-                )}
-                {tab.environment && <EnvBadge environment={tab.environment} shrink />}
+                {tab.environment && <EnvBadge environment={tab.environment} iconOnly />}
                 {scopeOf(broadcast, tab.key) && (
                   <Radio className="size-4 shrink-0 text-warning" strokeWidth={1.5} aria-label={t.broadcastingTab} />
                 )}
@@ -243,6 +278,23 @@ export function TabBar({
         })}
         </AnimatePresence>
       </div>
+      {overflowing && (
+        <Menu
+          label={t.allTabs}
+          icon={<ChevronDown />}
+          size="icon"
+          align="start"
+          items={tabs.map(
+            (tab): MenuEntry => ({
+              key: tab.key,
+              label: tab.title,
+              icon: <TabIcon tab={tab} />,
+              checked: tab.key === activeKey,
+              onSelect: () => onSelect(tab.key),
+            }),
+          )}
+        />
+      )}
       <NewTabMenu serialHosts={serialHosts} onNew={onNew} onOpenHost={onOpenHost} onNewSerial={onNewSerial} />
       {activeTab && (
         <div className="ml-auto flex items-center gap-0.5">
@@ -326,20 +378,16 @@ function NewTabMenu({
   return <Menu label={t.newTabMenu} icon={<Plus />} size="icon" align="start" items={items} />;
 }
 
-/** Which SSH engine runs the tab, with the reason on hover. */
-function EngineBadge({ engine, reason }: { engine: "openssh" | "russh"; reason: string | null }) {
-  const name = engine === "russh" ? t.engineBuiltin : t.engineOpenssh;
-  return (
-    <Tooltip label={reason ? `${name}: ${reason}` : name}>
-      <span
-        role="img"
-        aria-label={`${t.sshEngineLabel}: ${name}`}
-        className="shrink-0 rounded-xs bg-fill-1 px-1 text-callout text-label-2"
-      >
-        {engine === "russh" ? t.engineBadgeBuiltin : t.engineBadgeOpenssh}
-      </span>
-    </Tooltip>
-  );
+/** The tab's hover text: its name, the remote program's title, and which SSH
+ *  engine runs it (with the reason when it is not the built-in one). */
+function tabTooltip(tab: Tab): string {
+  const lines = [tab.status.remoteTitle ? `${tab.title} — ${tab.status.remoteTitle}` : tab.title];
+  const engine = tab.hostId !== null && tab.status.state === "connected" ? tab.status.engine : null;
+  if (engine) {
+    const name = engine.engine === "russh" ? t.engineBuiltin : t.engineOpenssh;
+    lines.push(`${t.sshEngineLabel}: ${engine.reason ? `${name} (${engine.reason})` : name}`);
+  }
+  return lines.join("\n");
 }
 
 /** Status is shown as an icon with an accessible label, never colour alone. */
