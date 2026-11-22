@@ -91,12 +91,10 @@ export function PaneArea({
               sessionId={restored[id]}
               active={active && focused && Boolean(rect)}
               broadcast={scope}
+              split={Object.keys(shown.panes).length > 1 ? (focused ? "active" : "inactive") : undefined}
               onStatus={onStatus}
               onSession={onSession}
             />
-            {many && focused && (
-              <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-sticky h-0.5 bg-(--accent)" />
-            )}
             {many && (
               <div
                 className={cn(

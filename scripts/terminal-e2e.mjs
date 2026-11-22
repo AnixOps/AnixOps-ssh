@@ -1075,6 +1075,29 @@ check("标签与分屏", "split", "Ctrl+Shift+D 分屏后新窗格也连上同�
   return "两个窗格各有一个会话";
 });
 
+check("标签与分屏", "split-active-pane", "分屏时一眼看出活动窗格：活动窗格有边框、其余变暗，生产标记只在标签上（Windows Terminal、iTerm2）", async (page) => {
+  await openHost(page, "prod-db");
+  if (!(await page.locator("[data-env-edge]").count())) throw new Error("单窗格时没有生产色条");
+  await page.keyboard.press(isMacRun ? "Meta+D" : "Control+Shift+D");
+  await page.waitForFunction(() => window.__anixopsE2eTerminals.size >= 2);
+  await waitScreen(page, /keyuser@/, { index: -1 });
+  const counts = async () => ({
+    active: await page.locator("[data-pane-active]").count(),
+    dim: await page.locator("[data-pane-dim]").count(),
+    edge: await page.locator("[data-env-edge]").count(),
+  });
+  let now = await counts();
+  if (now.active !== 1 || now.dim !== 1) throw new Error(`活动边框 ${now.active} 个，变暗 ${now.dim} 个`);
+  if (now.edge) throw new Error("分屏时窗格上仍有生产色条，和活动窗格混在一起");
+  const first = page.locator(".group\\/pane").first();
+  const firstWasActive = (await first.locator("[data-pane-active]").count()) === 1;
+  const other = firstWasActive ? page.locator(".group\\/pane").nth(1) : first;
+  await other.locator(".xterm-screen").click();
+  await page.waitForTimeout(200);
+  if (!(await other.locator("[data-pane-active]").count())) throw new Error("点另一个窗格后活动边框没有跟过去");
+  return "活动窗格有边框、另一个变暗，点哪个哪个变活动；生产标记只在标签";
+});
+
 check("标签与分屏", "tab-switch", "Ctrl+Tab / Ctrl+Shift+Tab 切换标签", async (page) => {
   await openHost(page, "prod-web-01");
   await openHost(page, "staging-api");
