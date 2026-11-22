@@ -383,7 +383,8 @@ async function newPage({ width = 1200, height = 760, query = "" } = {}) {
 /** Opens a host from the list; the bridge connects it to the e2e server. */
 async function openHost(page, name = "prod-web-01") {
   await revealHosts(page);
-  await page.getByRole("button", { name: new RegExp(name) }).first().click();
+  // A click picks a host; a double-click connects (Termius, FinalShell).
+  await page.getByRole("button", { name: new RegExp(name) }).first().dblclick();
   await page.locator(".xterm-screen").last().waitFor();
   // The engine gives a channel that does not open 15 s before it reconnects;
   // the session-open times are reported at the end.
@@ -649,8 +650,17 @@ check("窗口", "focus-returns", "关掉命令面板、快捷键列表、设置�
     await page.waitForTimeout(300);
     const marker = `F${Math.random().toString(36).slice(2, 8)}`;
     await page.keyboard.type(`echo ${marker}\n`);
-    await waitScreen(page, new RegExp(`^${marker}$`, "m"), { timeout: 4000 }).catch(() => {
-      throw new Error(`${what}之后打的字没有进终端`);
+    await waitScreen(page, new RegExp(`^${marker}$`, "m"), { timeout: 4000 }).catch(async () => {
+      // Where the keyboard went, and what the terminal shows, for a CI failure.
+      const focus = await page.evaluate(() => {
+        const el = document.activeElement;
+        if (!el) return "none";
+        const label = el.getAttribute("aria-label") || el.textContent?.trim().slice(0, 20) || "";
+        return `${el.tagName.toLowerCase()}${el.className ? `.${String(el.className).split(" ")[0]}` : ""} "${label}"`;
+      });
+      const shown = (await screen(page)).split("\n").filter((line) => line.trim()).slice(-3).join(" | ");
+      await page.screenshot({ path: join(outDir, "focus-returns-fail.png") });
+      throw new Error(`${what}之后打的字没有进终端（焦点在 ${focus}；屏幕末尾：${shown}）`);
     });
   }
   return steps.map(([what]) => what).join("、") + "之后打字都进了终端";
@@ -1540,6 +1550,17 @@ check("文件", "sftp-hidden", "可以隐藏或显示以 . 开头的文件（Ter
 });
 
 // ---- Connections and forwards --------------------------------------------
+
+check("连接管理", "host-double-click", "单击主机只选中，双击或回车才连接（Termius、FinalShell、MobaXterm）；设置里可改成单击连接", async (page) => {
+  const row = page.getByRole("button", { name: /prod-web-01/ }).first();
+  await row.click();
+  await page.waitForTimeout(800);
+  if (await page.getByRole("tab").count()) throw new Error("单击就连接了");
+  await row.press("Enter");
+  await page.locator(".xterm-screen").last().waitFor({ timeout: 5000 });
+  await waitScreen(page, /keyuser@/, { timeout: 35000 });
+  return "单击选中不连接，回车连接；双击连接见其余各项";
+});
 
 check("连接管理", "quick-connect", "在主机搜索框输入 user@host:port 回车直接连接（Termius、MobaXterm、Tabby 的快速连接）", async (page) => {
   const search = page.getByRole("textbox", { name: "搜索主机" });
