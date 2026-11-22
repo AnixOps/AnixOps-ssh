@@ -30,7 +30,7 @@ import { dynamicTypeScale, haptic, hostAttach, isCjkLanguage, updateMobilePrefs,
 import { onSettings, settings } from "@/lib/settings";
 import { capabilityReply } from "@/lib/terminalInput";
 import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
-import { terminalFont, terminalTheme } from "@/lib/terminalTheme";
+import { terminalFont, terminalTheme, useTerminalScheme } from "@/lib/terminalTheme";
 
 type Status =
   | { state: "connecting" }
@@ -80,6 +80,7 @@ export function MobileTerminal({
   prefsRef.current = prefs;
 
   const wrapperRef = useRef<HTMLDivElement>(null);
+  useTerminalScheme(wrapperRef);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -336,7 +337,10 @@ export function MobileTerminal({
     const scheme = window.matchMedia("(prefers-color-scheme: dark)");
     const updateTheme = () => (terminal.options.theme = terminalTheme());
     scheme.addEventListener("change", updateTheme);
-    const stopSettings = onSettings((next) => Object.assign(terminal.options, liveTerminalOptions(next, terminalFont())));
+    const stopSettings = onSettings((next) => {
+      Object.assign(terminal.options, liveTerminalOptions(next, terminalFont()));
+      updateTheme();
+    });
 
     if (writesRef.current) {
       (window as unknown as { __mobileDebug?: unknown }).__mobileDebug = {
@@ -507,7 +511,7 @@ export function MobileTerminal({
         </div>
       </header>
 
-      <div ref={wrapperRef} role="group" aria-label={t.mobileTerminal} className="relative min-h-0 flex-1">
+      <div ref={wrapperRef} role="group" aria-label={t.mobileTerminal} className="relative min-h-0 flex-1 bg-bg">
         <div ref={surfaceRef} data-terminal-surface className="touch-surface absolute inset-x-3 top-2 bottom-1" />
         {terminalRef.current && (
           <SelectionOverlay

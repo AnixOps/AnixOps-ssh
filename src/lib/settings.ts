@@ -5,6 +5,8 @@ import { readMirror, writeMirror, type LocaleSetting, type ThemeSetting } from "
 export type CursorStyle = "block" | "bar" | "underline";
 /** What a right-click in the terminal does: a menu, or paste (PuTTY style). */
 export type TerminalRightClick = "menu" | "paste";
+/** The terminal's colours: dark (default, whatever the app theme), light, or the app's. */
+export type TerminalScheme = "dark" | "light" | "app";
 
 export interface Settings {
   theme: ThemeSetting;
@@ -25,6 +27,7 @@ export interface Settings {
   /** Ask before a multi-line paste into a shell without bracketed paste. */
   terminalWarnMultilinePaste: boolean;
   terminalRightClick: TerminalRightClick;
+  terminalScheme: TerminalScheme;
   /** Selecting text copies it. */
   terminalCopyOnSelect: boolean;
   /** Windows Terminal keys: Ctrl+C copies a selection (and interrupts without
@@ -67,6 +70,7 @@ let current: Settings = {
   terminalCursorBlink: true,
   terminalWarnMultilinePaste: true,
   terminalRightClick: "menu",
+  terminalScheme: "dark",
   terminalCopyOnSelect: false,
   terminalCtrlCopyPaste: typeof navigator !== "undefined" && /Win/.test(navigator.platform),
   terminalOsc52: true,

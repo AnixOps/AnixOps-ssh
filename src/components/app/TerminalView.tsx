@@ -71,7 +71,7 @@ import { registerTerminal, terminalFor } from "@/lib/terminals";
 import { liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { attachCommand, claimSlot, hostKeepSession, keepSessionName, reconnectDivider } from "@/lib/keepSession";
 import { exitTitle, RESIZE_DEBOUNCE_MS, TERMINAL_RESET, trailingDebounce, type SessionEnd } from "@/lib/terminalSession";
-import { searchDecorations, terminalFont, terminalTheme } from "@/lib/terminalTheme";
+import { searchDecorations, terminalFont, terminalTheme, useTerminalScheme } from "@/lib/terminalTheme";
 import { createTerminalTransfer } from "@/lib/terminalTransferFiles";
 import { cn } from "@/lib/utils";
 
@@ -129,6 +129,8 @@ export function TerminalView({
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // The pane around the terminal takes the terminal's scheme (dark by default).
+  useTerminalScheme(wrapperRef);
   const controllerRef = useRef<CompletionController | null>(null);
   const [completion, setCompletion] = useState<{ view: ViewState; placement: PopupPlacement } | null>(null);
   const terminalRef = useRef<Terminal | null>(null);

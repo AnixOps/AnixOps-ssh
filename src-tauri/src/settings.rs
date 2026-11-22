@@ -42,6 +42,9 @@ pub struct Settings {
     /// What a right-click in the terminal does.
     #[serde(default)]
     terminal_right_click: RightClick,
+    /// The terminal's colours: dark (default), light, or the app's theme.
+    #[serde(default)]
+    terminal_scheme: TerminalScheme,
     /// Selecting text in the terminal copies it.
     #[serde(default)]
     terminal_copy_on_select: bool,
@@ -112,6 +115,18 @@ fn yes() -> bool {
     true
 }
 
+/// The terminal's colour scheme. Dark by default, whatever the app theme
+/// (AnixOps terminal.md: "otherwise default to dark"), as in iTerm2,
+/// Windows Terminal and Termius.
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum TerminalScheme {
+    #[default]
+    Dark,
+    Light,
+    App,
+}
+
 /// What a right-click in the terminal does.
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -175,6 +190,7 @@ struct TerminalBehaviour {
     cursor_blink: bool,
     warn_multiline_paste: bool,
     right_click: RightClick,
+    scheme: TerminalScheme,
     copy_on_select: bool,
     ctrl_copy_paste: bool,
     osc52: bool,
@@ -193,6 +209,7 @@ impl Default for TerminalBehaviour {
             cursor_blink: true,
             warn_multiline_paste: true,
             right_click: RightClick::Menu,
+            scheme: TerminalScheme::Dark,
             copy_on_select: false,
             ctrl_copy_paste: default_ctrl_copy_paste(),
             osc52: true,
@@ -232,6 +249,7 @@ pub fn settings_get() -> Result<Settings, String> {
         terminal_cursor_blink: behaviour.cursor_blink,
         terminal_warn_multiline_paste: behaviour.warn_multiline_paste,
         terminal_right_click: behaviour.right_click,
+        terminal_scheme: behaviour.scheme,
         terminal_copy_on_select: behaviour.copy_on_select,
         terminal_ctrl_copy_paste: behaviour.ctrl_copy_paste,
         terminal_osc52: behaviour.osc52,
@@ -288,6 +306,7 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
         cursor_blink: settings.terminal_cursor_blink,
         warn_multiline_paste: settings.terminal_warn_multiline_paste,
         right_click: settings.terminal_right_click,
+        scheme: settings.terminal_scheme,
         copy_on_select: settings.terminal_copy_on_select,
         ctrl_copy_paste: settings.terminal_ctrl_copy_paste,
         osc52: settings.terminal_osc52,
@@ -462,6 +481,10 @@ mod tests {
             serde_json::from_str(r#"{"cursor_style":"bar","cursor_blink":false}"#).unwrap();
         assert_eq!(bar.cursor_style, super::CursorStyle::Bar);
         assert!(!bar.cursor_blink);
+        // Settings saved before the scheme existed get the dark terminal.
+        assert_eq!(empty.scheme, super::TerminalScheme::Dark);
+        let app: TerminalBehaviour = serde_json::from_str(r#"{"scheme":"app"}"#).unwrap();
+        assert_eq!(app.scheme, super::TerminalScheme::App);
     }
 
     #[test]
