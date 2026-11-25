@@ -1,0 +1,618 @@
+[
+  {
+    "area": "连接",
+    "name": "connect",
+    "mainstream": "打开主机即得到远端 shell 提示符",
+    "ok": true,
+    "note": "TERM=xterm-256color COLORTERM= LANG=C.UTF-8",
+    "seconds": 1.655
+  },
+  {
+    "area": "显示",
+    "name": "cjk-emoji-width",
+    "mainstream": "中文、emoji 各占两格，后面的字符和光标对齐（wcwidth / Unicode 11+）",
+    "ok": true,
+    "note": "中/文/😀 各占 2 格，竖线与下一行第 9 列对齐",
+    "seconds": 1.048
+  },
+  {
+    "area": "显示",
+    "name": "truecolor",
+    "mainstream": "24 位真彩色（38;2;r;g;b）按原色显示",
+    "ok": true,
+    "note": "前景色 #ff6400 按 RGB 保存",
+    "seconds": 1.145
+  },
+  {
+    "area": "显示",
+    "name": "ansi-black-contrast",
+    "mainstream": "ANSI 黑色是深色，htop 表头、tmux 状态栏这类“彩色底黑字”清楚可读",
+    "ok": true,
+    "note": "黑色 #1c1c1e，彩色底上最低对比度 8.3:1，最低对比度保护 4.5",
+    "seconds": 1.422
+  },
+  {
+    "area": "窗口",
+    "name": "sidebar-toggle",
+    "mainstream": "打开会话后主机列表让位给终端（Termius）；点图标栏的主机图标浮在终端上，不改变终端宽度；Esc 收回且键盘回到终端；可固定在旁边",
+    "ok": true,
+    "note": "终端 117 列；浮出时不变，Esc 收回回到终端；固定后 76 列",
+    "seconds": 2.768
+  },
+  {
+    "area": "窗口",
+    "name": "shortcuts-everywhere",
+    "mainstream": "界面上显示的快捷键在哪里按都生效：终端外和终端内同一组（Windows Terminal）",
+    "ok": true,
+    "note": "首页提示 Ctrl+Shift+K；终端内外都打开命令面板，Ctrl+Shift+, 终端外也打开设置",
+    "seconds": 3.594
+  },
+  {
+    "area": "窗口",
+    "name": "focus-returns",
+    "mainstream": "关掉命令面板、快捷键列表、设置、文件面板、监控后，直接打字仍进终端（Windows Terminal、iTerm2）",
+    "ok": true,
+    "note": "命令面板、设置（齿轮 + Esc）、文件面板（按钮开关）、设置（打开过文件面板之后）、点标签之后打字都进了终端",
+    "seconds": 5.757
+  },
+  {
+    "area": "窗口",
+    "name": "focus-mode",
+    "mainstream": "突出终端：打开会话后侧栏让位，终端里 Ctrl+Shift+S 浮出主机列表；专注模式（F11，macOS ⌃⌘Z）只留标签和终端，重开后记住",
+    "ok": true,
+    "note": "会话打开后 117 列 → 专注模式 126 列；快捷键和“退出专注模式”按钮可用，重开后记住",
+    "seconds": 3.9
+  },
+  {
+    "area": "复制粘贴",
+    "name": "copy-shortcut",
+    "mainstream": "选中后 Ctrl+Shift+C（macOS ⌘C）复制",
+    "ok": true,
+    "note": "双击选中整词，快捷键复制",
+    "seconds": 0.995
+  },
+  {
+    "area": "复制粘贴",
+    "name": "ctrl-c-copies-selection",
+    "mainstream": "Windows Terminal：有选中时 Ctrl+C 复制（并清除选中），无选中时发送 ^C",
+    "ok": true,
+    "note": "有选中复制，无选中中断",
+    "seconds": 1.48
+  },
+  {
+    "area": "复制粘贴",
+    "name": "ctrl-v-pastes",
+    "mainstream": "Windows Terminal：Ctrl+V 粘贴；Ctrl+Shift+V 也粘贴",
+    "ok": true,
+    "note": "两种快捷键都把剪贴板内容送进远端",
+    "seconds": 1.013
+  },
+  {
+    "area": "复制粘贴",
+    "name": "multiline-paste",
+    "mainstream": "多行粘贴：shell 开了括号粘贴（bash 5.1+）时直接粘贴不执行；否则先确认",
+    "ok": true,
+    "note": "bash 括号粘贴：两行一起放进命令行，按回车才执行",
+    "seconds": 0.944
+  },
+  {
+    "area": "复制粘贴",
+    "name": "osc52",
+    "mainstream": "远端程序（tmux、vim、nvim）用 OSC 52 写本机剪贴板",
+    "ok": true,
+    "note": "剪贴板得到 from-osc52",
+    "seconds": 1.353
+  },
+  {
+    "area": "复制粘贴",
+    "name": "right-click-menu",
+    "mainstream": "右键：应用自己的菜单（复制/粘贴/清屏…），不是浏览器默认菜单",
+    "ok": true,
+    "note": "菜单项：复制、粘贴、全选、在终端中查找、清屏",
+    "seconds": 0.791
+  },
+  {
+    "area": "选择",
+    "name": "triple-click-line",
+    "mainstream": "三击选中整行",
+    "ok": true,
+    "note": "整行选中",
+    "seconds": 1.04
+  },
+  {
+    "area": "选择",
+    "name": "shift-click-extend",
+    "mainstream": "Shift+单击扩展选区",
+    "ok": true,
+    "note": "选区扩展到点击处",
+    "seconds": 1.026
+  },
+  {
+    "area": "选择",
+    "name": "select-in-mouse-app",
+    "mainstream": "程序开了鼠标（tmux/htop）时，Shift+拖动（macOS ⌥+拖动）仍可选文字",
+    "ok": true,
+    "note": "Shift+拖动选中 \"mouse-mod\"",
+    "seconds": 1.277
+  },
+  {
+    "area": "滚动",
+    "name": "wheel-scrollback",
+    "mainstream": "滚轮翻看历史输出",
+    "ok": true,
+    "note": "向上滚动 167 行",
+    "seconds": 1.358
+  },
+  {
+    "area": "滚动",
+    "name": "shift-pageup",
+    "mainstream": "Shift+PageUp / Shift+PageDown 按页翻历史",
+    "ok": true,
+    "note": "翻上一页（37 行）",
+    "seconds": 1.106
+  },
+  {
+    "area": "滚动",
+    "name": "wheel-in-less",
+    "mainstream": "less/man（备用屏、未开鼠标）中滚轮翻页而不是翻命令历史",
+    "ok": true,
+    "note": "滚动后首行为 51",
+    "seconds": 1.384
+  },
+  {
+    "area": "搜索",
+    "name": "find",
+    "mainstream": "Ctrl+Shift+F（⌘F）在输出中查找，显示匹配数，回车跳下一个",
+    "ok": true,
+    "note": "匹配计数 2/4",
+    "seconds": 1.64
+  },
+  {
+    "area": "链接",
+    "name": "url-click",
+    "mainstream": "普通 URL：Ctrl+单击（⌘+单击）用系统浏览器打开",
+    "ok": true,
+    "note": "打开 https://example.com/plain-link",
+    "seconds": 1.701
+  },
+  {
+    "area": "链接",
+    "name": "osc8-hyperlink",
+    "mainstream": "OSC 8 超链接（ls --hyperlink、gcc、systemd）：Ctrl+单击打开，不弹浏览器确认框",
+    "ok": true,
+    "note": "打开 https://example.com/osc8",
+    "seconds": 1.74
+  },
+  {
+    "area": "标题与提醒",
+    "name": "title",
+    "mainstream": "远端用 OSC 0/2 设置标题，标签上能看到",
+    "ok": true,
+    "note": "标签显示主机名，远端标题在悬停提示里（同 Termius；Windows Terminal 直接显示标题）",
+    "seconds": 1.631
+  },
+  {
+    "area": "输入",
+    "name": "ime-insert",
+    "mainstream": "输入法上屏的中文直接进入远端",
+    "ok": true,
+    "note": "组字后上屏的“你好世界”被远端回显",
+    "seconds": 1.154
+  },
+  {
+    "area": "输入",
+    "name": "keys",
+    "mainstream": "方向键、Home/End、Ctrl+←/→ 按词移动、Alt+. 取上一个参数",
+    "ok": true,
+    "note": "编辑结果正确",
+    "seconds": 1.035
+  },
+  {
+    "area": "全屏程序",
+    "name": "vim",
+    "mainstream": "vim：备用屏、颜色、退出后恢复原屏幕",
+    "ok": true,
+    "note": "进出 vim 正常，原屏幕恢复",
+    "seconds": 1.348
+  },
+  {
+    "area": "全屏程序",
+    "name": "tmux",
+    "mainstream": "tmux：状态栏、Ctrl+B % 分屏、窗口大小随终端变化",
+    "ok": true,
+    "note": "状态栏显示，分出两个窗格",
+    "seconds": 1.9
+  },
+  {
+    "area": "全屏程序",
+    "name": "htop",
+    "mainstream": "htop/btop：全屏 TUI 正确绘制（鼠标点击见另一线程）",
+    "ok": true,
+    "note": "htop 正常绘制",
+    "seconds": 1.691
+  },
+  {
+    "area": "标签与分屏",
+    "name": "close-busy",
+    "mainstream": "关掉还在运行程序的标签前先确认，空闲的直接关（iTerm2、macOS 终端）",
+    "ok": true,
+    "note": "运行 less 时询问「关闭正在运行程序的会话？」，空闲时直接关闭",
+    "seconds": 5.245
+  },
+  {
+    "area": "窗口",
+    "name": "resize",
+    "mainstream": "窗口变化后远端 stty size 跟着变",
+    "ok": true,
+    "note": "stty size = 27 74",
+    "seconds": 1.726
+  },
+  {
+    "area": "字体",
+    "name": "zoom",
+    "mainstream": "Ctrl+=/Ctrl+-/Ctrl+0（⌘+/⌘-/⌘0）放大、缩小、复位字号",
+    "ok": true,
+    "note": "字号 13 → 14 → 12 → 13",
+    "seconds": 1.401
+  },
+  {
+    "area": "字体",
+    "name": "ctrl-wheel-zoom",
+    "mainstream": "Ctrl+滚轮缩放字号（Windows Terminal、WezTerm）",
+    "ok": true,
+    "note": "字号 13 → 14",
+    "seconds": 0.841
+  },
+  {
+    "area": "字体",
+    "name": "ligatures",
+    "mainstream": "连字：Fira Code、Cascadia Code 等字体把 => != 显示成连字（Windows Terminal、WezTerm、iTerm2）",
+    "ok": true,
+    "note": "DOM 渲染，font-variant-ligatures: common-ligatures contextual",
+    "seconds": 1.317
+  },
+  {
+    "area": "标签与分屏",
+    "name": "split",
+    "mainstream": "Ctrl+Shift+D 分屏后新窗格也连上同一主机",
+    "ok": true,
+    "note": "两个窗格各有一个会话",
+    "seconds": 0.985
+  },
+  {
+    "area": "标签与分屏",
+    "name": "split-active-pane",
+    "mainstream": "分屏时一眼看出活动窗格：活动窗格有边框、其余变暗，生产标记只在标签上（Windows Terminal、iTerm2）",
+    "ok": true,
+    "note": "活动窗格有边框、另一个变暗，点哪个哪个变活动；生产标记只在标签",
+    "seconds": 1.238
+  },
+  {
+    "area": "标签与分屏",
+    "name": "tab-switch",
+    "mainstream": "Ctrl+Tab / Ctrl+Shift+Tab 切换标签",
+    "ok": true,
+    "note": "staging-api ⇄ prod-web-01",
+    "seconds": 1.725
+  },
+  {
+    "area": "标签与分屏",
+    "name": "duplicate-tab",
+    "mainstream": "标签右键“复制标签”再开一个同主机会话（Windows Terminal、Termius、MobaXterm）",
+    "ok": true,
+    "note": "两个标签，各自一个会话",
+    "seconds": 1.053
+  },
+  {
+    "area": "标签与分屏",
+    "name": "open-host-new-tab",
+    "mainstream": "同一主机再开一个标签（主机右键“在新标签中打开”）",
+    "ok": true,
+    "note": "同一主机两个标签",
+    "seconds": 1.286
+  },
+  {
+    "area": "标签与分屏",
+    "name": "tab-drag",
+    "mainstream": "拖动标签调整顺序",
+    "ok": true,
+    "note": "prod-web-01 | staging-api → staging-api | prod-web-01",
+    "seconds": 1.385
+  },
+  {
+    "area": "标签与分屏",
+    "name": "tab-rename",
+    "mainstream": "给标签改名：双击标签名或右键“重命名标签”（Windows Terminal、iTerm2、MobaXterm）",
+    "ok": true,
+    "note": "右键或双击改名，回车确认，Esc 取消",
+    "seconds": 1.08
+  },
+  {
+    "area": "会话",
+    "name": "login-refused-reconnect",
+    "mainstream": "服务器要求改用别的用户（云主机拒绝 root）：说明原因，点「重新连接」按钮能重连",
+    "ok": true,
+    "note": "提示改用 debian，按钮点得到，重连成功",
+    "seconds": 2.229
+  },
+  {
+    "area": "会话",
+    "name": "exit-reconnect",
+    "mainstream": "会话结束后显示原因，按回车重新连接",
+    "ok": true,
+    "note": "回车后重新连上，屏幕干净",
+    "seconds": 2.032
+  },
+  {
+    "area": "会话",
+    "name": "reconnect-divider",
+    "mainstream": "重新连接后出现一行淡色分隔线，说明这是新的 shell；首次连接没有",
+    "ok": true,
+    "note": "重连后有分隔线",
+    "seconds": 1.498
+  },
+  {
+    "area": "会话",
+    "name": "keep-session-tmux",
+    "mainstream": "保留会话（tmux）：断开后重连回到同一屏幕，之前的输出还在",
+    "ok": true,
+    "note": "重连回到同一个 tmux 会话，之前的输出还在",
+    "seconds": 2.304
+  },
+  {
+    "area": "性能",
+    "name": "bulk-output",
+    "mainstream": "大量输出（20 万行）不卡死，几秒内结束",
+    "ok": true,
+    "note": "2.8 秒",
+    "seconds": 3.286
+  },
+  {
+    "area": "文件",
+    "name": "sftp-browse",
+    "mainstream": "打开文件面板列出远端目录：文件夹在前，显示大小、时间、权限（Termius、FinalShell、MobaXterm）",
+    "ok": true,
+    "note": "sub — Nov 25 19:14 / .hidden 0 B Nov 25 19:14 / a.txt 6 B Nov 25 19:14 / big.bin 293 KB Nov 25 19:14",
+    "seconds": 2.216
+  },
+  {
+    "area": "文件",
+    "name": "sftp-navigate",
+    "mainstream": "双击文件夹进入，“上级目录”和 Backspace 返回（FinalShell、MobaXterm、WinSCP）",
+    "ok": true,
+    "note": "双击进入 sub，上级目录返回，Backspace 返回 /tmp",
+    "seconds": 2.301
+  },
+  {
+    "area": "文件",
+    "name": "sftp-upload",
+    "mainstream": "上传本地文件到当前目录，完成后列表里出现，内容一致",
+    "ok": true,
+    "note": "upload-1795634099262.txt（130 KB）上传后 md5 一致，列表自动刷新",
+    "seconds": 2.898
+  },
+  {
+    "area": "文件",
+    "name": "sftp-download",
+    "mainstream": "下载文件到本地“下载”文件夹，传输列表显示进度和完成",
+    "ok": true,
+    "note": "big.bin 300000 字节，传输列表显示完成",
+    "seconds": 2.248
+  },
+  {
+    "area": "文件",
+    "name": "sftp-mkdir-rename-delete",
+    "mainstream": "新建文件夹、F2 重命名、Delete 删除（带确认），远端随之改变",
+    "ok": true,
+    "note": "远端现在：big.bin made-here sub",
+    "seconds": 7.029
+  },
+  {
+    "area": "文件",
+    "name": "sftp-chmod",
+    "mainstream": "属性里改权限（八进制或勾选），远端 ls -l 随之改变",
+    "ok": true,
+    "note": "a.txt → 750",
+    "seconds": 7.538
+  },
+  {
+    "area": "文件",
+    "name": "sftp-multi-select",
+    "mainstream": "Ctrl+点击多选、Shift+点击连选，批量下载",
+    "ok": true,
+    "note": "Shift 连选 3 项，Ctrl 取消 1 项",
+    "seconds": 2.236
+  },
+  {
+    "area": "文件",
+    "name": "sftp-path",
+    "mainstream": "路径栏输入 ~、绝对路径、文件路径都能打开（FinalShell、WinSCP）",
+    "ok": true,
+    "note": "~ → /home/keyuser；文件路径打开其目录并选中",
+    "seconds": 2.26
+  },
+  {
+    "area": "文件",
+    "name": "sftp-follow-osc7",
+    "mainstream": "终端报告当前目录（OSC 7，fish、Fedora/Ubuntu 的 VTE 配置会发）时，文件面板可以跟随（Windows Terminal、WezTerm、iTerm2 都读 OSC 7）",
+    "ok": true,
+    "note": "开启跟随后，终端 cd sub，文件面板随之打开 sub",
+    "seconds": 3.016
+  },
+  {
+    "area": "文件",
+    "name": "sftp-follow-integration",
+    "mainstream": "没开 Shell 集成时点“跟随终端目录”，可以直接为这台主机开启；重连后跟随（FinalShell 默认就跟随）",
+    "ok": true,
+    "note": "确认开启 → 重连 → 终端 cd sub，文件面板随之打开 sub",
+    "seconds": 7.67
+  },
+  {
+    "area": "文件",
+    "name": "sftp-many-tabs",
+    "mainstream": "同一台服务器开 12 个标签后，文件面板和下载照常可用（OpenSSH 每个连接最多 10 个会话；Termius、FinalShell 不受影响）",
+    "ok": true,
+    "note": "12 个终端时文件面板照常打开、下载",
+    "seconds": 6.785
+  },
+  {
+    "area": "文件",
+    "name": "sftp-double-click",
+    "mainstream": "双击文件用编辑器打开，保存后传回（FinalShell、MobaXterm、WinSCP；设置里可改成下载）",
+    "ok": true,
+    "note": "a.txt 出现在“正在编辑”里",
+    "seconds": 2.098
+  },
+  {
+    "area": "文件",
+    "name": "sftp-double-click-binary",
+    "mainstream": "双击二进制文件（压缩包、程序、图片）直接下载，不用编辑器打开，免得卡住",
+    "ok": true,
+    "note": "big.bin 双击后下载完成，右键菜单没有“编辑”",
+    "seconds": 2.232
+  },
+  {
+    "area": "文件",
+    "name": "sftp-cancel",
+    "mainstream": "大文件传输可以取消，状态显示已取消",
+    "ok": true,
+    "note": "取消后显示“已取消”",
+    "seconds": 3.272
+  },
+  {
+    "area": "文件",
+    "name": "sftp-resume",
+    "mainstream": "传输中途取消后点“继续”，从断点接着传，最终文件与服务器一致",
+    "ok": true,
+    "note": "继续后 sha256 一致（行内显示了续传说明）",
+    "seconds": 16.443
+  },
+  {
+    "area": "文件",
+    "name": "sftp-verify",
+    "mainstream": "传输完成后可点“校验”比较本地与服务器的 SHA-256，显示一致",
+    "ok": true,
+    "note": "校验显示“SHA-256 一致”",
+    "seconds": 2.442
+  },
+  {
+    "area": "文件",
+    "name": "sftp-context-menu",
+    "mainstream": "在文件上右键弹出菜单：下载、重命名、属性、删除、复制路径（FinalShell、MobaXterm）",
+    "ok": true,
+    "note": "下载、用编辑器打开、复制路径、重命名、属性、删除",
+    "seconds": 2.36
+  },
+  {
+    "area": "文件",
+    "name": "sftp-sort",
+    "mainstream": "点列头按名称、大小、修改时间排序（FinalShell、MobaXterm、WinSCP）",
+    "ok": true,
+    "note": "sub / big.bin / a.txt / .hidden",
+    "seconds": 2.083
+  },
+  {
+    "area": "文件",
+    "name": "sftp-hidden",
+    "mainstream": "可以隐藏或显示以 . 开头的文件（Termius、MobaXterm、WinSCP）",
+    "ok": true,
+    "note": "开关切换 .hidden 的显示",
+    "seconds": 2.125
+  },
+  {
+    "area": "连接管理",
+    "name": "host-double-click",
+    "mainstream": "单击主机只选中，双击或回车才连接（Termius、FinalShell、MobaXterm）；设置里可改成单击连接",
+    "ok": true,
+    "note": "单击选中不连接，回车连接；双击连接见其余各项",
+    "seconds": 1.412
+  },
+  {
+    "area": "连接管理",
+    "name": "new-host-form",
+    "mainstream": "新建主机：地址和凭据在前、其余收进“高级”，保存后在列表里选中新主机，“保存并连接”直接打开（Termius）",
+    "ok": true,
+    "note": "焦点在地址栏，凭据在名称前，高级项折叠；保存后新主机选中可见；保存并连接直接连上",
+    "seconds": 9.454
+  },
+  {
+    "area": "连接管理",
+    "name": "host-new-session",
+    "mainstream": "Ctrl+单击或中键单击主机，在已打开的旁边再开一个会话（浏览器、Windows Terminal 复制标签）",
+    "ok": true,
+    "note": "prod-web-01 共 3 个标签",
+    "seconds": 1.664
+  },
+  {
+    "area": "连接管理",
+    "name": "quick-connect",
+    "mainstream": "在主机搜索框输入 user@host:port 回车直接连接（Termius、MobaXterm、Tabby 的快速连接）",
+    "ok": true,
+    "note": "回车后打开标签“keyuser@10.20.30.40:2200”并连上",
+    "seconds": 0.599
+  },
+  {
+    "area": "连接管理",
+    "name": "search-enter",
+    "mainstream": "搜索主机后回车连接第一个结果（Termius、Royal TSX）",
+    "ok": true,
+    "note": "回车打开 staging-api",
+    "seconds": 0.647
+  },
+  {
+    "area": "连接管理",
+    "name": "duplicate-host",
+    "mainstream": "主机右键“复制主机”，得到设置相同的新主机（Termius、MobaXterm、FinalShell）",
+    "ok": true,
+    "note": "新主机“prod-web-02 副本”，地址相同",
+    "seconds": 4.713
+  },
+  {
+    "area": "端口转发",
+    "name": "forward-local",
+    "mainstream": "本地转发（-L）：打开后本机端口直通服务器那边的目标，关掉后端口释放",
+    "ok": true,
+    "note": "127.0.0.1:34729 → 服务器 127.0.0.1:22，读到 SSH-2.0-OpenSSH_9.2p…；关掉后端口释放",
+    "seconds": 8.721
+  },
+  {
+    "area": "端口转发",
+    "name": "forward-socks",
+    "mainstream": "动态转发（-D，SOCKS5）：浏览器或工具经它访问服务器那边",
+    "ok": true,
+    "note": "SOCKS5 127.0.0.1:36143 → 服务器 127.0.0.1:22",
+    "seconds": 7.018
+  },
+  {
+    "area": "端口转发",
+    "name": "forward-remote",
+    "mainstream": "远程转发（-R）：服务器上的端口直通本机的服务",
+    "ok": true,
+    "note": "服务器 127.0.0.1:34581 → 本机 41485",
+    "seconds": 5.667
+  },
+  {
+    "area": "设置",
+    "name": "settings-search",
+    "mainstream": "设置可以搜索，只留下匹配的项（Windows Terminal、VS Code、Termius）",
+    "ok": true,
+    "note": "搜“连字”只剩连字；搜“终端”显示终端组 19 项；搜不到时提示",
+    "seconds": 0.559
+  },
+  {
+    "area": "设置",
+    "name": "settings-live",
+    "mainstream": "改字号立刻作用到已打开的终端，不用重连（Windows Terminal、iTerm2）",
+    "ok": true,
+    "note": "字号 13 → 15，会话不断",
+    "seconds": 1.339
+  },
+  {
+    "area": "设置",
+    "name": "terminal-scheme",
+    "mainstream": "浅色应用里终端默认深色，可改浅色或跟随应用，立刻生效（iTerm2、Windows Terminal、Termius）",
+    "ok": true,
+    "note": "默认 #000，跟随应用后 #fbfbfd",
+    "seconds": 1.402
+  }
+]

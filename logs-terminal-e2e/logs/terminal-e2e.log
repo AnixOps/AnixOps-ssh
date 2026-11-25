@@ -1,0 +1,79 @@
+PASS connect (1.7s) TERM=xterm-256color COLORTERM= LANG=C.UTF-8
+PASS cjk-emoji-width (1.0s) 中/文/😀 各占 2 格，竖线与下一行第 9 列对齐
+PASS truecolor (1.1s) 前景色 #ff6400 按 RGB 保存
+PASS ansi-black-contrast (1.4s) 黑色 #1c1c1e，彩色底上最低对比度 8.3:1，最低对比度保护 4.5
+PASS sidebar-toggle (2.8s) 终端 117 列；浮出时不变，Esc 收回回到终端；固定后 76 列
+PASS shortcuts-everywhere (3.6s) 首页提示 Ctrl+Shift+K；终端内外都打开命令面板，Ctrl+Shift+, 终端外也打开设置
+PASS focus-returns (5.8s) 命令面板、设置（齿轮 + Esc）、文件面板（按钮开关）、设置（打开过文件面板之后）、点标签之后打字都进了终端
+PASS focus-mode (3.9s) 会话打开后 117 列 → 专注模式 126 列；快捷键和“退出专注模式”按钮可用，重开后记住
+PASS copy-shortcut (1.0s) 双击选中整词，快捷键复制
+PASS ctrl-c-copies-selection (1.5s) 有选中复制，无选中中断
+PASS ctrl-v-pastes (1.0s) 两种快捷键都把剪贴板内容送进远端
+PASS multiline-paste (0.9s) bash 括号粘贴：两行一起放进命令行，按回车才执行
+PASS osc52 (1.4s) 剪贴板得到 from-osc52
+PASS right-click-menu (0.8s) 菜单项：复制、粘贴、全选、在终端中查找、清屏
+PASS triple-click-line (1.0s) 整行选中
+PASS shift-click-extend (1.0s) 选区扩展到点击处
+PASS select-in-mouse-app (1.3s) Shift+拖动选中 "mouse-mod"
+PASS wheel-scrollback (1.4s) 向上滚动 167 行
+PASS shift-pageup (1.1s) 翻上一页（37 行）
+PASS wheel-in-less (1.4s) 滚动后首行为 51
+PASS find (1.6s) 匹配计数 2/4
+PASS url-click (1.7s) 打开 https://example.com/plain-link
+PASS osc8-hyperlink (1.7s) 打开 https://example.com/osc8
+PASS title (1.6s) 标签显示主机名，远端标题在悬停提示里（同 Termius；Windows Terminal 直接显示标题）
+PASS ime-insert (1.2s) 组字后上屏的“你好世界”被远端回显
+PASS keys (1.0s) 编辑结果正确
+PASS vim (1.3s) 进出 vim 正常，原屏幕恢复
+PASS tmux (1.9s) 状态栏显示，分出两个窗格
+PASS htop (1.7s) htop 正常绘制
+PASS close-busy (5.2s) 运行 less 时询问「关闭正在运行程序的会话？」，空闲时直接关闭
+PASS resize (1.7s) stty size = 27 74
+PASS zoom (1.4s) 字号 13 → 14 → 12 → 13
+PASS ctrl-wheel-zoom (0.8s) 字号 13 → 14
+PASS ligatures (1.3s) DOM 渲染，font-variant-ligatures: common-ligatures contextual
+PASS split (1.0s) 两个窗格各有一个会话
+PASS split-active-pane (1.2s) 活动窗格有边框、另一个变暗，点哪个哪个变活动；生产标记只在标签
+PASS tab-switch (1.7s) staging-api ⇄ prod-web-01
+PASS duplicate-tab (1.1s) 两个标签，各自一个会话
+PASS open-host-new-tab (1.3s) 同一主机两个标签
+PASS tab-drag (1.4s) prod-web-01 | staging-api → staging-api | prod-web-01
+PASS tab-rename (1.1s) 右键或双击改名，回车确认，Esc 取消
+PASS login-refused-reconnect (2.2s) 提示改用 debian，按钮点得到，重连成功
+PASS exit-reconnect (2.0s) 回车后重新连上，屏幕干净
+PASS reconnect-divider (1.5s) 重连后有分隔线
+PASS keep-session-tmux (2.3s) 重连回到同一个 tmux 会话，之前的输出还在
+PASS bulk-output (3.3s) 2.8 秒
+PASS sftp-browse (2.2s) sub — Nov 25 19:14 / .hidden 0 B Nov 25 19:14 / a.txt 6 B Nov 25 19:14 / big.bin 293 KB Nov 25 19:14
+PASS sftp-navigate (2.3s) 双击进入 sub，上级目录返回，Backspace 返回 /tmp
+PASS sftp-upload (2.9s) upload-1795634099262.txt（130 KB）上传后 md5 一致，列表自动刷新
+PASS sftp-download (2.2s) big.bin 300000 字节，传输列表显示完成
+PASS sftp-mkdir-rename-delete (7.0s) 远端现在：big.bin made-here sub
+PASS sftp-chmod (7.5s) a.txt → 750
+PASS sftp-multi-select (2.2s) Shift 连选 3 项，Ctrl 取消 1 项
+PASS sftp-path (2.3s) ~ → /home/keyuser；文件路径打开其目录并选中
+PASS sftp-follow-osc7 (3.0s) 开启跟随后，终端 cd sub，文件面板随之打开 sub
+PASS sftp-follow-integration (7.7s) 确认开启 → 重连 → 终端 cd sub，文件面板随之打开 sub
+PASS sftp-many-tabs (6.8s) 12 个终端时文件面板照常打开、下载
+PASS sftp-double-click (2.1s) a.txt 出现在“正在编辑”里
+PASS sftp-double-click-binary (2.2s) big.bin 双击后下载完成，右键菜单没有“编辑”
+PASS sftp-cancel (3.3s) 取消后显示“已取消”
+PASS sftp-resume (16.4s) 继续后 sha256 一致（行内显示了续传说明）
+PASS sftp-verify (2.4s) 校验显示“SHA-256 一致”
+PASS sftp-context-menu (2.4s) 下载、用编辑器打开、复制路径、重命名、属性、删除
+PASS sftp-sort (2.1s) sub / big.bin / a.txt / .hidden
+PASS sftp-hidden (2.1s) 开关切换 .hidden 的显示
+PASS host-double-click (1.4s) 单击选中不连接，回车连接；双击连接见其余各项
+PASS new-host-form (9.5s) 焦点在地址栏，凭据在名称前，高级项折叠；保存后新主机选中可见；保存并连接直接连上
+PASS host-new-session (1.7s) prod-web-01 共 3 个标签
+PASS quick-connect (0.6s) 回车后打开标签“keyuser@10.20.30.40:2200”并连上
+PASS search-enter (0.6s) 回车打开 staging-api
+PASS duplicate-host (4.7s) 新主机“prod-web-02 副本”，地址相同
+PASS forward-local (8.7s) 127.0.0.1:34729 → 服务器 127.0.0.1:22，读到 SSH-2.0-OpenSSH_9.2p…；关掉后端口释放
+PASS forward-socks (7.0s) SOCKS5 127.0.0.1:36143 → 服务器 127.0.0.1:22
+PASS forward-remote (5.7s) 服务器 127.0.0.1:34581 → 本机 41485
+PASS settings-search (0.6s) 搜“连字”只剩连字；搜“终端”显示终端组 19 项；搜不到时提示
+PASS settings-live (1.3s) 字号 13 → 15，会话不断
+PASS terminal-scheme (1.4s) 默认 #000，跟随应用后 #fbfbfd
+session opens: 100, median 24 ms, slowest 175 ms, over 5 s: 0
+77/77 passed

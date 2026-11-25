@@ -1,0 +1,18 @@
+
+> anixops-ssh@2.5.0 screenshots
+> node scripts/screenshots.mjs http://localhost:4173 screenshots
+
+Layout problems (scripts/layout-audit.mjs):
+mobile-hostkey/light: text overlaps text: "Do not verify over this connection. Get " in The host key has changed: prod and "Paste the fingerprint you got" in The host key has changed: prod
+mobile-hostkey/light: text overlaps text: "The cloud provider's console or boot log" in The host key has changed: prod and "Only SHA256 fingerprints are compared." in The host key has changed: prod
+mobile-hostkey/light: text overlaps text: "The cloud provider's console or boot log" in The host key has changed: prod and "I verified the new fingerprint through a" in The host key has changed: prod
+mobile-hostkey/light: text overlaps text: "On the server's own console, run:" in The host key has changed: prod and "I verified the new fingerprint through a" in The host key has changed: prod
+mobile-hostkey/light: text overlaps text: "Common harmless reasons for a changed ke" in The host key has changed: prod and "I confirmed it: replace the key and conn" in The host key has changed: prod
+mobile-hostkey/dark: text overlaps text: "Do not verify over this connection. Get " in The host key has changed: prod and "Paste the fingerprint you got" in The host key has changed: prod
+mobile-hostkey/dark: text overlaps text: "The cloud provider's console or boot log" in The host key has changed: prod and "Only SHA256 fingerprints are compared." in The host key has changed: prod
+mobile-hostkey/dark: text overlaps text: "The cloud provider's console or boot log" in The host key has changed: prod and "I verified the new fingerprint through a" in The host key has changed: prod
+mobile-hostkey/dark: text overlaps text: "On the server's own console, run:" in The host key has changed: prod and "I verified the new fingerprint through a" in The host key has changed: prod
+mobile-hostkey/dark: text overlaps text: "Common harmless reasons for a changed ke" in The host key has changed: prod and "I confirmed it: replace the key and conn" in The host key has changed: prod
+mobile-hostkey/light: touch targets under 44 px: INPUT 13x13
+mobile-hostkey/dark: touch targets under 44 px: INPUT 13x13
+Saved 258 screenshots to screenshots
