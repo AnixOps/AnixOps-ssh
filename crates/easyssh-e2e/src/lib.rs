@@ -212,6 +212,13 @@ Host e2e-fish
     Port {TARGET_PORT}
     User fishuser
 
+# Logs in, then the server asks for another account and exits 142, as
+# cloud images do for root.
+Host e2e-cloud
+    HostName 127.0.0.1
+    Port {TARGET_PORT}
+    User clouduser
+
 # Only resolvable from inside the compose network.
 Host e2e-target-internal
     HostName target

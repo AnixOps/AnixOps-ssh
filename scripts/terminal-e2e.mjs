@@ -361,7 +361,8 @@ async function newPage({ width = 1200, height = 760, query = "" } = {}) {
     return new Promise((resolve) => {
       pendingOpens.set(id, { resolve, page });
       openStarted.set(id, Date.now());
-      send({ op: "open", seq: id, host: "e2e-target", cols, rows, integration });
+      // A check may point the page's sessions at another account (page.sshHost).
+      send({ op: "open", seq: id, host: page.sshHost ?? "e2e-target", cols, rows, integration });
     });
   });
   await page.exposeFunction("__anixopsE2ePost", (message) => send(message));
@@ -1208,6 +1209,23 @@ check("标签与分屏", "tab-rename", "给标签改名：双击标签名或右�
   await page.waitForTimeout(200);
   if ((await page.getByRole("tab", { name: /数据库主库/ }).count()) !== 1) throw new Error("Esc 没有保留原名");
   return "右键或双击改名，回车确认，Esc 取消";
+});
+
+check("会话", "login-refused-reconnect", "服务器要求改用别的用户（云主机拒绝 root）：说明原因，点「重新连接」按钮能重连", async (page) => {
+  // clouduser: the server prints "Please login as the user debian" and exits 142.
+  page.sshHost = "e2e-cloud";
+  await revealHosts(page);
+  await page.getByRole("button", { name: /prod-web-01/ }).first().dblclick();
+  await page.locator(".xterm-screen").last().waitFor();
+  await waitScreen(page, /Please login as the user "debian"/, { timeout: 35000 });
+  await page.getByText("服务器要求以 debian 用户登录").waitFor({ timeout: 15000 });
+  await page.getByRole("button", { name: "编辑主机" }).waitFor({ timeout: 2000 });
+  await page.screenshot({ path: join(outDir, "login-refused.png") });
+  // A real click on the card's button: xterm's own layers must not cover it.
+  await page.getByRole("button", { name: "重新连接", exact: true }).click({ timeout: 5000 });
+  await page.waitForFunction(() => window.__anixopsE2eOpened.length >= 2, null, { timeout: 15000 });
+  await waitScreen(page, /已重新连接[\s\S]*Please login as the user "debian"/);
+  return "提示改用 debian，按钮点得到，重连成功";
 });
 
 check("会话", "exit-reconnect", "会话结束后显示原因，按回车重新连接", async (page) => {

@@ -512,7 +512,7 @@ export function MobileTerminal({
       </header>
 
       <div ref={wrapperRef} role="group" aria-label={t.mobileTerminal} className="relative min-h-0 flex-1 bg-bg">
-        <div ref={surfaceRef} data-terminal-surface className="touch-surface absolute inset-x-3 top-2 bottom-1" />
+        <div ref={surfaceRef} data-terminal-surface className="touch-surface absolute inset-x-3 top-2 bottom-1 isolate" />
         {terminalRef.current && (
           <SelectionOverlay
             terminal={terminalRef.current}

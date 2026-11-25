@@ -264,7 +264,7 @@ function LogViewer({ entry, onClose }: { entry: SessionLogEntry; onClose: () => 
       {!log && !error && <p className="mx-4 text-callout text-label-3">{t.logsLoading}…</p>}
 
       <div ref={schemeRef} className="min-h-0 flex-1 bg-bg px-3 pt-2 pb-3">
-        <div ref={containerRef} className="h-full w-full" />
+        <div ref={containerRef} className="isolate h-full w-full" />
       </div>
     </Overlay>
   );
