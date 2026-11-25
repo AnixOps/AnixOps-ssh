@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "./i18n";
-import { exitReason, exitTitle, TERMINAL_RESET, trailingDebounce } from "./terminalSession";
+import { exitReason, exitTitle, requestedLoginUser, TERMINAL_RESET, trailingDebounce } from "./terminalSession";
 
 // The strings module reads the page's language when it loads; there is no page here.
 vi.hoisted(() => {
@@ -82,5 +82,21 @@ describe("TERMINAL_RESET", () => {
     await write("\x1b[?1049hfull screen" + TERMINAL_RESET);
     expect(terminal.buffer.active.type).toBe("normal");
     expect(terminal.buffer.active.cursorY).toBe(5);
+  });
+});
+
+describe("requestedLoginUser", () => {
+  it("reads the account a cloud image asks for instead of root", () => {
+    const output = 'Please login as the user "debian" rather than the user "root".\r\n\r\n';
+    expect(requestedLoginUser(output)).toEqual({ user: "debian", instead: "root" });
+    expect(requestedLoginUser('Please login as the user "ec2-user" rather than the user "root".')).toEqual({
+      user: "ec2-user",
+      instead: "root",
+    });
+  });
+
+  it("is null for ordinary output", () => {
+    expect(requestedLoginUser("logout\r\n")).toBeNull();
+    expect(requestedLoginUser("")).toBeNull();
   });
 });

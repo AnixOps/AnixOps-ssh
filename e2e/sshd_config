@@ -23,7 +23,7 @@ Match User pwuser
     PasswordAuthentication yes
     PubkeyAuthentication no
 
-# keyuser, zshuser, fishuser: public key only.
-Match User keyuser,zshuser,fishuser
+# keyuser, zshuser, fishuser, clouduser: public key only.
+Match User keyuser,zshuser,fishuser,clouduser
     PasswordAuthentication no
     PubkeyAuthentication yes

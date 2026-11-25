@@ -1,4 +1,4 @@
-# TEST ONLY. An OpenSSH server with two fixed accounts for the e2e tests.
+# TEST ONLY. An OpenSSH server with fixed accounts for the e2e tests.
 # The password below is public on purpose and protects nothing.
 FROM debian:bookworm-slim
 
@@ -11,6 +11,7 @@ RUN apt-get update \
  && useradd -m -s /bin/bash pwuser \
  && useradd -m -s /usr/bin/zsh zshuser \
  && useradd -m -s /usr/bin/fish fishuser \
+ && useradd -m -s /bin/bash clouduser \
  && touch /home/zshuser/.zshrc && chown zshuser:zshuser /home/zshuser/.zshrc \
  && echo 'pwuser:e2e-test-password' | chpasswd \
  && sed -i 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@' /etc/pam.d/sshd

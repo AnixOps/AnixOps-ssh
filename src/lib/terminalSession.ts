@@ -63,3 +63,15 @@ export function exitTitle(end: SessionEnd): string {
       return end.code === null ? t.sessionEnded : t.sessionEndedCode.replace("{code}", String(end.code));
   }
 }
+
+/**
+ * The account a server asked for instead, when it turned the login away with
+ * a message rather than an error: cloud images (cloud-init's
+ * `disable_root`) run `echo 'Please login as the user "debian" rather than
+ * the user "root".'; sleep 10; exit 142` for root, so the connection itself
+ * succeeds. Null when the output does not say so.
+ */
+export function requestedLoginUser(output: string): { user: string; instead: string } | null {
+  const match = /Please login as the user "([^"\s]+)" rather than the user "([^"\s]+)"/i.exec(output);
+  return match ? { user: match[1], instead: match[2] } : null;
+}

@@ -5,7 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { CaseSensitive, ChevronDown, ChevronUp, ClipboardPaste, Copy, Eraser, LoaderCircle, Regex, RotateCw, Search, Sparkles, SquareArrowOutUpRight, TextSelect, Unplug, WholeWord, X } from "lucide-react";
+import { CaseSensitive, ChevronDown, ChevronUp, ClipboardPaste, Copy, Eraser, LoaderCircle, Pencil, Regex, RotateCw, Search, Sparkles, SquareArrowOutUpRight, TextSelect, Unplug, WholeWord, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CompletionPopup, type PopupPlacement } from "@/components/app/CompletionPopup";
@@ -70,7 +70,14 @@ import { binaryInput } from "@/lib/terminalBytes";
 import { registerTerminal, terminalFor } from "@/lib/terminals";
 import { disposeTerminal, liveTerminalOptions, terminalOptions, UNICODE_VERSION } from "@/lib/terminalOptions";
 import { attachCommand, claimSlot, hostKeepSession, keepSessionName, reconnectDivider } from "@/lib/keepSession";
-import { exitTitle, RESIZE_DEBOUNCE_MS, TERMINAL_RESET, trailingDebounce, type SessionEnd } from "@/lib/terminalSession";
+import {
+  exitTitle,
+  requestedLoginUser,
+  RESIZE_DEBOUNCE_MS,
+  TERMINAL_RESET,
+  trailingDebounce,
+  type SessionEnd,
+} from "@/lib/terminalSession";
 import { searchDecorations, terminalFont, terminalTheme, useTerminalScheme } from "@/lib/terminalTheme";
 import { createTerminalTransfer } from "@/lib/terminalTransferFiles";
 import { cn } from "@/lib/utils";
@@ -149,6 +156,8 @@ export function TerminalView({
   const [status, setStatus] = useState<SessionStatus>({ state: "connecting" });
   /** Set while the session is over, so Enter reconnects instead of typing. */
   const endedRef = useRef(false);
+  /** Set when the server ended the session asking for another account. */
+  const [loginUser, setLoginUser] = useState<{ user: string; instead: string } | null>(null);
   const integrationRef = useRef<ShellIntegrationHandle | null>(null);
   const [askOpen, setAskOpen] = useState(false);
   // Hidden until AI is on and configured, so it cannot be hit by accident.
@@ -629,6 +638,7 @@ export function TerminalView({
     let reattach = sessionId;
     const start = () => {
       metaRef.current = {};
+      setLoginUser(null);
       report({ state: "connecting" });
       let connected = false;
       let exited = false;
@@ -642,9 +652,12 @@ export function TerminalView({
       };
       // Known once the session is open; the first output may come sooner.
       let engine: EngineInfo | undefined;
+      // The end of this session's output, read once it exits.
+      let tail = "";
       const onEvent = (event: SessionEvent) => {
         if (disposed) return;
         if (event.kind === "data") {
+          tail = (tail + event.data).slice(-512);
           transfer.feed(event.data);
           if (!connected) {
             up();
@@ -663,6 +676,9 @@ export function TerminalView({
           exited = true;
           transfer.cancel();
           sessionRef.current = null;
+          // Only what this session printed last: a cloud image's "log in
+          // as debian" note is the whole output before the exit.
+          setLoginUser(requestedLoginUser(tail));
           report({ state: "exited", code: event.code, reason: event.reason, signal: event.signal });
           onEnded({ code: event.code, reason: event.reason, signal: event.signal });
         }
@@ -950,7 +966,11 @@ export function TerminalView({
   return (
     <div ref={wrapperRef} className="relative h-full min-w-0 flex-1 bg-bg">
       {/* Broadcasting reserves a strip below the text for its badge. */}
-      <div ref={containerRef} className={`absolute top-2 left-3 ${broadcast ? "bottom-9" : "bottom-2"}`}
+      {/* `isolate`: xterm's layers carry z-indexes up to 10 (its transparent
+          link layer covers the whole screen); kept inside their own stacking
+          context, every card below (session ended, reconnecting, paste) sits
+          above them and gets its clicks. */}
+      <div ref={containerRef} className={`absolute top-2 left-3 isolate ${broadcast ? "bottom-9" : "bottom-2"}`}
         style={{ right: askOpen ? ASK_AI_WIDTH : 0 }}
       />
       {broadcast && <BroadcastBadge scope={broadcast} />}
@@ -1104,6 +1124,15 @@ export function TerminalView({
             <div className="min-w-0 grow basis-48">
               {status.error && !isSerialPermissionError(status.error) ? (
                 <ConnectFailureText error={status.error} />
+              ) : loginUser ? (
+                <>
+                  <p className="text-callout font-medium text-label-1">
+                    {t.loginAsOtherUser.replace("{user}", loginUser.user)}
+                  </p>
+                  <p className="selectable break-words text-callout text-label-2">
+                    {t.loginAsOtherUserHint.replaceAll("{user}", loginUser.user).replace("{instead}", loginUser.instead)}
+                  </p>
+                </>
               ) : (
                 <>
                   <p className="text-callout font-medium text-label-1">
@@ -1129,6 +1158,12 @@ export function TerminalView({
             {autoRetry && autoRetry !== "gaveup" && (
               <Button variant="secondary" size="sm" onClick={() => cancelAutoRef.current()}>
                 {t.autoReconnectCancel}
+              </Button>
+            )}
+            {loginUser && hostId && !status.error && (
+              <Button variant="secondary" size="sm" onClick={() => requestHostEdit(hostId)}>
+                <Pencil />
+                {t.editHost}
               </Button>
             )}
             {(() => {
