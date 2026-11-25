@@ -629,6 +629,9 @@ test("a tablet shows list and terminal together and a hardware keyboard drives t
   const list = page.getByRole("dialog", { name: "Shortcuts" });
   await list.waitFor();
   assert.match(await list.innerText(), /Ctrl\+K/);
+  // The dialog takes focus a frame after it opens (Overlay); Esc pressed
+  // before that still goes to the terminal, as on a slow CI runner.
+  await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.contains(document.activeElement));
   await page.keyboard.press("Escape");
   await list.waitFor({ state: "detached" });
   // Ctrl+Shift+, opens the settings.
